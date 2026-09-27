@@ -62,6 +62,13 @@ export interface EditorSessionRecord extends EditorSessionMeta {
 
 // ---------------------------------------------------------------- editor document
 
+/**
+ * A node on the canvas.
+ *
+ * NOTE: the locked watermark frame is NOT part of `EditorDocument.layers` — it
+ * lives in `useWatermark` state instead, so UNDO / REDO / CLEAR structurally
+ * cannot remove it. The `'watermark'` kind exists so it can reuse this shape.
+ */
 export interface EditorLayer {
   id: string;
   materialId: string;
@@ -74,7 +81,7 @@ export interface EditorLayer {
   scale: number;
   /** Degrees. */
   rotation: number;
-  kind: 'original' | 'cutout';
+  kind: 'original' | 'cutout' | 'watermark';
 }
 
 export interface EditorDocument {
@@ -93,6 +100,25 @@ export interface EditorMaterial {
   /** Object URL for rendering. */
   url: string;
   label: string;
+}
+
+// ---------------------------------------------------------------- watermark
+
+/**
+ * A user-configured watermark frame.
+ *
+ * Several may exist; at most one carries `isDefault`, and that one is applied
+ * automatically the next time the editor opens.
+ */
+export interface WatermarkMeta {
+  id: string;
+  name: string;
+  /** Id of the image blob in IndexedDB (same store as product images). */
+  blobId: string;
+  width: number;
+  height: number;
+  isDefault: boolean;
+  createdAt: number;
 }
 
 // ---------------------------------------------------------------- cutout

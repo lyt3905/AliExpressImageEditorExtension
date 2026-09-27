@@ -7,8 +7,11 @@ export const CANVAS_SIZE = 800;
 export const EXPORT_BACKGROUND = '#ffffff';
 export const EXPORT_MIME = 'image/png';
 
-/** Cutout queue concurrency (deliberately small: the worker pool behind the API is limited). */
-export const CUTOUT_CONCURRENCY = 2;
+/**
+ * Cutout queue concurrency: how many images are uploading / being removed at once.
+ * Raised from 2 to 6 on request — see README for the observed server behaviour.
+ */
+export const CUTOUT_CONCURRENCY = 6;
 
 /** Remote AliExpress image download concurrency. */
 export const IMAGE_DOWNLOAD_CONCURRENCY = 4;
@@ -36,9 +39,24 @@ export const STORAGE_KEYS = {
   settings: 'aiee:settings',
   sessionPrefix: 'aiee:session:',
   credentials: 'aiee:credentials',
+  watermarks: 'aiee:watermarks',
 } as const;
 
 export const DB_NAME = 'aliexpress-image-editor';
 export const DB_VERSION = 1;
 export const STORE_BLOBS = 'blobs';
 export const STORE_IMAGES = 'images';
+
+// ---------------------------------------------------------------- watermark
+
+/** Blob-id prefix for watermark images inside the shared `blobs` store. */
+export const WATERMARK_BLOB_PREFIX = 'watermark-';
+
+/** Konva node name of the locked watermark frame (also used as its layer id). */
+export const WATERMARK_LAYER_ID = 'watermark-frame';
+
+/** Reject oversized uploads before they reach IndexedDB. */
+export const MAX_WATERMARK_BYTES = 8 * 1024 * 1024;
+
+/** Accepted watermark mime types. */
+export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;

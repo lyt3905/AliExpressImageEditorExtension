@@ -17,10 +17,11 @@ Chrome Manifest V3 扩展：扫描 AliExpress 卖家后台**商品主图** → �
   → 创建 Editor Session（chrome.storage.session + IndexedDB）
   → 自动打开扩展内部 Editor Tab（editor/index.html?session=…）
   → Editor 立即显示所有原图（原图不等待抠图）
-  → 后台自动对 selected 原图抠图（并发 2，队列调度）
+  → 后台自动对 selected 原图抠图（并发 6，队列调度）
   → 抠图结果自动进入「已抠素材」
+  → 默认水印框自动加到图层最上层（锁定，不可编辑）
   → 用户点击素材加入 800×800 画布，拖动 / 缩放 / 旋转 / 排序
-  → 导出 800×800 白底 PNG → chrome.downloads 下载到本地
+  → 导出 800×800 白底 PNG（含水印）→ chrome.downloads 下载到本地
 ```
 
 **绝不发生的行为**：不修改 AliExpress 商品数据、不回填主图、不自动点击保存、不提交商品、不上传商品信息、不修改服务端。
@@ -139,6 +140,38 @@ npm run check:dist
 
 ---
 
+## 水印框
+
+可以在选项页配置**多个**水印框，并把其中一个设为**默认**。每次打开编辑器时，默认水印会自动成为
+画布上的一个**锁定图层**，永远位于最上层。
+
+**配置**（`chrome://extensions` → 详情 → 扩展程序选项 → 水印框）
+- 「添加水印框」选本地图片：PNG（可带透明通道，推荐）/ JPEG / WebP，单张上限 8MB
+- 列表里可改名、用单选按钮切换默认、删除（删除会连带清掉本地图片数据）
+- **第一个添加的水印自动成为默认**，只用一个水印时无需额外操作
+
+**尺寸**：按「长边铺满 800、居中」等比缩放，绝不拉伸。所以边框类水印请直接做成正方形，
+小 logo 想保持小尺寸就先在外部加透明边距做成 800×800（或后续按需扩展为可配置比例）。
+
+**锁定范围**（这是设计上的硬约束，不是靠判断绕开的）
+
+| 能做什么 | 不能做什么 |
+| --- | --- |
+| 工具栏里整体显示 / 隐藏 | 在画布上点选、拖动、缩放、旋转 |
+| 工具栏里临时换成别的水印 | 在图层面板里删除、上移、下移 |
+| 参与导出（白底之上） | 被「清空画布」「撤销」影响 |
+
+最后一条是结构保证的：水印**不属于图层文档**（`EditorDocument.layers`），它由 `useWatermark`
+单独持有并渲染。因此 `UNDO` / `REDO` / `CLEAR` 在原理上就碰不到它 —— 而不是靠到处加 `if (locked)`。
+
+工具栏的「水印」勾选框与下拉框只影响**本次打开的编辑器**，不会改动选项页里的默认设置；
+刷新编辑器会重新回到默认水印。
+
+文件：`src/services/watermark-store.ts`（存储）、`src/editor/state/use-watermark.ts`（注入与锁定）、
+`src/editor/components/EditorStage.tsx`（渲染在最上层且 `listening={false}`）。
+
+---
+
 ## 服务端接口（**只调用已有接口，服务端未做任何修改**）
 
 服务地址：`https://39.107.244.239`（可在选项页修改默认值）
@@ -236,13 +269,13 @@ AliExpressImageEditorExtension/
 ├─ src/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
-│  ├─ editor/                    # index.html / App / components / state（reducer + history）/ styles
-│  ├─ options/                   # 设置页
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings
+│  ├─ editor/                    # index.html / App / components / state（reducer + history + use-watermark）/ styles
+│  ├─ options/                   # 设置页（登录 + 水印框管理）
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store
 │  ├─ shared/                    # messages / types / errors / constants
 │  └─ future/page-image-writer.ts
 ├─ tests/
-│  ├─ unit/                      # 113 个单元测试（不联网）
+│  ├─ unit/                      # 134 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -271,11 +304,14 @@ AliExpressImageEditorExtension/
 
 1. 仅支持 AliExpress 卖家后台商品编辑页的**商品图片控件**（主图 + 更多图片，见上文「提取范围」）；不做详情图 / SKU 图 / 视频封面 / MutationObserver 自适应扫描。
 2. 扫描到的主图**全部默认 `selected = true`**，暂不支持逐张勾选。
-3. 抠图并发固定为 2（`CUTOUT_CONCURRENCY`）。
-4. 登录态是浏览器会话级 Cookie，浏览器完全退出后需重新登录（选项页可自动重登）。
-5. 抠图失败仅影响该张图片，界面提供「重试」；失败的图片不阻塞导出。
-6. 未实现：自动上传、AliExpress 回填、Session TTL、孤儿 Blob GC、schema migration、SHA-256 缓存、retry backoff。
-7. `PageImageWriter` 仅为占位接口，调用会返回「当前版本暂不支持商品图片回填」。
+3. 抠图并发为 6（`CUTOUT_CONCURRENCY`）。已用 6 张各不相同的图片实测线上服务：6/6 全部成功，
+   墙钟 5.6s（单项耗时累加约 19.8s，说明确实是并行而非排队）。但这是**小型图片**下的结果，
+   大图同时上传 6 张时的表现尚未测量；若遇到超时，把该值调小即可。
+4. 水印框只在有默认水印时自动注入；草稿水印的显示状态不跨刷新保存（刷新后回到默认水印）。
+5. 登录态是浏览器会话级 Cookie，浏览器完全退出后需重新登录（选项页可自动重登）。
+6. 抠图失败仅影响该张图片，界面提供「重试」；失败的图片不阻塞导出。
+7. 未实现：自动上传、AliExpress 回填、Session TTL、孤儿 Blob GC、schema migration、SHA-256 缓存、retry backoff。
+8. `PageImageWriter` 仅为占位接口，调用会返回「当前版本暂不支持商品图片回填」。
 
 ---
 
@@ -284,12 +320,13 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（10 文件 / 113 测试；`tests/live` 默认 SKIPPED，不联网） |
-| `npm run test:live` | **PASS**（真实调用线上服务：登录 → 上传 → 抠图 → 取回 PNG，1.7s） |
+| `npm run test` | **PASS**（12 文件 / 134 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本为合法经典脚本、页面资源可解析） |
 | 服务端接口实测 | **PASS**（登录 / 上传 / 抠图 / 取结果链路已真实调用并返回有效 PNG，magic `89504e47`） |
 | 自动化测试 | **已完成** |
+| 水印框功能 | **仅自动化验证**（选择器 / 尺寸计算 / 存储 CRUD 有单测；画布上的锁定表现未在真实 Chrome 中看过） |
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

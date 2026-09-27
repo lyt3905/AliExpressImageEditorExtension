@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
 import { Image as KonvaImage, Layer, Rect, Stage, Transformer } from 'react-konva';
-import { CANVAS_SIZE } from '../../shared/constants';
+import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer } from '../../shared/types';
 
 /** Largest visual size of the canvas preview. The logical canvas stays 800x800. */
@@ -18,6 +18,9 @@ export interface EditorStageHandle {
 export interface EditorStageProps {
   layers: EditorLayer[];
   imageForLayer: (layer: EditorLayer) => HTMLImageElement | undefined;
+  /** Locked watermark frame drawn above every user layer (null = none). */
+  watermark: EditorLayer | null;
+  watermarkImage: HTMLImageElement | undefined;
   selectedLayerId: string | null;
   onSelect: (layerId: string | null) => void;
   onDragEnd: (layerId: string, x: number, y: number) => void;
@@ -26,7 +29,17 @@ export interface EditorStageProps {
 }
 
 export function EditorStage(props: EditorStageProps): JSX.Element {
-  const { layers, imageForLayer, selectedLayerId, onSelect, onDragEnd, onTransformEnd, handleRef } = props;
+  const {
+    layers,
+    imageForLayer,
+    watermark,
+    watermarkImage,
+    selectedLayerId,
+    onSelect,
+    onDragEnd,
+    onTransformEnd,
+    handleRef,
+  } = props;
 
   const shellRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -70,9 +83,11 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
       return;
     }
     const node = stage.findOne<Konva.Node>(`#${selectedLayerId}`);
-    transformer.nodes(node ? [node] : []);
+    // Belt and braces: the watermark is locked, so it never gets handles.
+    const selectable = node && node.name() !== WATERMARK_LAYER_ID ? node : null;
+    transformer.nodes(selectable ? [selectable] : []);
     transformer.getLayer()?.batchDraw();
-  }, [selectedLayerId, layers, previewScale]);
+  }, [selectedLayerId, layers, previewScale, watermark]);
 
   const chromeVisibleRef = useRef(true);
 
@@ -158,6 +173,29 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               />
             );
           })}
+
+          {/*
+            Locked watermark frame: drawn last so it always sits on top of every
+            user layer, and `listening={false}` makes it impossible to click,
+            drag or transform. It is not part of the layer document, so UNDO /
+            REDO / CLEAR cannot remove it either.
+          */}
+          {watermark && watermarkImage ? (
+            <KonvaImage
+              key={watermark.id}
+              id={watermark.id}
+              name={WATERMARK_LAYER_ID}
+              image={watermarkImage}
+              x={watermark.x}
+              y={watermark.y}
+              offsetX={watermark.sourceWidth / 2}
+              offsetY={watermark.sourceHeight / 2}
+              scaleX={watermark.scale}
+              scaleY={watermark.scale}
+              rotation={watermark.rotation}
+              listening={false}
+            />
+          ) : null}
 
           <Transformer
             ref={transformerRef}

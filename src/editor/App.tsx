@@ -18,6 +18,7 @@ import {
 import { canRedo, canUndo } from './state/history';
 import { useEditorSession } from './state/use-editor-session';
 import { useImageMap } from './state/use-image-map';
+import { useWatermark } from './state/use-watermark';
 
 interface Notice {
   kind: 'ok' | 'error';
@@ -31,6 +32,10 @@ export function App(): JSX.Element {
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
   const [notice, setNotice] = useState<Notice | null>(null);
+
+  // The watermark is deliberately kept out of the layer document so UNDO / REDO
+  // / CLEAR can never remove it (see use-watermark.ts).
+  const watermark = useWatermark();
 
   const stageHandleRef = useRef<EditorStageHandle | null>(null);
   const hydratedRef = useRef(false);
@@ -99,6 +104,10 @@ export function App(): JSX.Element {
   const handleToggleBackground = useCallback(
     () => dispatch({ type: 'SET_BACKGROUND', showWhite: !state.showWhiteBackground }),
     [state.showWhiteBackground],
+  );
+  const handleToggleWatermark = useCallback(
+    () => watermark.setEnabled(!watermark.enabled),
+    [watermark],
   );
 
   // ---- keyboard shortcuts
@@ -214,10 +223,15 @@ export function App(): JSX.Element {
         showWhiteBackground={state.showWhiteBackground}
         layerCount={document.layers.length}
         sourceUrl={sessionId}
+        watermarkOptions={watermark.options.map((option) => ({ id: option.id, name: option.name }))}
+        activeWatermarkId={watermark.activeId}
+        watermarkEnabled={watermark.enabled && Boolean(watermark.layer)}
         onBack={() => void handleBack()}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onToggleBackground={handleToggleBackground}
+        onToggleWatermark={handleToggleWatermark}
+        onSelectWatermark={watermark.selectWatermark}
         onClear={handleClear}
         onExport={() => void handleExport()}
       />
@@ -231,6 +245,10 @@ export function App(): JSX.Element {
         <span>进行中 {progress.active}</span>
         <span>排队 {progress.waiting}</span>
       </div>
+
+      {watermark.error ? (
+        <div className="notice notice--error">水印框加载失败：{watermark.error}</div>
+      ) : null}
 
       {notice ? (
         <div className={`notice${notice.kind === 'error' ? ' notice--error' : ''}`}>{notice.text}</div>
@@ -248,6 +266,8 @@ export function App(): JSX.Element {
           <EditorStage
             layers={document.layers}
             imageForLayer={imageForLayer}
+            watermark={watermark.layer}
+            watermarkImage={watermark.image}
             selectedLayerId={state.selectedLayerId}
             onSelect={handleSelect}
             onDragEnd={handleDragEnd}
@@ -258,6 +278,9 @@ export function App(): JSX.Element {
 
         <LayerPanel
           layers={document.layers}
+          watermark={
+            watermark.layer ? { name: watermark.meta?.name ?? '默认水印' } : null
+          }
           selectedLayerId={state.selectedLayerId}
           onSelect={handleSelect}
           onMove={handleMoveLayer}

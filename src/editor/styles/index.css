@@ -373,3 +373,128 @@ button.primary:hover:not(:disabled) {
 .status-bad {
   color: var(--danger);
 }
+
+/* ------------------------------------------------------------ watermark */
+
+.toolbar__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.toolbar__select {
+  font: inherit;
+  padding: 4px 6px;
+  max-width: 160px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+.layer-row--locked,
+.layer-row--locked:hover {
+  cursor: default;
+  background: #fff8e8;
+  border-color: #f0d9a8;
+}
+
+.layer-row__lock {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  font-size: 11px;
+  color: #8a5300;
+  background: #fff;
+  border: 1px solid #e6c98a;
+  border-radius: 4px;
+}
+
+.section-divider {
+  margin: 20px 0 16px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.options h2 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.watermark-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.watermark-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: #fbfcfd;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.watermark-row__thumb {
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background:
+    linear-gradient(45deg, #eceef1 25%, transparent 25%, transparent 75%, #eceef1 75%),
+    linear-gradient(45deg, #eceef1 25%, #fff 25%, #fff 75%, #eceef1 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 5px 5px;
+}
+
+.watermark-row__thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.watermark-row__thumb-empty {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.watermark-row__name {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.watermark-row__size {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.watermark-row__default {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.status-line--tight {
+  margin-top: 8px;
+  padding-top: 8px;
+}

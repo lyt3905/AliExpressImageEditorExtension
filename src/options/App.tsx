@@ -1,11 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
-import { DEFAULT_SERVER_URL } from '../shared/constants';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { DEFAULT_SERVER_URL, MAX_WATERMARK_BYTES } from '../shared/constants';
 import { messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
+import type { WatermarkMeta } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
 import type { ExtensionSettings } from '../services/settings';
+import {
+  listWatermarks,
+  loadWatermarkBlob,
+  removeWatermark,
+  renameWatermark,
+  saveWatermark,
+  setDefaultWatermark,
+} from '../services/watermark-store';
 
 const LAST_ERROR_KEY = 'aiee:last-error';
+const ACCEPTED_TYPES = 'image/png,image/jpeg,image/webp';
+const SIZE_LIMIT_MB = Math.round(MAX_WATERMARK_BYTES / 1024 / 1024);
 
 interface LastError {
   code: string;
@@ -13,15 +24,26 @@ interface LastError {
   at: number;
 }
 
+type StatusKind = 'ok' | 'bad' | 'idle';
+
 export function OptionsApp(): JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<string>('');
-  const [statusKind, setStatusKind] = useState<'ok' | 'bad' | 'idle'>('idle');
+  const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [lastError, setLastError] = useState<LastError | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [watermarks, setWatermarks] = useState<WatermarkMeta[]>([]);
+  const [watermarkNames, setWatermarkNames] = useState<Record<string, string>>({});
+  const [watermarkThumbs, setWatermarkThumbs] = useState<Record<string, string>>({});
+  const [watermarkStatus, setWatermarkStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
+  const [watermarkBusy, setWatermarkBusy] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const thumbUrlsRef = useRef<Record<string, string>>({});
 
   const refreshAuthState = useCallback(async () => {
     try {
@@ -38,6 +60,13 @@ export function OptionsApp(): JSX.Element {
     }
     setUser(null);
     return false;
+  }, []);
+
+  const refreshWatermarks = useCallback(async (): Promise<WatermarkMeta[]> => {
+    const list = await listWatermarks();
+    setWatermarks(list);
+    setWatermarkNames(Object.fromEntries(list.map((entry) => [entry.id, entry.name])));
+    return list;
   }, []);
 
   useEffect(() => {
@@ -63,6 +92,36 @@ export function OptionsApp(): JSX.Element {
       }
     })();
   }, [refreshAuthState]);
+
+  useEffect(() => {
+    void refreshWatermarks();
+  }, [refreshWatermarks]);
+
+  // ---- thumbnail object URLs for the watermark list
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const meta of watermarks) {
+        if (thumbUrlsRef.current[meta.id]) continue;
+        const blob = await loadWatermarkBlob(meta);
+        if (!blob || cancelled) continue;
+        const url = URL.createObjectURL(blob);
+        thumbUrlsRef.current[meta.id] = url;
+        if (!cancelled) setWatermarkThumbs((previous) => ({ ...previous, [meta.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [watermarks]);
+
+  useEffect(
+    () => () => {
+      for (const url of Object.values(thumbUrlsRef.current)) URL.revokeObjectURL(url);
+      thumbUrlsRef.current = {};
+    },
+    [],
+  );
 
   const handleLogin = useCallback(async () => {
     setBusy(true);
@@ -123,6 +182,64 @@ export function OptionsApp(): JSX.Element {
       setBusy(false);
     }
   }, [password, serverUrl, username]);
+
+  // ---- watermark management
+
+  const handleAddWatermark = useCallback(
+    async (file: File | undefined) => {
+      if (!file) return;
+      setWatermarkBusy(true);
+      setWatermarkStatus({ kind: 'idle', text: `正在添加 ${file.name}…` });
+      try {
+        const meta = await saveWatermark(file, file.name.replace(/\.[^.]+$/, ''));
+        await refreshWatermarks();
+        setWatermarkStatus({
+          kind: 'ok',
+          text: `已添加「${meta.name}」${meta.isDefault ? '，并自动设为默认水印' : ''}`,
+        });
+      } catch (error) {
+        setWatermarkStatus({ kind: 'bad', text: messageOf(error) });
+      } finally {
+        setWatermarkBusy(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    },
+    [refreshWatermarks],
+  );
+
+  const handleRenameWatermark = useCallback(
+    async (id: string) => {
+      const draft = watermarkNames[id];
+      const meta = watermarks.find((entry) => entry.id === id);
+      if (!draft || !meta || draft === meta.name) return;
+      setWatermarks(await renameWatermark(id, draft));
+    },
+    [watermarkNames, watermarks],
+  );
+
+  const handleSetDefaultWatermark = useCallback(async (id: string) => {
+    setWatermarks(await setDefaultWatermark(id));
+    setWatermarkStatus({ kind: 'ok', text: '已设为默认水印（下次打开编辑器生效）' });
+  }, []);
+
+  const handleRemoveWatermark = useCallback(
+    async (meta: WatermarkMeta) => {
+      if (!window.confirm(`确定删除水印「${meta.name}」吗？该操作不可撤销。`)) return;
+      const cached = thumbUrlsRef.current[meta.id];
+      if (cached) {
+        URL.revokeObjectURL(cached);
+        delete thumbUrlsRef.current[meta.id];
+      }
+      setWatermarkThumbs((previous) => {
+        const next = { ...previous };
+        delete next[meta.id];
+        return next;
+      });
+      setWatermarks(await removeWatermark(meta.id));
+      setWatermarkStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
+    },
+    [],
+  );
 
   return (
     <div className="options">
@@ -197,6 +314,83 @@ export function OptionsApp(): JSX.Element {
           </div>
         ) : null}
       </div>
+
+      <hr className="section-divider" />
+
+      <h2>水印框</h2>
+      <p className="hint">
+        可以配置多个水印框，并把其中一个设为默认。每次打开编辑器时，默认水印会自动作为
+        <strong>锁定图层放在最上层</strong>——不可拖动、缩放、旋转、删除，也不受「清空画布 / 撤销」影响，
+        导出时一并合成。编辑器工具栏里可以临时隐藏或换用其他水印，不会改变这里的默认设置。
+      </p>
+
+      <div className="field">
+        <label htmlFor="watermark-file">添加水印框</label>
+        <input
+          id="watermark-file"
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_TYPES}
+          disabled={watermarkBusy}
+          onChange={(event) => void handleAddWatermark(event.target.files?.[0])}
+        />
+        <small>
+          PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {SIZE_LIMIT_MB}MB。
+          图片按「长边铺满 800、居中」等比缩放，不拉伸；边框类水印请直接做成正方形。
+        </small>
+      </div>
+
+      {watermarks.length === 0 ? (
+        <div className="empty">还没有水印框，添加一张即可自动成为默认水印。</div>
+      ) : (
+        <div className="watermark-list">
+          {watermarks.map((meta) => (
+            <div className="watermark-row" key={meta.id}>
+              <span className="watermark-row__thumb">
+                {watermarkThumbs[meta.id] ? (
+                  <img src={watermarkThumbs[meta.id]} alt="" />
+                ) : (
+                  <span className="watermark-row__thumb-empty" />
+                )}
+              </span>
+
+              <input
+                className="watermark-row__name"
+                value={watermarkNames[meta.id] ?? meta.name}
+                spellCheck={false}
+                onChange={(event) =>
+                  setWatermarkNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
+                }
+                onBlur={() => void handleRenameWatermark(meta.id)}
+              />
+
+              <span className="watermark-row__size">
+                {meta.width}×{meta.height}
+              </span>
+
+              <label className="watermark-row__default" title="设为默认水印">
+                <input
+                  type="radio"
+                  name="watermark-default"
+                  checked={meta.isDefault}
+                  onChange={() => void handleSetDefaultWatermark(meta.id)}
+                />
+                默认
+              </label>
+
+              <button type="button" onClick={() => void handleRemoveWatermark(meta)}>
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {watermarkStatus ? (
+        <div className={`status-line status-line--tight${watermarkStatus.kind === 'bad' ? ' status-bad' : ''}`}>
+          {watermarkStatus.text}
+        </div>
+      ) : null}
     </div>
   );
 }

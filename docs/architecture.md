@@ -86,7 +86,7 @@ Editor 挂载
   → 读取会话 + 图片状态
   → 恢复规则：success 直接恢复；failed 保持失败；queued/uploading/processing 复位为 idle 重新入队
   → selected && idle 的图片 → 标为 queued → CutoutQueue.enqueue
-  → CutoutQueue（并发 2）→ runCutout(imageId)
+  → CutoutQueue（并发 6）→ runCutout(imageId)
       → getBlob(原图) → HttpCutoutClient.cutout(blob) → putBlob(抠图) → 写状态 → 生成「已抠素材」
 ```
 
@@ -155,6 +155,31 @@ fetchImageBlob    → GET asset.url → Blob（校验 PNG 魔数）
 5. SW 路径失败时回退到页面内 `URL.createObjectURL` 下载；**任何情况下都不清空画布**。
 
 文件名：`aliexpress-composite-YYYYMMDD-HHmmss.png`。
+
+### 水印框（锁定在最上层）
+
+需求是「水印固定在最上面、不可编辑」。有两种实现方式：
+
+| 做法 | 问题 |
+| --- | --- |
+| 当作普通图层放进 `EditorDocument.layers`，到处加 `if (layer.locked) return` | 每个操作点（删除 / 移动 / 拖拽 / 变换 / 选中）都要记得加守卫，漏一个就破防；`UNDO` 与 `CLEAR` 仍会把它撤掉 / 清掉 |
+| **放进独立状态，不进图层文档**（采用） | 需要单独渲染一份；换来的是结构上不可能被破坏 |
+
+采用的做法：
+
+- 状态来自 `useWatermark()`（`src/editor/state/use-watermark.ts`），由 `App` 直接传给
+  `EditorStage` / `LayerPanel` / `Toolbar`，**从不进入 `editorReducer`**。
+  因此 `UNDO` / `REDO` / `CLEAR` 在原理上接触不到它 —— 不是靠判断绕开，而是它根本不在那份数据里。
+- 渲染位置：`EditorStage` 的同一个 Konva `Layer` 内、所有用户图层**之后**、`Transformer` 之前，
+  所以它永远盖在最上层，同时变换框仍画在它之上。
+- 交互：节点 `listening={false}` —— 点不到、拖不动、没有 Transformer。
+  另外 Transformer 的挂载逻辑会显式跳过 `name === WATERMARK_LAYER_ID` 的节点（双保险）。
+- 尺寸：`fitWatermarkToCanvas()` 取 `scale = 800 / max(w, h)`，中心固定在 (400, 400)，
+  即「长边铺满 800、居中」，等比不拉伸；`rotation` 恒为 0。
+- 存储：图片本体复用 IndexedDB 的 `blobs` store（id 前缀 `watermark-`），元数据（名称 / 尺寸 / 是否默认）
+  放 `chrome.storage.local` 的 `aiee:watermarks`。**DB 版本不升**，没有 migration。
+- Options 页与编辑器同源，都直接读写该 store，因此**没有新增任何消息类型**，SW 完全不参与。
+- 图层面板顶部固定显示一行「水印框 · 名称 / 锁定」，只作展示：无选中、无上下移、无删除。
 
 ## 7. 撤销 / 重做
 
