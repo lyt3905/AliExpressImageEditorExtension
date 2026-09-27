@@ -6,15 +6,20 @@
  *   - editor/options -> service worker (CREATE_EDITOR_SESSION, DOWNLOAD_COMPOSITE, ...)
  *   - service worker -> content script (SCAN_ACTIVE_TAB)
  *
+ * Plus one separate channel, built to a different shape on purpose: the
+ * service worker drives the page-fill bridge per frame (see the bottom of this
+ * file).
+ *
  * Never pass a Blob through chrome messaging: it is JSON-serialised. Use data URLs.
  */
 
-import type { ExportInput, SessionInput } from './types';
+import type { ExportInput, PageFillBridgeResult, PageFillInput, PageFillRequest, SessionInput } from './types';
 
 export type MessageType =
   | 'SCAN_ACTIVE_TAB'
   | 'CREATE_EDITOR_SESSION'
   | 'DOWNLOAD_COMPOSITE'
+  | 'REPLACE_PAGE_IMAGE'
   | 'GET_SETTINGS'
   | 'SAVE_SETTINGS'
   | 'GET_AUTH_STATE'
@@ -37,6 +42,12 @@ export interface DownloadCompositeMessage {
   type: 'DOWNLOAD_COMPOSITE';
   requestId: string;
   payload: ExportInput;
+}
+
+export interface ReplacePageImageMessage {
+  type: 'REPLACE_PAGE_IMAGE';
+  requestId: string;
+  payload: PageFillInput;
 }
 
 export interface GetSettingsMessage {
@@ -75,6 +86,7 @@ export type ExtensionMessage =
   | ScanActiveTabMessage
   | CreateEditorSessionMessage
   | DownloadCompositeMessage
+  | ReplacePageImageMessage
   | GetSettingsMessage
   | SaveSettingsMessage
   | GetAuthStateMessage
@@ -96,6 +108,7 @@ const MESSAGE_TYPES: ReadonlySet<string> = new Set<MessageType>([
   'SCAN_ACTIVE_TAB',
   'CREATE_EDITOR_SESSION',
   'DOWNLOAD_COMPOSITE',
+  'REPLACE_PAGE_IMAGE',
   'GET_SETTINGS',
   'SAVE_SETTINGS',
   'GET_AUTH_STATE',
@@ -131,4 +144,42 @@ export function sendToBackground<T>(message: ExtensionMessage): Promise<MessageR
 /** Send to the content script of one tab and unwrap the response. */
 export function sendToTab<T>(tabId: number, message: ExtensionMessage): Promise<MessageResponse<T>> {
   return chrome.tabs.sendMessage(tabId, message) as Promise<MessageResponse<T>>;
+}
+
+// ---------------------------------------------------------------- page-fill bridge
+
+/**
+ * Background -> the page-fill bridge injected with `chrome.scripting.executeScript`.
+ *
+ * Deliberately NOT a member of `MessageType`. That union is the envelope the
+ * declarative content script validates, and it always answers the *top* frame's
+ * listener; the bridge is injected per-frame and has to be addressed by
+ * `frameId`, so keeping the two channels apart stops one from ever being
+ * mistaken for the other.
+ */
+export const PAGE_FILL_MESSAGE_TYPE = 'AIEE_PAGE_FILL_EXECUTE';
+
+export interface PageFillMessage {
+  type: typeof PAGE_FILL_MESSAGE_TYPE;
+  requestId: string;
+  payload: PageFillRequest;
+}
+
+export function isPageFillMessage(value: unknown): value is PageFillMessage {
+  if (!value || typeof value !== 'object') return false;
+  return (value as { type?: unknown }).type === PAGE_FILL_MESSAGE_TYPE;
+}
+
+/**
+ * Send to the bridge in ONE frame.
+ *
+ * `sendToTab` cannot express this: without `frameId` Chrome delivers to every
+ * frame in the tab and the promise settles with whichever replies first.
+ */
+export function sendToFrame(
+  tabId: number,
+  frameId: number,
+  message: PageFillMessage,
+): Promise<PageFillBridgeResult> {
+  return chrome.tabs.sendMessage(tabId, message, { frameId }) as Promise<PageFillBridgeResult>;
 }

@@ -4,7 +4,10 @@ import { SUPPORTED_IMAGE_MIME_TYPES } from '../../shared/image-mime';
 export interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
+  /** True while EITHER PNG job (download or page fill) is running; locks both buttons. */
   exporting: boolean;
+  /** Which of the two jobs is running, so each button can label itself. */
+  filling: boolean;
   showWhiteBackground: boolean;
   layerCount: number;
   sourceUrl: string;
@@ -23,6 +26,14 @@ export interface ToolbarProps {
   onSelectWatermark: (id: string | null) => void;
   onClear: () => void;
   onExport: () => void;
+  /**
+   * Delete the product's current first image before filling back, so a product
+   * that already uses all six slots has one free.
+   */
+  removeFirstImage: boolean;
+  onToggleRemoveFirstImage: (next: boolean) => void;
+  /** Upload the composed PNG to the product page as a new slot image. */
+  onFillPage: () => void;
 }
 
 export function Toolbar(props: ToolbarProps): JSX.Element {
@@ -30,6 +41,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     canUndo,
     canRedo,
     exporting,
+    filling,
     showWhiteBackground,
     layerCount,
     sourceUrl,
@@ -46,6 +58,9 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     onSelectWatermark,
     onClear,
     onExport,
+    removeFirstImage,
+    onToggleRemoveFirstImage,
+    onFillPage,
   } = props;
 
   const hasWatermarks = watermarkOptions.length > 0;
@@ -138,7 +153,39 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
         onClick={onExport}
         disabled={exporting || (layerCount === 0 && !watermarkEnabled)}
       >
-        {exporting ? '导出中…' : '下载 PNG（800×800 白底）'}
+        {exporting && !filling ? '导出中…' : '下载 PNG（800×800 白底）'}
+      </button>
+      {/*
+        Separate from the download on purpose: the download is a local file, this
+        one writes to the live product page. The composed image is never swapped
+        into a specific slot; the checkbox only exists because a product using all
+        six slots has no free slot to append to.
+      */}
+      <label
+        className="toolbar__check"
+        title="商品页 6 个图片位都占满时，得先腾出空位。勾选后回填会先删掉第 1 张（原主图）——删掉的图只能手动补回；本流程不会点商品页的保存 / 发布"
+      >
+        <input
+          type="checkbox"
+          checked={removeFirstImage}
+          // Locked during a run: flipping it mid-flight would not change the
+          // request that is already in the page.
+          disabled={exporting}
+          onChange={(event) => onToggleRemoveFirstImage(event.target.checked)}
+        />
+        回填前删第 1 张
+      </label>
+      <button
+        type="button"
+        onClick={onFillPage}
+        disabled={exporting || (layerCount === 0 && !watermarkEnabled)}
+        title={
+          removeFirstImage
+            ? '把这张 800×800 白底 PNG 上传到商品页图片区；上传前先删掉第 1 张旧图腾出空位（不会点商品页的保存 / 发布）'
+            : '把这张 800×800 白底 PNG 作为一张新图上传到商品页图片区，不删除已有图片（不会点商品页的保存 / 发布）'
+        }
+      >
+        {filling ? '回填中…' : '回填到商品页'}
       </button>
     </header>
   );

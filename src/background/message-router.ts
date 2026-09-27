@@ -7,13 +7,14 @@
 
 import { ErrorCode, toAppError } from '../shared/errors';
 import { errorResponse, okResponse, type ExtensionMessage, type MessageResponse } from '../shared/messages';
-import type { ExportInput, SessionInput } from '../shared/types';
+import type { ExportInput, PageFillInput, PageFillResult, SessionInput } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
 import type { ExtensionSettings } from '../services/settings';
 
 export interface MessageHandlers {
   createEditorSession(payload: SessionInput): Promise<{ sessionId: string }>;
   downloadComposite(payload: ExportInput): Promise<{ downloadId: number; filename: string }>;
+  replacePageImage(payload: PageFillInput): Promise<PageFillResult>;
   getSettings(): Promise<ExtensionSettings>;
   saveSettings(payload: { serverUrl: string; username: string; password?: string }): Promise<ExtensionSettings>;
   getAuthState(): Promise<{ loggedIn: boolean; user: AuthUser | null }>;
@@ -38,6 +39,10 @@ function buildRoutes(handlers: MessageHandlers): Record<string, Handler> {
       const payload = (message as { payload: ExportInput }).payload;
       return handlers.downloadComposite(payload);
     },
+    REPLACE_PAGE_IMAGE: (message) => {
+      const payload = (message as { payload: PageFillInput }).payload;
+      return handlers.replacePageImage(payload);
+    },
     GET_SETTINGS: () => handlers.getSettings(),
     SAVE_SETTINGS: (message) => handlers.saveSettings((message as { payload: { serverUrl: string; username: string; password?: string } }).payload),
     GET_AUTH_STATE: () => handlers.getAuthState(),
@@ -47,11 +52,39 @@ function buildRoutes(handlers: MessageHandlers): Record<string, Handler> {
   };
 }
 
+/**
+ * Version of the build that is actually answering.
+ *
+ * A message type can only be missing from the route table when the worker
+ * replying is OLDER than its caller — the code on disk can be perfect and the
+ * browser still be running an old service worker (MV3 does not hot-swap one).
+ * That failure looks exactly like a typo in the message plumbing, so the error
+ * names the running build: one line instead of an afternoon of guessing.
+ */
+function runningVersion(): string {
+  try {
+    const api = chrome as unknown as { runtime?: { getManifest?: () => { version?: string } } };
+    return api.runtime?.getManifest?.()?.version ?? '未知';
+  } catch {
+    // No chrome API at all (unit tests run in node) — the message still has to
+    // come out, so degrade to "unknown" rather than throwing inside the router.
+    return '未知';
+  }
+}
+
+function unknownTypeMessage(type: string, routeCount: number): string {
+  return (
+    `未知消息类型：${type}（正在运行的扩展版本 ${runningVersion()}，路由 ${routeCount} 条）` +
+    '——如果这是刚构建好的功能，说明浏览器还在跑旧版本：请到 chrome://extensions 点刷新（⟳），再关掉本页重新从插件图标进入。'
+  );
+}
+
 /** Dispatch one message. Exported for unit tests / reuse. */
 export async function dispatchMessage(message: ExtensionMessage, handlers: MessageHandlers): Promise<MessageResponse<unknown>> {
-  const route = buildRoutes(handlers)[message.type];
+  const routes = buildRoutes(handlers);
+  const route = routes[message.type];
   if (!route) {
-    return errorResponse(message.requestId, ErrorCode.UNKNOWN, `未知消息类型：${message.type}`);
+    return errorResponse(message.requestId, ErrorCode.UNKNOWN, unknownTypeMessage(message.type, Object.keys(routes).length));
   }
   try {
     const data = await route(message);

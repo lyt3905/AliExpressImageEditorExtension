@@ -1,12 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '../../src/shared/errors';
-import { createRequestId, errorResponse, okResponse, isExtensionMessage } from '../../src/shared/messages';
+import {
+  PAGE_FILL_MESSAGE_TYPE,
+  createRequestId,
+  errorResponse,
+  isExtensionMessage,
+  isPageFillMessage,
+  okResponse,
+} from '../../src/shared/messages';
 import { dispatchMessage, type MessageHandlers } from '../../src/background/message-router';
+import type { PageFillInput, PageFillResult } from '../../src/shared/types';
+
+function pageFillResult(message = '已回填'): PageFillResult {
+  return {
+    status: 'success',
+    stage: 'COMPLETE',
+    code: null,
+    message,
+    stages: [],
+    warnings: [],
+    elapsedMs: 12,
+    frameId: 0,
+    frameUrl: 'https://seller.aliexpress.com/x',
+    strategy: 'input',
+    confirmed: true,
+  };
+}
 
 function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers {
   return {
     createEditorSession: async () => ({ sessionId: 'sess-1' }),
     downloadComposite: async (payload) => ({ downloadId: 42, filename: payload.filename }),
+    replacePageImage: async () => pageFillResult(),
     getSettings: async () => ({ serverUrl: 'https://cutout.test', username: 'admin' }),
     saveSettings: async (payload) => ({ serverUrl: payload.serverUrl, username: payload.username }),
     getAuthState: async () => ({ loggedIn: true, user: { id: 1, username: 'admin' } }),
@@ -19,10 +44,23 @@ function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers
 describe('message protocol helpers', () => {
   it('accepts known message types only', () => {
     expect(isExtensionMessage({ type: 'CREATE_EDITOR_SESSION', requestId: 'r1' })).toBe(true);
+    expect(isExtensionMessage({ type: 'REPLACE_PAGE_IMAGE', requestId: 'r1' })).toBe(true);
     expect(isExtensionMessage({ type: 'PING', requestId: 'r1' })).toBe(true);
     expect(isExtensionMessage({ type: 'NOPE', requestId: 'r1' })).toBe(false);
     expect(isExtensionMessage(null)).toBe(false);
     expect(isExtensionMessage({ type: 'PING' })).toBe(true);
+  });
+
+  it('keeps the page-fill bridge on its own channel', () => {
+    // The bridge is injected per frame and addressed by frameId; letting it
+    // validate as a normal extension message would let the two channels be
+    // confused for one another.
+    expect(PAGE_FILL_MESSAGE_TYPE).not.toBe('PING');
+    expect(isPageFillMessage({ type: PAGE_FILL_MESSAGE_TYPE, requestId: 'r' })).toBe(true);
+    expect(isPageFillMessage({ type: PAGE_FILL_MESSAGE_TYPE })).toBe(true);
+    expect(isPageFillMessage({ type: 'REPLACE_PAGE_IMAGE', requestId: 'r' })).toBe(false);
+    expect(isPageFillMessage(null)).toBe(false);
+    expect(isExtensionMessage({ type: PAGE_FILL_MESSAGE_TYPE, requestId: 'r' })).toBe(false);
   });
 
   it('builds ok/error envelopes with the original requestId', () => {
@@ -87,9 +125,97 @@ describe('dispatchMessage', () => {
     expect(response.error?.code).toBe(ErrorCode.UNKNOWN);
   });
 
+  it('routes REPLACE_PAGE_IMAGE to the page-fill handler', async () => {
+    const response = await dispatchMessage(
+      {
+        type: 'REPLACE_PAGE_IMAGE',
+        requestId: 'r7',
+        payload: { sessionId: 'sess-1', dataUrl: 'data:image/png;base64,AA', filename: 'a.png' },
+      },
+      makeHandlers({ replacePageImage: async (payload) => pageFillResult(`session=${payload.sessionId}`) }),
+    );
+    expect(response.ok).toBe(true);
+    expect(response.data).toEqual(pageFillResult('session=sess-1'));
+  });
+
+  it('passes the delete-first flag through to the handler untouched', async () => {
+    // The router is a dumb pipe, and that is exactly what can go wrong here: a
+    // whitelist-style rewrite would silently drop `removeFirstImage` and the
+    // editor's checkbox would look like it does nothing.
+    const seen: PageFillInput[] = [];
+    const response = await dispatchMessage(
+      {
+        type: 'REPLACE_PAGE_IMAGE',
+        requestId: 'r9',
+        payload: { sessionId: 'sess-1', dataUrl: 'data:image/png;base64,AA', filename: 'a.png', removeFirstImage: true },
+      },
+      makeHandlers({ replacePageImage: async (payload) => { seen.push(payload); return pageFillResult('ok'); } }),
+    );
+
+    expect(response.ok).toBe(true);
+    expect(seen[0]?.removeFirstImage).toBe(true);
+  });
+
+  it('surfaces a page-fill failure as an error envelope', async () => {
+    const response = await dispatchMessage(
+      {
+        type: 'REPLACE_PAGE_IMAGE',
+        requestId: 'r8',
+        payload: { sessionId: 'sess-1', dataUrl: 'data:image/png;base64,AA', filename: 'a.png' },
+      },
+      makeHandlers({
+        replacePageImage: async () => {
+          throw Object.assign(new Error('打开上传面板失败：没有可见的上传按钮'), {
+            code: ErrorCode.PAGE_FILL_FAILED,
+          });
+        },
+      }),
+    );
+    expect(response.ok).toBe(false);
+    expect(response.error?.code).toBe(ErrorCode.PAGE_FILL_FAILED);
+    expect(response.error?.message).toContain('打开上传面板失败');
+  });
+
   it('rejects SCAN_ACTIVE_TAB on the service worker channel', async () => {
     const response = await dispatchMessage({ type: 'SCAN_ACTIVE_TAB', requestId: 'r6' }, makeHandlers());
     expect(response.ok).toBe(false);
     expect(response.error?.code).toBe(ErrorCode.CONTENT_SCRIPT_UNAVAILABLE);
+  });
+
+  it('names the running build when a message type is unknown', async () => {
+    // A missing route means the worker answering is older than its caller, and
+    // that reads like a code bug — it sends you through the whole message
+    // plumbing looking for a typo. The error must therefore carry the running
+    // version and the fix, and must survive an environment with no chrome API
+    // (this test runs in node).
+    const response = await dispatchMessage(
+      { type: 'REPLACE_PAGE_IMAGE_V2', requestId: 'r10' } as unknown as Parameters<typeof dispatchMessage>[0],
+      makeHandlers(),
+    );
+
+    expect(response.ok).toBe(false);
+    expect(response.error?.code).toBe(ErrorCode.UNKNOWN);
+    expect(response.error?.message).toContain('未知消息类型：REPLACE_PAGE_IMAGE_V2');
+    expect(response.error?.message).toContain('扩展版本');
+    expect(response.error?.message).toContain('chrome://extensions');
+  });
+
+  it('reads that version from the manifest rather than hard-coding it', async () => {
+    // Pins the mechanism, not the wording: if this stops reading
+    // chrome.runtime.getManifest(), the message would still look right while
+    // telling the user nothing useful.
+    const globals = globalThis as unknown as { chrome?: unknown };
+    const saved = globals.chrome;
+    globals.chrome = { runtime: { getManifest: () => ({ version: '9.9.9' }) } };
+    try {
+      const response = await dispatchMessage(
+        { type: 'NOPE', requestId: 'r11' } as unknown as Parameters<typeof dispatchMessage>[0],
+        makeHandlers(),
+      );
+      expect(response.error?.message).toContain('扩展版本 9.9.9');
+    } finally {
+      if (saved === undefined) delete globals.chrome;
+      else globals.chrome = saved;
+    }
   });
 });

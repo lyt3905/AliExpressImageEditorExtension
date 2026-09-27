@@ -27,6 +27,8 @@ export const ErrorCode = {
   CUTOUT_FAILED: 'E_CUTOUT_FAILED',
   /** Cutout request timed out client-side. */
   CUTOUT_TIMEOUT: 'E_CUTOUT_TIMEOUT',
+  /** Writing the composed PNG back into the product page failed. */
+  PAGE_FILL_FAILED: 'E_PAGE_FILL_FAILED',
   /** Requested feature is intentionally not implemented in v1. */
   NOT_IMPLEMENTED: 'E_NOT_IMPLEMENTED',
   /** Unknown/unexpected failure. */

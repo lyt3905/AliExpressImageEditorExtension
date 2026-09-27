@@ -31,6 +31,18 @@ export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 export const MAX_HISTORY = 50;
 
+// ---------------------------------------------------------------- page fill
+
+/**
+ * Size ceiling for a PNG offered back to the product page.
+ *
+ * Deliberately NOT `MAX_UPLOAD_BYTES`: the vendor library that performs the
+ * upload enforces its own 5 MB limit (`vendor/aeiir/shared/validation.js`,
+ * `MAX_FILE_BYTES`), and exceeding it there fails halfway through the flow.
+ * `page-filler.test.ts` asserts the two numbers match the vendored source.
+ */
+export const PAGE_FILL_MAX_BYTES = 5 * 1024 * 1024;
+
 /** Max side (logical px) a layer is scaled to when it first enters the canvas. */
 export const INSERT_MAX_SIDE = 480;
 

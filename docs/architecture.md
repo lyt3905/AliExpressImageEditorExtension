@@ -29,6 +29,10 @@ interface MessageResponse<T> { requestId: string; ok: boolean; data?: T; error?:
 ```
 
 - 路由：`src/background/message-router.ts`（`dispatchMessage` 可单测，异常统一转成错误信封，不泄漏堆栈）。
+- **路由查不到时必须自报身份**：路由表里没有 `message.type` 时，错误文案带上**正在运行的扩展版本号、路由条数、刷新指引**。
+  这不是装饰。MV3 的 Service Worker 不会因为 `dist/` 变了就自动换新，而「未知消息类型：X」这种报错看起来完全像消息拼装写错了，
+  会把人引向查通道、打错字、大小写、白名单——全是错的方向。带上版本号，一眼就能分辨「代码旧」还是「代码错」。
+  同理，SW 启动时会打一条 `[AIEE] service worker 已启动：vX.Y.Z`，SW 自己的 Console 就能回答「现在跑的是哪一版」。
 - **不传 Blob**：`chrome.runtime.sendMessage` 走 JSON 序列化，Blob 会丢失。
   导出时编辑器把 PNG 转成 data URL 传给 SW，由 SW 调用 `chrome.downloads.download`。
 
@@ -294,6 +298,143 @@ type EditorLayer = ImageLayer | TextLayer;
 - `createTextLayer(defaults)` 会把入参再过滤一遍 `pickTextStyle()`，
   即便调用方塞进 `text` / `x` / `scale` 也不会泄漏到新图层上。
 
+## 6.5 回填到商品页（往图片区放一张新图，默认先删第 1 张）
+
+把合成好的 800×800 白底 PNG 送回商品页的图片区。命令行：编辑器「回填到商品页」→ `REPLACE_PAGE_IMAGE`
+→ `src/background/page-filler.ts` → 注入 `public/vendor/aeiir/*` → `chrome.tabs.sendMessage({frameId})`。
+
+### 为什么原样复用姊妹项目的库
+
+`public/vendor/aeiir/` 下的 6 个文件来自姊妹扩展 `aliexpress-image-replace-test-extension` v0.5.1，
+**未移植成 TS、未改写**。那套代码已经用真实卖家后台跑通了「图标 / 拖拽区 / 文件输入框 / 确认按钮」
+的定位与「注入后自证」，重写一遍只会引入新的偏差。
+
+它们是**经典脚本**（不是 ESM），每个文件把导出挂到 `globalThis.AEIIR.*`，靠 `manifest` 顺序解决依赖
+（文件里没有 `import`）。因此只能用 `chrome.scripting.executeScript({ files })` 注入 ——
+这也是唯一能把经典脚本注入到**非顶层 frame** 的方式。`bridge.js` 是第 7 个文件，是本项目自己写的
+页面侧驱动。
+
+### 与姊妹项目的三点差异
+
+1. **追加语义**（`chooseUploadButton`）：新图必须落在**空槽位**上，所以上传按钮的挑选优先空槽位。
+   判据与 `content/image-scanner.ts` 的 `isFilledSlot` 一致（`has-url` 类，或槽内有带 URL 的 `<img>`），
+   这样「扫描到的图」和「判定为空槽」不会互相矛盾。
+   一个空槽都没有时**降级**为第 0 个按钮，并记一条 `notice` —— 这种情况很可能覆盖已有图片，
+   必须让用户看见（见下面的「警告通道」）。注意：真实页面在图片位全满时**连按钮都不渲染**，
+   所以这条降级路径只在「按钮确实挂在已占用槽位上」时才走得到，见下面的「两种原因」。
+2. **可选删图**（`removeFirstImage`）：6 个图片位常是满的，没有空位就无处可放。所以
+   `payload.removeFirstImage` 为真时，先删掉第 1 张（原主图）腾出空位 —— **这是全流程唯一一处
+   改动商品页数据的动作**，因此默认由调用方显式开启（编辑器勾选框默认勾选、可关），且只有第一次
+   尝试才带这个标志。详见下面单独一节。
+3. **跨 frame 重试**：上传面板可能不在持有商品表单的那个 frame 里。此时桥回报
+   `UPLOAD_PANEL_NOT_FOUND`，由 SW 换 frame 再执行一次，且第二次必须是 `openPanel: false` ——
+   面板已经开着，再点一次上传按钮会把它关掉。
+
+### 删掉第 1 张旧图（`removeFirstImage`）
+
+三个阶段：`FIND_DELETE_BUTTON` → `DELETE_IMAGE` → `WAIT_IMAGE_REMOVED`。
+
+**顺序刻意的：删图在 `OPEN_PANEL` 之前。** 删除图标就在商品页的槽位上（不需要面板），而删除会让
+图片区重排、空槽位的上传按钮跟着换位置 —— 先删再选槽位才选得准。单测直接断言
+`order.indexOf('DELETE_IMAGE') < order.indexOf('OPEN_PANEL')`。
+
+**删哪一张**：`imageAreaOf(doc)` 先收敛到 `.imageUploadWrap`（找不到就是 `IMAGE_AREA_NOT_FOUND`，
+**不回退到整个文档** —— 页面别处也有 `.sell-o-image-item` 同名节点），再取**第一个已占用的槽位**，
+只在这个槽位内部找删除图标。所以永远不会误点到别的图片的删除图标。
+
+**怎么找删除图标**：先 `slot.querySelector('.image-upload-remove')`；改版把类名换掉时，兜底遍历
+槽内的 `svg path`，`d` 以 `M601.344 73.984` 开头（真机抓到的特征）的即为删除图标，再往上找到
+`<svg>` 或 `.anticon` 作为点击目标。找不到就报 `DELETE_BUTTON_NOT_FOUND` 并**停下**，
+绝不退化成「点别的按钮试试」。
+
+**删掉了没有**：判据是**占用数变少**（`filled` 减少），不是「第 0 槽变空」—— 真机上后面的图会前移，
+按「第 0 槽变空」判会永远不成立。超时报 `DELETE_TIMEOUT` 并提示「可能弹了二次确认框」，
+**不会自己去点那个确认**。
+
+**重试绝不删第二次**：`removeFirstImage: attempt === 1 && input.removeFirstImage === true`。
+第一次尝试已经删过第 1 张，再删一次就轮到第 2 张。
+
+**位置要说清楚**：速卖通删掉第 1 张后后面的图**自动前移**，所以空出来的是**最后一个**槽位 ——
+新图落在最末尾，不会自动成为第 1 张。本项目不做拖拽排序（用户明确接受「落在哪都行」），
+但单测用两种页面行为（前移 / 原地变空）分别断言，**不假设位置**。
+
+**`clickElement` 的 view 陷阱（真实踩坑）**：`SVGElement` 没有 `click()`（`click()` 只定义在
+`HTMLElement` 上），所以 path 兜底找到的 `<svg>` 必须走「派发指针序列」那条路。而
+`MouseEventInit.view` 的类型是 `Window?` —— 塞进去的对象只要不是真正的 window 就会抛
+`member view is not of type Window`（jsdom 更严格：只认 window 的 global proxy），
+**一次本来能成功的点击会因此整个失败**。所以 `clickElement` 先试构造一个带 `view` 的事件，
+不成就整体退到不带 `view` 的形态。`view` 只是个便利字段，没有它浏览器照样派发、页面照样响应。
+
+### frame 选择（不依赖 `webNavigation`）
+
+`probeFrameSignals` 用 `executeScript({ target: { allFrames: true }, func })` 在每个 frame 里跑一遍
+只读探测，**每个结果自带 `frameId`** —— 所以既不需要 `webNavigation` 权限，也不需要
+`all_frames: true`。打分（`scoreSignals`）按阶段取不同权重：
+
+- `form` 阶段：`.imageUploadWrap` > `.sell-o-image-item` / `.image-upload-btn` > 上传文案 > 图片输入框。
+- `panel` 阶段：拖拽区 > 上传文案 > 图片输入框 > 上传按钮（面板开着时拖拽区是最强信号）。
+
+同分时先偏向主 frame、再偏向更小的 `frameId`，这样结果与 `executeScript` 返回 frame 的顺序无关。
+一个 frame 都没得分就直接放弃重试，而不是空等 —— 再试也只是多花 900ms。
+
+### 面板关闭判定（真实踩坑）
+
+判断「面板还开着吗」**不能**每次重新跑一遍 `findDropZone`。面板关闭后，它会继续往下试
+`[class*="uploader"]` 这个兜底选择器，而它正好命中商品表单自己的 `.image-uploader` 包裹层：
+结果是「可见拖拽区有 5 个」（`DROP_ZONE_AMBIGUOUS`）而不是「没有拖拽区」（`DROP_ZONE_NOT_FOUND`），
+关闭判定永远不成立，每次回填都要白等满 8 秒并报一条假警告。
+
+因此 `makePanelProbe` 锚定在**已经解析出的那个拖拽区元素**上，只在它 `isConnected` 为假时才回退重扫；
+并且显式拒绝 `document.body` / `documentElement` 这种永远 `isConnected` 的锚点 —— `findDropZone`
+失败时返回的报告**根本不含 `element`**，调用方一旦用 `body` 兜底就会把「没有面板」谎报成「面板开着」。
+
+### 「一个可见上传按钮都没有」的两种原因（不能都报同一句话）
+
+真实页面**只在空槽位上**渲染 `div.image-upload-btn`：已占用的槽位里只有
+`image-upload-edit` / `image-upload-remove` 两个 SVG 图标，没有按钮节点。所以「一个可见按钮都没有」
+至少有两种互不相干的原因，而用户要做的事完全不同：
+
+| 原因 | 用户该做什么 |
+| --- | --- |
+| 6 个槽位全满 | 去商品页**删掉一张**腾出空位 |
+| 页面改版 / 组件尚未渲染 | **手动打开**上传面板 |
+
+原先只有后者那句话，于是「图片位满了」的报错把用户支去找一个**页面上根本不存在**的按钮。
+`surveySlots(doc)` 负责分流：统计范围收敛到 `.imageUploadWrap`（页面别处 —— 例如 SKU 模块 ——
+也有 `.sell-o-image-item` 同名节点，不收敛就永远判不出「满」），按 `slots.filled === slots.total`
+选文案，并把 `slotCount` / `filledSlotCount` / `allSlotsFull` 一并记进诊断，事后能分清是哪一种。
+
+同时允许**复用已经开着的面板**：判据就是「第 2 步要的那个拖拽区已经存在」（`findDropZone(doc, win).ok`），
+所以跳过点击不会把流程带进更差的状态。反过来，不认这种情况的话，我们给的
+「请先手动打开上传面板」就是一句**死循环指引** —— 用户照做、再点一次回填，仍然会因为「没有按钮」
+报同一个错。这个判据也不会误判：`findDropZone` 只在可见候选**恰好 1 个**时才 `ok`，而商品表单
+自己的 6 个 `.image-uploader` 包裹层会走 `DROP_ZONE_AMBIGUOUS`（见上一节）。复用走的是 `ok` 而不是
+`notice` —— `notice` 会被提成用户眼前的「需确认」红色警告，而这条纯属审计信息，没有可执行含义。
+
+### 警告通道（为什么不能只报「成功」）
+
+桥在自己的阶段日志里记 `notice`。这些提示如果只留在 `stages` 里，**回填成功时用户只会看到成功文案**，
+「没有空槽位、可能覆盖了已有图片」这类信息就永远没人看见。所以 `page-filler.ts` 把它提成
+`PageFillResult.warnings`（只在**已确认成功**时提取；`unconfirmed` 本身已经让人去人工核对），
+编辑器拿到后把提示条渲染成红色，而不是绿色成功。
+
+### 红线
+
+只点上传面板内部的「上传图片」与「确认上传」，以及（用户勾选删除时）第 1 张图上的那一个删除图标。
+**绝不**点商品级「保存 / 发布 / 提交」，所以最后保存与否始终由卖家决定。
+
+删图是这条红线上唯一的例外，所以它被约束到最小的活动范围：默认由调用方显式开启（编辑器勾选框）、
+只作用于第一个已占用槽位内部、找不到图标就停下、点了之后必须**确认占用数真的减少**才算成功、
+且**只有第一次尝试才带这个标志**。删图失败时如实告知净损失（「已先删除了原来的第 1 张图…若新图
+没上传成功需要你手动补回」），而不是只报一个成功/失败。
+
+### 体积上限
+
+`PAGE_FILL_MAX_BYTES`（5MB）**故意不等于** `MAX_UPLOAD_BYTES`：真正执行上传的
+`vendor/aeiir/shared/validation.js` 有自己的 `MAX_FILE_BYTES`，超了会在流程中途失败。
+`tests/unit/page-filler.test.ts` 直接读 vendored 源码把这个数字钉住；编辑器侧则先比
+`blob.size` 再发消息，保证**面板还没被打开**就拦下来。
+
 ## 7. 撤销 / 重做
 
 `src/editor/state/history.ts`：`{ past, present, future }` 快照栈，最多 50 条。
@@ -308,6 +449,11 @@ type EditorLayer = ImageLayer | TextLayer;
 - 服务地址来自 `chrome.storage.local` 设置，**不受页面内容控制**；内部扩展 URL 由 SW 生成，页面无法影响。
 - Content Script 不接触任何凭据，只做 DOM 扫描。
 - 唯一需要的凭据（密码）仅存于 `chrome.storage.session`，不落盘、不打印、不进 URL。
+- 回填（§6.5）是唯一会主动操作页面的功能，且**只在用户点击按钮时**触发：只点上传面板内的按钮，
+  从不点商品级保存 / 发布。它对商品页数据的改动只有一处 —— 用户勾选「回填前删第 1 张」时删掉
+  第 1 张图（勾选框默认开、可关），其余一律只新增。
+- 注入的 7 个脚本全部来自扩展包自身的 `dist/vendor/aeiir/`，不加载任何远程 JS。
+- 不使用 `web_accessible_resources` —— 靠 `executeScript` 注入，不需要把文件暴露给页面。
 
 ## 9. 目录与构建
 
@@ -315,3 +461,9 @@ type EditorLayer = ImageLayer | TextLayer;
 - `vite.sw.config.ts` / `vite.content.config.ts`：`emptyOutDir: false`，分别产出单文件 ESM 与单文件 IIFE
   （content script 不支持 ESM，必须 IIFE）。
 - `npm run build` 依次执行三次构建。顺序不可调换：UI 构建负责清空 `dist` 并复制 `public/`。
+- `public/vendor/aeiir/**` 由 `publicDir` 原样拷进 `dist/vendor/aeiir/**`（Vite 不加工 public 目录内容，
+  经典脚本因此保持原样）。
+- `scripts/check-dist.mjs` 会**从 `src/background/page-filler.ts` 里解析 `BRIDGE_FILES`**
+  （而不是抄一份），逐个确认它们已在 `dist/` 中、且能按经典脚本解析。这几个文件在 manifest 与任何 HTML 里
+  **都不被引用**，只有这条校验盯得住它们：一旦缺失，症状只会是运行时的「回填脚本无响应」。
+

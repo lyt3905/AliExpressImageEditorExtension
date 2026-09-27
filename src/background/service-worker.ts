@@ -19,7 +19,8 @@ import type { ScannedImage, SessionImage } from '../shared/types';
 import { evaluatePageGate } from '../shared/page-gate';
 import { downloadImageBlob, runWithConcurrency } from './download-manager';
 import { registerMessageRouter, type MessageHandlers } from './message-router';
-import { buildSessionRecord, createSessionId, openEditorTab, saveSessionMeta } from './session-manager';
+import { fillPageImage } from './page-filler';
+import { buildSessionRecord, createSessionId, openEditorTab, readSessionMeta, saveSessionMeta } from './session-manager';
 import { putBlob, putSession } from '../services/indexed-db';
 import { downloadDataUrl } from '../services/downloader';
 import { ServerApi, type AuthUser } from '../services/server-api';
@@ -140,6 +141,10 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
       height: result.height || image.height,
       // Page slot label (商品正面图 …) so the editor can tell the five apart.
       ...(image.label ? { label: image.label } : {}),
+      // Keep the seller console's own slot number alongside it: it is the only
+      // stable slot identity, and it is what a filled image would be offered
+      // back to.
+      ...(image.slotIndex !== undefined ? { slotIndex: image.slotIndex } : {}),
       // v1: every scanned main image is selected by default.
       selected: true,
       cutoutStatus: 'idle',
@@ -200,6 +205,36 @@ const handlers: MessageHandlers = {
     return { downloadId, filename: payload.filename };
   },
 
+  /**
+   * Put the composed PNG back into the product form.
+   *
+   * The session record is the only place the source tab is remembered, so an
+   * expired session is reported as such instead of being guessed at. Failures
+   * also land on the toolbar badge: the flow deliberately brings the product
+   * page to the front, so the editor's status bar may not be visible when the
+   * result comes back.
+   */
+  async replacePageImage(payload) {
+    const meta = await readSessionMeta(payload.sessionId);
+    if (!meta) {
+      throw new AppError(ErrorCode.SESSION_NOT_FOUND, '会话已过期，请从商品页重新点击插件图标进入编辑器');
+    }
+
+    await setBadge('…', `${EXTENSION_TITLE}：正在把图片回填到商品页…`);
+    try {
+      const result = await fillPageImage(payload, meta);
+      await setBadge(
+        result.status === 'success' ? '' : '!',
+        `${EXTENSION_TITLE}：${result.message}`,
+        result.status === 'success' ? '#1a73e8' : '#f9ab00',
+      );
+      return result;
+    } catch (error) {
+      await reportFailure(error);
+      throw error;
+    }
+  },
+
   getSettings() {
     return loadSettings();
   },
@@ -243,6 +278,18 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 registerMessageRouter(handlers);
+
+// Printed so the running build can be identified from the service worker's own
+// console. An extension can be reloaded from chrome://extensions far less often
+// than it is rebuilt, and "which version is live" is then the first question.
+try {
+  console.log(
+    `[AIEE] service worker 已启动：v${chrome.runtime.getManifest().version}` +
+      '（若与 chrome://extensions 上显示的版本号不同，说明这份扩展还没重新加载）',
+  );
+} catch {
+  /* 版本号只用于诊断，读不到也不影响扩展 */
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   void setBadge('', EXTENSION_TITLE);

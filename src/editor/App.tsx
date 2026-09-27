@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { CANVAS_SIZE, STORAGE_KEYS } from '../shared/constants';
+import { CANVAS_SIZE, PAGE_FILL_MAX_BYTES, STORAGE_KEYS } from '../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
-import type { EditorMaterial, EditorSessionMeta, ExportInput, ImageLayer, LayerPatch } from '../shared/types';
+import type {
+  EditorMaterial,
+  EditorSessionMeta,
+  ExportInput,
+  ImageLayer,
+  LayerPatch,
+  PageFillResult,
+} from '../shared/types';
 import { DEFAULT_TEXT_STYLE, pickTextStyle, type TextStyleDefaults } from '../shared/text-style';
 import { downloadBlobInPage } from '../services/downloader';
 import { blobToDataUrl, buildExportFileName, exportStageToPng } from '../services/exporter';
@@ -53,6 +60,21 @@ export function App(): JSX.Element {
   // Raw setter: always go through `showNotice` so the dismiss timer is armed.
   const [notice, setNoticeState] = useState<Notice | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  /**
+   * Whether the in-flight PNG job is the page fill rather than a download.
+   * Purely cosmetic (it picks which button says「…中」) — `state.exporting` is
+   * what actually locks both buttons while either job runs.
+   */
+  const [filling, setFilling] = useState(false);
+  /**
+   * Delete the product's current first image before filling back.
+   *
+   * Defaults to ON because a product that already uses all six slots has no free
+   * slot to append to, and freeing one is the only way that fill-back can work.
+   * Kept as editor state rather than persisted: an unpersisted default means the
+   * checkbox is impossible to leave in a surprising state across sessions.
+   */
+  const [removeFirstImage, setRemoveFirstImage] = useState(true);
 
   /**
    * Show a notice, then let it clear itself.
@@ -292,35 +314,44 @@ export function App(): JSX.Element {
   }, [sessionId]);
 
   // ---- export: 800x800, ALWAYS white background PNG
-  const handleExport = useCallback(async () => {
+  //
+  // Downloading and page-filling need exactly the same PNG, so both go through
+  // `composePng`. Duplicating the render would let the two drift apart, and a
+  // filled image that differs from the downloaded one is the worst kind of bug
+  // to notice: it only shows up on the live product page.
+  const composePng = useCallback(async () => {
     const handle = stageHandleRef.current;
     const stage = handle?.getStage();
-    const filename = buildExportFileName();
-
     if (!handle || !stage) {
       showNotice({ kind: 'error', text: '画布尚未就绪，请稍后再试' });
-      return;
+      return null;
     }
 
+    const blob = await exportStageToPng(stage, {
+      previewScale: handle.getPreviewScale(),
+      hooks: {
+        before: () => handle.setChromeVisible(false),
+        after: () => handle.setChromeVisible(true),
+      },
+    });
+
+    const size = await readBlobSize(blob);
+    if (size.width !== CANVAS_SIZE || size.height !== CANVAS_SIZE) {
+      throw new AppError(ErrorCode.UNKNOWN, `导出尺寸异常：${size.width}x${size.height}`);
+    }
+
+    return { blob, dataUrl: await blobToDataUrl(blob), filename: buildExportFileName() };
+  }, [showNotice]);
+
+  const handleExport = useCallback(async () => {
+    let composed: Awaited<ReturnType<typeof composePng>> = null;
     dispatch({ type: 'SET_EXPORTING', exporting: true });
-    let blob: Blob | null = null;
 
     try {
-      blob = await exportStageToPng(stage, {
-        previewScale: handle.getPreviewScale(),
-        hooks: {
-          before: () => handle.setChromeVisible(false),
-          after: () => handle.setChromeVisible(true),
-        },
-      });
+      composed = await composePng();
+      if (!composed) return;
 
-      const size = await readBlobSize(blob);
-      if (size.width !== CANVAS_SIZE || size.height !== CANVAS_SIZE) {
-        throw new AppError(ErrorCode.UNKNOWN, `导出尺寸异常：${size.width}x${size.height}`);
-      }
-
-      const dataUrl = await blobToDataUrl(blob);
-      const payload: ExportInput = { dataUrl, filename };
+      const payload: ExportInput = { dataUrl: composed.dataUrl, filename: composed.filename };
       const response = await sendToBackground<{ downloadId: number; filename: string }>({
         type: 'DOWNLOAD_COMPOSITE',
         requestId: createRequestId('download'),
@@ -329,13 +360,13 @@ export function App(): JSX.Element {
       if (!response?.ok) {
         throw new AppError(ErrorCode.UNKNOWN, response?.error?.message ?? '下载失败');
       }
-      showNotice({ kind: 'ok', text: `已下载 ${filename}（800×800 白底 PNG）` });
+      showNotice({ kind: 'ok', text: `已下载 ${composed.filename}（800×800 白底 PNG）` });
     } catch (error) {
       // A failed export must never clear the canvas.
-      if (blob) {
+      if (composed) {
         try {
-          await downloadBlobInPage(blob, filename);
-          showNotice({ kind: 'ok', text: `已通过页面下载 ${filename}` });
+          await downloadBlobInPage(composed.blob, composed.filename);
+          showNotice({ kind: 'ok', text: `已通过页面下载 ${composed.filename}` });
           return;
         } catch {
           /* fall through to the error notice */
@@ -345,7 +376,75 @@ export function App(): JSX.Element {
     } finally {
       dispatch({ type: 'SET_EXPORTING', exporting: false });
     }
-  }, []);
+  }, [composePng, showNotice]);
+
+  /**
+   * Offer the composed PNG to the product page as a NEW slot image.
+   *
+   * The composed image never swaps a specific slot in place. When
+   * `removeFirstImage` is on, the product's current first image is deleted first
+   * so that a product using all six slots has somewhere to put the new one —
+   * AliExpress shifts the later images forward, so the new image ends up last
+   * either way. The size check runs before anything touches the page, because
+   * failing after the upload panel has been opened leaves the seller staring at a
+   * half-finished dialog; it also runs before the delete, so a too-large PNG can
+   * never cost the seller an image.
+   */
+  const handleFillPage = useCallback(async () => {
+    setFilling(true);
+    dispatch({ type: 'SET_EXPORTING', exporting: true });
+
+    try {
+      const composed = await composePng();
+      if (!composed) return;
+
+      if (composed.blob.size > PAGE_FILL_MAX_BYTES) {
+        throw new AppError(
+          ErrorCode.UNKNOWN,
+          `PNG 体积 ${(composed.blob.size / 1024 / 1024).toFixed(2)} MB，超过速卖通 5 MB 上传上限，请减少图层或缩小素材`,
+        );
+      }
+
+      const response = await sendToBackground<PageFillResult>({
+        type: 'REPLACE_PAGE_IMAGE',
+        requestId: createRequestId('fill'),
+        payload: {
+          sessionId: sessionId ?? '',
+          dataUrl: composed.dataUrl,
+          filename: composed.filename,
+          removeFirstImage,
+        },
+      });
+      if (!response?.ok) {
+        throw new AppError(ErrorCode.UNKNOWN, response?.error?.message ?? '回填失败');
+      }
+      const result = response.data;
+      if (!result) throw new AppError(ErrorCode.UNKNOWN, '回填没有返回结果');
+
+      // "Unconfirmed" means the file reached the panel but no server-side
+      // completion signal was seen — worth telling the user to check, but not a
+      // failure to shout about.
+      //
+      // A warning takes precedence over both: the run succeeded, but something
+      // about it needs a human look (typically "no empty slot, so this may have
+      // overwritten an existing image"). Styling it as an error is deliberate —
+      // this is the one outcome the user must not skim past.
+      const warning = result.warnings[0];
+      if (warning) {
+        showNotice({ kind: 'error', text: `回填完成，但需确认：${warning}` });
+      } else {
+        showNotice({
+          kind: result.status === 'success' ? 'ok' : 'error',
+          text: result.status === 'success' ? `已回填到商品页：${result.message}` : `回填未确认：${result.message}`,
+        });
+      }
+    } catch (error) {
+      showNotice({ kind: 'error', text: `回填失败：${messageOf(error)}` });
+    } finally {
+      setFilling(false);
+      dispatch({ type: 'SET_EXPORTING', exporting: false });
+    }
+  }, [composePng, sessionId, showNotice, removeFirstImage]);
 
   if (!sessionId) {
     return <FatalScreen title="缺少 session 参数" detail="请从 AliExpress 商品页点击插件图标重新进入。" />;
@@ -363,6 +462,7 @@ export function App(): JSX.Element {
         canUndo={canUndo(state.history)}
         canRedo={canRedo(state.history)}
         exporting={state.exporting}
+        filling={filling}
         showWhiteBackground={state.showWhiteBackground}
         layerCount={document.layers.length}
         sourceUrl={sessionId}
@@ -379,6 +479,9 @@ export function App(): JSX.Element {
         onSelectWatermark={watermark.selectWatermark}
         onClear={handleClear}
         onExport={() => void handleExport()}
+        removeFirstImage={removeFirstImage}
+        onToggleRemoveFirstImage={setRemoveFirstImage}
+        onFillPage={() => void handleFillPage()}
       />
 
       <div className="status-bar">

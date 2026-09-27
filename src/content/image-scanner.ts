@@ -91,6 +91,8 @@ interface RawCandidate {
   order: number;
   /** Slot label from the page (e.g. 商品正面图), when the markup provides one. */
   label?: string;
+  /** Seller-console slot number (`data-index`), when the markup provides one. */
+  slotIndex?: number;
 }
 
 function safeQueryAll(root: ParentNode, selector: string): Element[] {
@@ -215,12 +217,13 @@ function cleanAlt(value: string): string {
   return alt;
 }
 
-function toRawCandidate(image: Element, order: number, label?: string): RawCandidate {
+function toRawCandidate(image: Element, order: number, label?: string, slotIndex?: number): RawCandidate {
   const url = readImageUrl(image);
   const [width, height] = readImageSize(image);
   const candidate: RawCandidate = { url, width, height, alt: cleanAlt(readElement(image, 'alt')), order };
   const trimmedLabel = label?.trim();
   if (trimmedLabel) candidate.label = trimmedLabel;
+  if (typeof slotIndex === 'number' && Number.isFinite(slotIndex)) candidate.slotIndex = slotIndex;
   return candidate;
 }
 
@@ -335,7 +338,12 @@ export function collectFromSellerWidget(doc: Document): RawCandidate[] {
     try {
       const image = usableImageIn(slot);
       if (!image) continue;
-      const candidate = toRawCandidate(image, order, textOf(slot.querySelector(ITEM_LABEL_SELECTOR)));
+      const candidate = toRawCandidate(
+        image,
+        order,
+        textOf(slot.querySelector(ITEM_LABEL_SELECTOR)),
+        readNumericAttribute(slot, 'data-index') ?? undefined,
+      );
       order += 1;
       if (isUsableWidgetCandidate(candidate)) candidates.push(candidate);
     } catch {
@@ -387,6 +395,7 @@ export function normalizeCandidates(candidates: readonly RawCandidate[]): Scanne
       height: candidate.height,
       ...(candidate.alt ? { alt: candidate.alt } : {}),
       ...(candidate.label ? { label: candidate.label } : {}),
+      ...(candidate.slotIndex !== undefined ? { slotIndex: candidate.slotIndex } : {}),
       sourceType: 'main',
     });
   }

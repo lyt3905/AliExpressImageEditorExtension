@@ -16,6 +16,12 @@ export interface ScannedImage {
   alt?: string;
   /** Page-provided slot label, e.g. 商品正面图 / 商品背面图. */
   label?: string;
+  /**
+   * The seller console's own slot number (`data-index` on `.sell-o-image-item`).
+   * Scanned slots are sorted by it, so it is the only stable identity a slot
+   * has — needed to offer a composed PNG back to the slot it came from.
+   */
+  slotIndex?: number;
   sourceType: 'main';
 }
 
@@ -38,6 +44,8 @@ export interface SessionImage {
   height: number;
   /** Page-provided slot label, e.g. 商品正面图 / 商品背面图. */
   label?: string;
+  /** Seller-console slot number this image was scanned from (see ScannedImage). */
+  slotIndex?: number;
   selected: boolean;
   cutoutStatus: CutoutStatus;
   cutoutBlobId?: string;
@@ -220,8 +228,114 @@ export interface ExportInput {
   filename: string;
 }
 
-// ---------------------------------------------------------------- future
+// ---------------------------------------------------------------- page fill
 
-export interface PageImageWriter {
-  replaceMainImage(): Promise<void>;
+/**
+ * How the composed PNG is put back on the product page.
+ *
+ * `append` only ever ADDS a slot image. `replace-first` additionally deletes the
+ * current first image first, which frees a slot when the product already has all
+ * six in use — and, because AliExpress shifts the later images forward, the new
+ * image then lands in the last slot rather than at position 1.
+ *
+ * Either way the composed PNG is never offered as a replacement for a specific
+ * existing slot: nothing is swapped in place.
+ */
+export type PageFillMode = 'append' | 'replace-first';
+
+/** Editor -> service worker. */
+export interface PageFillInput {
+  sessionId: string;
+  /** 800x800 PNG as a data URL, same shape as `ExportInput`. */
+  dataUrl: string;
+  filename: string;
+  /**
+   * Delete the product's current FIRST image before uploading, freeing a slot on
+   * a product that already uses all six. Destructive: the deleted image is only
+   * recoverable by hand, and it is applied without a confirmation step of its own
+   * (the editor's checkbox is the confirmation). Off by default at the type level
+   * so a caller that forgets it never deletes anything.
+   */
+  removeFirstImage?: boolean;
+}
+
+/** One recorded step of the in-page flow. Mirrors the injected bridge's stages. */
+export interface PageFillStageRecord {
+  stage: string;
+  stageLabel: string;
+  status: 'ok' | 'notice' | 'failed';
+  message: string;
+  diagnostics?: unknown;
+}
+
+/**
+ * Service worker -> injected bridge.
+ *
+ * `openPanel` is false on a cross-frame retry: the upload panel is already open
+ * (it just lives in another frame), so clicking the upload button again would
+ * close it.
+ */
+export interface PageFillRequest {
+  dataUrl: string;
+  fileMeta: { name: string; type: string; size: number };
+  openPanel: boolean;
+  /**
+   * Delete the first image before doing anything else.
+   *
+   * Only ever true on the FIRST attempt: a cross-frame retry would delete the
+   * second image, since the first one is already gone by then. The orchestrator
+   * forces it to false on every retry.
+   */
+  removeFirstImage: boolean;
+  /** Whether the bridge may click the panel's own 「确认上传」. Never the product-level save. */
+  confirmUploadClick: boolean;
+  panelTimeout: number;
+  uploadTimeout: number;
+  confirmTimeout: number;
+  /** How long to wait for the delete icon, and then for the image to disappear. */
+  deleteTimeout: number;
+}
+
+/** What the injected bridge answers with. */
+export interface PageFillBridgeResult {
+  ok: boolean;
+  status: 'success' | 'unconfirmed' | 'failed';
+  stage: string | null;
+  code: string | null;
+  message: string;
+  stages: PageFillStageRecord[];
+  elapsedMs: number;
+  frameUrl: string;
+  upload: { status: string; confirmed: boolean; strategy: string; criteria: string | null } | null;
+  confirmUpload: {
+    skipped: boolean;
+    clicked: boolean;
+    found: boolean;
+    panelGone?: boolean;
+    panelClosed?: boolean;
+    buttonText: string | null;
+  } | null;
+}
+
+/** Service worker -> editor: the bridge result plus which frame it ran in. */
+export interface PageFillResult {
+  status: PageFillBridgeResult['status'];
+  stage: string | null;
+  code: string | null;
+  message: string;
+  stages: PageFillStageRecord[];
+  /**
+   * Warnings the bridge recorded while still reporting success, e.g. "no empty
+   * slot was found, so this may have overwritten an existing image".
+   *
+   * Kept separate from `message` so the editor can still style a successful run
+   * as a success and put the caveat where it will actually be read; folding it
+   * into the message risks the user skimming past it.
+   */
+  warnings: string[];
+  elapsedMs: number;
+  frameId: number;
+  frameUrl: string;
+  strategy: 'input' | 'drop-zone' | null;
+  confirmed: boolean;
 }

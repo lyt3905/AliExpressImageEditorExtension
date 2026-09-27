@@ -23,9 +23,17 @@ Chrome Manifest V3 扩展：扫描 AliExpress 卖家后台**商品主图** → �
   → 用户点击素材加入 800×800 画布，拖动 / 缩放 / 旋转 / 排序
   → 需要时「添加文字」：文字是普通可编辑图层（内容 / 字体 / 字号 / 颜色 / 加粗 / 对齐）
   → 导出 800×800 白底 PNG（含水印与文字）→ chrome.downloads 下载到本地
+  → （可选，用户点按钮）把这张 PNG 作为**一张新图**回填到商品页图片区
 ```
 
-**绝不发生的行为**：不修改 AliExpress 商品数据、不回填主图、不自动点击保存、不提交商品、不上传商品信息、不修改服务端。
+**不做的事**：不替换商品页已有图片（6 个图片位满时，回填会先删掉**第 1 张**腾出空位 —— 这是全流程唯一
+一处删图，见下文「回填到商品页」，可在工具栏关掉）、不点商品页的保存 / 发布 / 提交、不上传商品信息、
+不修改服务端。
+
+**唯一会主动操作 AliExpress 页面的功能是「回填到商品页」**，且只在用户点击按钮时发生；它只点素材中心
+上传面板内部的「上传图片」与「确认上传」，以及（勾选删除时）商品页第 1 张图上的删除图标，从不点商品级保存。
+除此之外全程不碰页面。删图是破坏性操作，所以它在 UI 上默认勾选、可随时关掉，且**只删那一个图标，找不到就停下**，
+绝不退化成「点别的按钮试试」。
 
 ---
 
@@ -137,6 +145,9 @@ npm run check:dist
 3. 插件自动下载主图并打开编辑器；编辑器打开后**立即**可用，抠图在后台自动进行，完成后自动出现在「已抠素材」
 4. 点击素材加入画布 → 拖动 / 缩放 / 旋转 / 图层排序 → **下载 PNG（800×800 白底）**
 5. 想用页面外的图？点工具栏「上传图片」选本地文件，或直接 `Ctrl+V` 粘贴截图 —— 会自动抠图并出现在「已抠素材」
+6. 想直接把这张图放回商品页？点 **回填到商品页** —— 它会把同一张 PNG 作为**一张新图**放到图片区的空槽位上。
+   6 个图片位常是满的，所以工具栏上「回填前删第 1 张」**默认勾选**：回填会先删掉原来的第 1 张（原主图）腾出空位。
+   不需要它就在工具栏取消勾选，回填就只追加、不动任何旧图。无论哪种，都不会替你点保存（详见下文「回填到商品页」）
 
 点击插件后若出错，工具栏图标会显示红色 `!` 徽标，鼠标悬停可看错误原因；最近一次错误也会显示在选项页。
 
@@ -289,6 +300,60 @@ npm run check:dist
 
 ---
 
+## 回填到商品页（往图片区放一张新图）
+
+编辑器工具栏的 **回填到商品页**：把刚合成的 800×800 白底 PNG 送回商品页图片区。
+
+**默认先删掉第 1 张，再放新图。** 6 个图片位常是满的，而速卖通只在**空槽位**上渲染上传按钮 ——
+没有空位就无处可放。所以工具栏上有一个默认勾选的 **回填前删第 1 张**，回填时先删掉原来的第 1 张
+（原主图）腾出空位。取消勾选后回填就只追加、不动任何旧图。
+
+位置要提前说清楚：速卖通删掉第 1 张后，**后面的图会自动前移**，所以空出来的是**最后一个**槽位 ——
+**新图会落在最末尾，不会自动成为第 1 张**。想让某张图当主图，删完之后在商品页里手动拖一次。
+
+流程（`src/background/page-filler.ts` → 注入 `public/vendor/aeiir/`）：
+
+1. 编辑器用**和「下载 PNG」完全同一次**的合成结果，先比 5MB 上限，再发给后台。
+   （尺寸检查在删图**之前** —— 超限的 PNG 绝不会让你先损失一张旧图。）
+2. 后台在**每个 frame** 里跑一次只读探测，挑出持有商品表单的那个 frame（每个结果自带 `frameId`，
+   所以不需要 `webNavigation` 权限，也不需要 `all_frames: true`）。
+3. 注入经典脚本。勾选了删除时，**先删旧图**（删除图标就在商品页上，不需要面板；先删再选槽位才选得准，
+   因为删除会让图片区重排）→ 点上传按钮开面板 → 定位拖拽区 / 文件输入框 → 注入文件 → 等上传信号 → 点「确认上传」。
+   面板**已经开着**时直接复用、不再点按钮 —— 跨 frame 重试时再点一次会把面板关掉；你按提示手动打开过也一样。
+4. 面板如果不在这个 frame 里，桥回报 `UPLOAD_PANEL_NOT_FOUND`，后台**换 frame 重试**（最多 3 次）。
+   **重试绝不删第二张**：第一次尝试已经删过第 1 张了，再删一次就轮到第 2 张，所以 `removeFirstImage`
+   只在 `attempt === 1` 时为真。
+
+细节：
+
+- **红线**：只点上传面板内部的「上传图片」与「确认上传」，以及（勾选删除时）第 1 张图上的删除图标，
+  **绝不**点商品页的保存 / 发布 / 提交。最后保存与否始终由你决定。
+- **删图失败就停，绝不猜**：找不到删除图标 → 直接报「在第 1 张图（商品正面图）里没有找到删除图标，已停止
+  （不会去点别的按钮）」，**页面上不产生其它点击**；点了但它没消失（例如弹了二次确认框）→ 报
+  `DELETE_TIMEOUT` 并提示可能有确认框，**不会自己去点那个确认**；图片区整个找不到 → 报
+  `IMAGE_AREA_NOT_FOUND`，**不会到页面别处去找同名节点删**。
+- **删掉的图只能手动补回**：删图不可撤销（本流程不点保存）。万一后续上传没确认成功，提示会明确写出
+  「注意：本次已先删除了原来的第 1 张图（商品正面图），若新图没上传成功需要你手动补回」——
+  不会让你以为一切正常。
+- **图片位满了会明确报错，不会瞎点**：真实页面**只在空槽位上**渲染 `div.image-upload-btn`，
+  所以 6 个槽位全满时页面上一个按钮都没有。这时报「商品页的图片位已经全部占用（6 个槽位都有图），
+  …请先在商品页删掉一张、腾出空位再回填」，**页面上不产生任何点击**。
+  （勾选删除时通常走不到这里：删完第 1 张就有空位了。）
+- **只有在「可见按钮挂在已占用槽位上」时才降级并警告**：那种情况下仍会尝试，但提示条会变成红色写明
+  「回填完成，但需确认：没有找到空槽位…可能会覆盖已有图片，请回商品页核对」。
+- **未确认会如实说**：如果面板没关、或没有「确认上传」按钮，提示为「回填未确认：…」而非成功。
+- **商品页已关闭 / 会话过期**：分别提示「原来的商品页标签已经关闭…」「会话已过期…」，页面上不产生任何点击。
+- 复用姊妹扩展 `aliexpress-image-replace-test-extension` v0.5.1 的 6 个库文件（原样 vendor 到
+  `public/vendor/aeiir/`，**未移植成 TS**），加一个本项目的 `bridge.js` 作为页面侧驱动。
+  原因与踩坑见 [`docs/architecture.md`](docs/architecture.md) §6.5。
+
+> **为什么不用 `web_accessible_resources`**：本方案靠 `chrome.scripting.executeScript({ files })` 注入，
+> 不需要把脚本暴露给页面（已实测确认）。
+
+手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md) 第 6.5 节。
+
+---
+
 ## 服务端接口（**只调用已有接口，服务端未做任何修改**）
 
 服务地址：`https://39.107.244.239`（可在选项页修改默认值）
@@ -375,24 +440,27 @@ Chrome MV3 · React 18 · TypeScript（strict）· Vite 5 · Konva 9 + react-kon
 AliExpressImageEditorExtension/
 ├─ public/
 │  ├─ manifest.json              # 构建时复制到 dist/
-│  └─ icons/                     # 工具栏图标（由 scripts/make-icons.py 生成，已提交）
+│  ├─ icons/                     # 工具栏图标（由 scripts/make-icons.py 生成，已提交）
+│  └─ vendor/aeiir/              # 回填用的经典脚本（见 §6.5）
+│     ├─ shared/                 # messages / errors / validation
+│     ├─ content/                # dom-wait / upload-locator / file-injector
+│     └─ bridge.js               # 页面侧驱动（本项目自己写，不是姊妹项目的文件）
 ├─ scripts/
 │  ├─ make-icons.py              # 零依赖生成 icon{16,32,48,128}.png
 │  └─ check-dist.mjs             # 构建后校验 dist/ 完整性（构建脚本已调用）
-├─ vite.config.ts                # UI 构建（editor + options）
+├─ vite.config.ts                # UI 构建（editor + options，负责清空 dist 并复制 public/）
 ├─ vite.sw.config.ts             # Service Worker 构建（单文件 ESM）
 ├─ vite.content.config.ts        # Content Script 构建（单文件 IIFE）
 ├─ vitest.config.ts
 ├─ src/
-│  ├─ background/                # service-worker / message-router / session-manager / download-manager
+│  ├─ background/                # service-worker / message-router / session-manager / download-manager / page-filler
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components / state（reducer + history + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 水印框管理）
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
-│  ├─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
-│  └─ future/page-image-writer.ts
+│  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 258 个单元测试（不联网）
+│  ├─ unit/                      # 314 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -411,9 +479,11 @@ AliExpressImageEditorExtension/
 - `storage`：session/local 设置
 - `tabs`：读取当前标签页、打开编辑器标签页、返回商品页
 - `downloads`：导出 PNG
-- `scripting`：页面在扩展安装前已打开时补注入 content script
+- `scripting`：页面在扩展安装前已打开时补注入 content script；以及**把回填脚本注入到商品页**
+  （`executeScript({ files })` —— 这是唯一能把经典脚本注入非顶层 frame 的方式）
 
-未使用 `<all_urls>`、未使用 `cookies`（登出走服务端 `/api/auth/logout`）。
+未使用 `<all_urls>`、未使用 `cookies`（登出走服务端 `/api/auth/logout`）；也**未使用
+`web_accessible_resources`** —— 回填脚本靠 `executeScript` 注入，不需要暴露给页面。
 
 `host_permissions` 只覆盖扫描链路真正会用到的域，与 `content_scripts.matches` 对齐：
 
@@ -443,8 +513,13 @@ AliExpressImageEditorExtension/
 4. 水印框只在有默认水印时自动注入；草稿水印的显示状态不跨刷新保存（刷新后回到默认水印）。
 5. 登录态是浏览器会话级 Cookie，浏览器完全退出后需重新登录（选项页可自动重登）。
 6. 抠图失败仅影响该张图片，界面提供「重试」；失败的图片不阻塞导出。
-7. 未实现：自动上传、AliExpress 回填、Session TTL、孤儿 Blob GC、schema migration、SHA-256 缓存、retry backoff。
-8. `PageImageWriter` 仅为占位接口，调用会返回「当前版本暂不支持商品图片回填」。
+7. 未实现：自动上传（无点击自动补图）、Session TTL、孤儿 Blob GC、schema migration、SHA-256 缓存、retry backoff。
+8. 回填是**半自动**的：需要你在编辑器里点「回填到商品页」。找不到可见上传按钮时**不做全自动兜底**，
+   而是分两种情况给不同的指引：图片位全满 → 报错让你先删一张；页面改版 → 让你手动打开上传面板
+   （打开后再点一次回填会复用该面板继续，不会卡在同一个错误上）。回填落在空槽位；除非你关掉
+   「回填前删第 1 张」，否则它会先删掉原来的第 1 张来腾空位 —— 所以默认那一条**不是**「旧图全都还在」。
+   只有在「可见按钮挂在已占用槽位上」时才会降级并给出红色警告，那种情况**可能覆盖已有图片**，必须回商品页核对。
+   删图不可撤销，本流程也不会替你保存，删掉的那张需要你手动补回。
 9. 文字图层只做基础排版：内容 / 字体（仅本机字体）/ 字号 / 颜色 / 加粗 / 左中右对齐 / 描边 / 阴影。
    不含渐变、曲线文字、富文本、每字符不同颜色、字体上传与网络字体，也不做多层描边或内发光。
    属性在失焦时才提交，所以输入过程中画布不会逐字实时刷新（描边 / 阴影同理）。
@@ -459,14 +534,15 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（18 文件 / 258 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（20 文件 / 314 测试；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
-| `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons） |
-| `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本为合法经典脚本、页面资源可解析） |
+| `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
+| `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |
 | 服务端接口实测 | **PASS**（登录 / 上传 / 抠图 / 取结果链路已真实调用并返回有效 PNG，magic `89504e47`） |
 | 自动化测试 | **已完成** |
 | 水印框功能 | **仅自动化验证**（选择器 / 尺寸计算 / 存储 CRUD 有单测；画布上的锁定表现未在真实 Chrome 中看过） |
 | 本地上传 / 粘贴抠图 | **仅自动化验证**（校验 / 落盘 / id 生成 / 素材合并有单测；真实剪贴板与文件选择器未在 Chrome 中手点过，步骤见 manual-test 5.46–5.52） |
+| 回填到商品页 | **仅自动化验证**（34 个单测覆盖：frame 打分与选择、重试时 `openPanel: false`、5MB 上限前置拦截、标签页丢失 / 会话过期 / 页面非商品页、降级警告通道；**桥本身**用真实卖家后台 fixture 驱动了完整六阶段流程与「确认上传」，并覆盖「图片位全满 → 报错」与「面板已被手动打开 → 复用继续」两条分支。但**没有**在真实 Chrome + 登录态的商品页上跑过，步骤见 manual-test 第 6.5 节） |
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

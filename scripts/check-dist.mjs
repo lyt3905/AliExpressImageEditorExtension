@@ -104,24 +104,33 @@ for (const page of pages) {
 }
 
 // ---- content scripts must be classic scripts (no ESM) ----
-for (const file of (manifest.content_scripts ?? []).flatMap((script) => script.js ?? [])) {
-  const absolute = join(distDir, file);
-  if (!existsSync(absolute)) continue;
+/**
+ * Classic-script check, shared by content scripts and the page-fill assets:
+ * neither `manifest.content_scripts.js` nor `executeScript({ files })` accepts
+ * an ES module.
+ */
+function checkClassicScript(relativePath, label) {
+  const absolute = join(distDir, relativePath);
+  if (!existsSync(absolute)) return;
   const source = readFileSync(absolute, 'utf8');
 
   if (/^\s*(?:import|export)\s/m.test(source)) {
-    fail(`${file}: 含顶层 import/export —— 内容脚本不能是 ES module`);
-    continue;
+    fail(`${label} ${relativePath}: 含顶层 import/export —— 必须是经典脚本`);
+    return;
   }
   if (/[^\w.$]import\s*\(/.test(source)) {
-    fail(`${file}: 含动态 import() —— 内容脚本中不可靠`);
-    continue;
+    fail(`${label} ${relativePath}: 含动态 import() —— 经典脚本中不可靠`);
+    return;
   }
   try {
-    new vm.Script(source, { filename: file });
+    new vm.Script(source, { filename: relativePath });
   } catch (error) {
-    fail(`${file}: 无法作为经典脚本解析 —— ${error.message}`);
+    fail(`${label} ${relativePath}: 无法作为经典脚本解析 —— ${error.message}`);
   }
+}
+
+for (const file of (manifest.content_scripts ?? []).flatMap((script) => script.js ?? [])) {
+  checkClassicScript(file, '内容脚本');
 }
 
 // ---- service worker must be parseable ESM ----
@@ -129,6 +138,42 @@ const swFile = manifest.background?.service_worker;
 if (swFile && existsSync(join(distDir, swFile))) {
   const source = readFileSync(join(distDir, swFile), 'utf8');
   if (/\brequire\s*\(/.test(source)) fail(`${swFile}: 含 require() —— MV3 service worker 不支持 CommonJS`);
+}
+
+// ---- page-fill assets injected at runtime ----
+// These are referenced NOWHERE in the manifest or in any HTML: the service
+// worker injects them with `chrome.scripting.executeScript({ files })`. Nothing
+// else would notice them going missing, and the only symptom would be
+// 「回填脚本无响应」 at runtime — the same build-side cause / load-side symptom
+// shape this whole script exists for.
+//
+// The list is read out of the runtime source rather than copied, so it cannot
+// drift; the parse itself is asserted so a refactor cannot silently disable it.
+const fillerSource = readFileSync(join(rootDir, 'src/background/page-filler.ts'), 'utf8');
+const bridgeFilesMatch = /const BRIDGE_FILES: readonly string\[\] = \[([\s\S]*?)\]/.exec(fillerSource);
+
+if (!bridgeFilesMatch) {
+  fail('无法从 src/background/page-filler.ts 解析 BRIDGE_FILES —— 该校验已失效，请同步更新本脚本');
+} else {
+  const pageFillFiles = [...bridgeFilesMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  if (pageFillFiles.length === 0) {
+    fail('BRIDGE_FILES 为空 —— 页面回填流程将没有脚本可注入');
+  }
+  let pageFillMissing = 0;
+  for (const file of pageFillFiles) {
+    // Order is load-bearing (each file reads its siblings at load time), and
+    // existence is checked in list order so a missing middle file is obvious.
+    if (!checkFile(file, '页面回填脚本')) {
+      pageFillMissing += 1;
+      continue;
+    }
+    checkClassicScript(file, '页面回填脚本');
+  }
+  // Only claim completeness when it is true — a "7 个齐备" note printed next to
+  // a missing-file problem would send whoever reads it looking in the wrong place.
+  if (pageFillMissing === 0) {
+    notes.push(`页面回填注入脚本 ${pageFillFiles.length} 个齐备：${pageFillFiles.join(' → ')}`);
+  }
 }
 
 // ---- report ----

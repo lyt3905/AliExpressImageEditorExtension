@@ -40,6 +40,9 @@ describe('scanDocument — seller image widget', () => {
     expect(strategy).toBe('seller-widget');
     expect(images.map((image) => image.normalizedUrl)).toEqual(EXPECTED_URLS);
     expect(images.map((image) => image.index)).toEqual([0, 1, 2, 3, 4]);
+    // `slotIndex` is the page's own `data-index` — the stable identity the page
+    // keeps across re-renders, and what the page-fill flow appends after.
+    expect(images.map((image) => image.slotIndex)).toEqual([0, 1, 2, 3, 4]);
     expect(images.every((image) => image.sourceType === 'main')).toBe(true);
   });
 
@@ -146,6 +149,8 @@ describe('scanDocument — seller image widget', () => {
       `${CDN}/Sfirst.jpg`,
       `${CDN}/Ssecond.jpg`,
     ]);
+    // The reported slots must follow the same order: Sfirst really is slot 0.
+    expect(scanDocument(document).images.map((image) => image.slotIndex)).toEqual([0, 1]);
   });
 
   it('falls back to DOM order when data-index is missing', () => {
@@ -161,6 +166,8 @@ describe('scanDocument — seller image widget', () => {
       `${CDN}/Sa.jpg`,
       `${CDN}/Sb.jpg`,
     ]);
+    // No usable slot number on the page — an absent field, never a guessed 0/1.
+    expect(scanDocument(document).images.map((image) => image.slotIndex)).toEqual([undefined, undefined]);
   });
 
   it('dedupes differently decorated URLs of the same asset', () => {
