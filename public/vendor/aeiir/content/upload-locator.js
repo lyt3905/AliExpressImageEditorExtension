@@ -14,7 +14,15 @@
 
   var NS = (root.AEIIR = root.AEIIR || {});
 
-  var UPLOAD_BUTTON_SELECTOR = 'div.image-upload-btn';
+  /**
+   * 商品图片区的「上传图片」入口。
+   *
+   * 真机（2026-09-28）确认：入口是 div.upload-content（anticon add 图标 +
+   * 「上传图片」文案）；已捕获的快照里它嵌在 div.image-upload-btn 内。两个
+   * 选择器都扫，嵌套时只保留最外层 —— 同一个入口不能算成两个按钮。
+   */
+  var UPLOAD_BUTTON_SELECTORS = ['div.image-upload-btn', 'div.upload-content'];
+  var UPLOAD_BUTTON_SELECTOR = UPLOAD_BUTTON_SELECTORS[0];
   var UPLOAD_HINT_TEXT = '点击此处或者将文件拖至此处';
   var FILE_INPUT_SELECTOR = 'input[type="file"]';
 
@@ -85,11 +93,20 @@
     return messages ? messages.describeElement(node) : String((node && node.tagName) || '');
   }
 
-  /** 所有可见的 div.image-upload-btn */
+  /** 所有可见的上传入口（两个选择器合并，嵌套时只留最外层） */
   function findVisibleUploadButtons(doc, win) {
     var view = win || (doc && doc.defaultView) || root;
     var wait = domWait();
-    var all = doc ? toArray(doc.querySelectorAll(UPLOAD_BUTTON_SELECTOR)) : [];
+    var all = [];
+    if (doc) {
+      var raw = [];
+      for (var s = 0; s < UPLOAD_BUTTON_SELECTORS.length; s += 1) {
+        raw = raw.concat(toArray(doc.querySelectorAll(UPLOAD_BUTTON_SELECTORS[s])));
+      }
+      // dedupeOutermost：upload-content 在 image-upload-btn 里时只算一个入口；
+      // 老页面是嵌套结构，新页面（真机 2026-09-28）upload-content 独立存在。
+      all = dedupeOutermost(raw);
+    }
     var items = [];
     var visibleIndex = 0;
     for (var i = 0; i < all.length; i += 1) {
@@ -112,7 +129,7 @@
       return item.visible;
     });
     return {
-      selector: UPLOAD_BUTTON_SELECTOR,
+      selectors: UPLOAD_BUTTON_SELECTORS,
       domCount: all.length,
       visibleCount: visibleItems.length,
       items: items,
@@ -1007,6 +1024,7 @@
 
   NS.uploadLocator = {
     UPLOAD_BUTTON_SELECTOR: UPLOAD_BUTTON_SELECTOR,
+    UPLOAD_BUTTON_SELECTORS: UPLOAD_BUTTON_SELECTORS,
     UPLOAD_HINT_TEXT: UPLOAD_HINT_TEXT,
     FILE_INPUT_SELECTOR: FILE_INPUT_SELECTOR,
     UPLOAD_CONTAINER_SELECTORS: UPLOAD_CONTAINER_SELECTORS,

@@ -217,25 +217,27 @@ describe('describeBridgeFailure', () => {
 // ---------------------------------------------------------------- success warnings
 
 describe('successWarnings', () => {
-  const degradedSlotNotice =
-    '没有找到空槽位（可见上传按钮 5 个都挂在已占用的槽位上），已改用第 0 个按钮，可能会覆盖已有图片，请回商品页核对';
+  // A REAL remaining notice (the old "degraded slot" one described a fallback
+  // that no longer exists): the confirm click happened but the panel stayed open.
+  const panelStillOpenNotice =
+    '已点击「确认上传」，但上传面板仍未关闭，请回页面人工确认图片是否已应用';
 
-  const degradedStage = {
-    stage: 'OPEN_PANEL',
-    stageLabel: '打开上传面板',
+  const panelStillOpenStage = {
+    stage: 'CONFIRM_UPLOAD',
+    stageLabel: '确认上传',
     status: 'notice' as const,
-    message: degradedSlotNotice,
+    message: panelStillOpenNotice,
   };
 
-  it('surfaces the notice that warns an occupied slot may have been overwritten', () => {
+  it('surfaces the notice that asks the user to verify the panel stayed open', () => {
     const result = successResult({
       stages: [
-        degradedStage,
+        panelStillOpenStage,
         { stage: 'INJECT_FILE', stageLabel: '注入图片文件', status: 'ok', message: '已注入文件' },
       ],
     });
 
-    expect(successWarnings(result)).toEqual([degradedSlotNotice]);
+    expect(successWarnings(result)).toEqual([panelStillOpenNotice]);
   });
 
   it('reports nothing for a clean success', () => {
@@ -245,7 +247,7 @@ describe('successWarnings', () => {
   it('stays quiet about a merely unconfirmed run, which already asks the user to check', () => {
     // The unconfirmed message itself says to verify by hand; repeating a notice
     // on top of it just buries the part that matters.
-    const result = successResult({ status: 'unconfirmed', stages: [degradedStage] });
+    const result = successResult({ status: 'unconfirmed', stages: [panelStillOpenStage] });
     expect(successWarnings(result)).toEqual([]);
   });
 
@@ -414,17 +416,17 @@ describe('fillPageImage', () => {
     expect(bridgePayloads[0]?.confirmUploadClick).toBe(true);
   });
 
-  it('carries a degraded-slot warning through to the editor instead of hiding it behind success', async () => {
+  it('carries a panel-still-open warning through to the editor instead of hiding it behind success', async () => {
     installChrome({
       frames: [{ frameId: 0, signals: signals({ uploadWrapCount: 1, slotCount: 6 }) }],
       bridge: () =>
         successResult({
           stages: [
             {
-              stage: 'OPEN_PANEL',
-              stageLabel: '打开上传面板',
+              stage: 'CONFIRM_UPLOAD',
+              stageLabel: '确认上传',
               status: 'notice',
-              message: '没有找到空槽位，可能会覆盖已有图片，请回商品页核对',
+              message: '已点击「确认上传」，但上传面板仍未关闭，请回页面人工确认图片是否已应用',
             },
           ],
         }),
@@ -433,7 +435,7 @@ describe('fillPageImage', () => {
     const result = await fillPageImage(FILL_INPUT, SESSION);
 
     expect(result.status).toBe('success');
-    expect(result.warnings).toEqual(['没有找到空槽位，可能会覆盖已有图片，请回商品页核对']);
+    expect(result.warnings).toEqual(['已点击「确认上传」，但上传面板仍未关闭，请回页面人工确认图片是否已应用']);
   });
 
   it('retries in another frame with openPanel off, so the already-open panel is not toggled shut', async () => {

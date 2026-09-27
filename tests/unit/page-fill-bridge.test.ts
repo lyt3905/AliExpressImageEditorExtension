@@ -45,12 +45,13 @@ function byteLengthOfDataUrl(dataUrl: string): number {
 
 interface Bridge {
   chooseUploadButton: (survey: unknown) => {
-    item: { text: string; index?: number };
-    degraded: boolean;
+    item: { text: string; index?: number; element: Element };
     emptyCount: number;
     filledCount: number;
+    skippedEntries: { text: string; reason: string }[];
     buttonTexts: string[];
   } | null;
+  skippedEntriesOf: (survey: unknown) => { text: string; reason: string }[];
   isFilledSlot: (slot: Element | null) => boolean;
   slotOf: (button: Element | null) => Element | null;
   surveySlots: (doc: Document) => { total: number; filled: number };
@@ -61,7 +62,12 @@ interface Bridge {
     win: Window,
     options: { recorder: unknown; timeout?: number },
   ) => Promise<{ ok: boolean; removed: { label: string; url: string } | null; skipped?: boolean }>;
-  makePanelProbe: (element: Element, doc: Document, win: Window) => () => boolean;
+  makePanelProbe: (
+    dropZone: Element | null,
+    modal: Element | null,
+    doc: Document,
+    win: Window,
+  ) => () => boolean;
   runFill: (payload: Record<string, unknown>) => Promise<BridgeResult>;
   registerMessageListener: () => boolean;
 }
@@ -211,7 +217,7 @@ function installFakeUploadPanel(): {
     throw new Error('installFakeUploadPanel 需要 .imageUploadWrap：图片区容器是委托挂载点');
   }
   trigger.addEventListener('click', (event) => {
-    const button = (event.target as Element | null)?.closest?.('div.image-upload-btn');
+    const button = (event.target as Element | null)?.closest?.('div.image-upload-btn, div.upload-content');
     if (!button) return;
     state.openClicks += 1;
     state.clickedSlots.push(button.closest('.sell-o-image-item')?.getAttribute('data-index') ?? '?');
@@ -282,28 +288,85 @@ describe('page-fill bridge — slot choice', () => {
 
   it('targets the empty slot so the new image is appended, not overwritten', () => {
     const survey = page.locator.findVisibleUploadButtons(document, window);
-    // The fixture has ONE div.image-upload-btn, and it lives on the empty slot.
+    // The fixture has ONE upload entry (image-upload-btn wrapping upload-content,
+    // which must count as a single entry, not two), and it lives on the empty slot.
     expect(survey.visibleCount).toBe(1);
 
     const choice = page.bridge.chooseUploadButton(survey);
     expect(choice).not.toBeNull();
-    expect(choice?.degraded).toBe(false);
     expect(choice?.emptyCount).toBe(1);
     expect(choice?.filledCount).toBe(0);
     expect(choice?.item.text).toBe('上传图片');
   });
 
-  it('degrades to the first button, and says so, when every slot is occupied', () => {
-    // Occupy the empty slot: the button must then be treated as a last resort.
+  it('returns null when every slot is occupied — that click would overwrite an image', () => {
+    // Real-device lesson (2026-09-28): opening the panel from a FILLED slot's
+    // entry makes 「确认上传」 overwrite that image. So there is no "degrade to
+    // the first button" fallback any more: no empty-slot entry means refuse.
     const slot = document.querySelector('[data-index="5"]') as HTMLElement;
     slot.classList.add('has-url');
 
     const survey = page.locator.findVisibleUploadButtons(document, window);
-    const choice = page.bridge.chooseUploadButton(survey);
+    expect(survey.visibleCount).toBe(1);
+    expect(page.bridge.chooseUploadButton(survey)).toBeNull();
+  });
 
-    expect(choice?.degraded).toBe(true);
-    expect(choice?.emptyCount).toBe(0);
-    expect(choice?.filledCount).toBe(1);
+  it('finds the live entry (div.upload-content) and picks the LAST empty slot', () => {
+    // Real console (2026-09-28): the entry is div.upload-content on its own, and
+    // the panel binds to the slot it was opened from — so the LAST empty slot's
+    // entry is the one that appends the new image at the end.
+    for (const index of ['3', '5']) {
+      const slot = document.querySelector(`[data-index="${index}"]`) as HTMLElement;
+      slot.classList.remove('has-url');
+      slot.innerHTML =
+        '<div class="upload-content"><span class="anticon upload-btn-icon"></span>' +
+        '<div class="upload-text-wrap"><span>上传图片</span></div></div>';
+    }
+
+    const survey = page.locator.findVisibleUploadButtons(document, window);
+    expect(survey.visibleCount).toBe(2);
+
+    const choice = page.bridge.chooseUploadButton(survey);
+    expect(choice).not.toBeNull();
+    expect(choice?.emptyCount).toBe(2);
+    expect(choice?.item.element.closest('.sell-o-image-item')?.getAttribute('data-index')).toBe('5');
+  });
+
+  it('refuses an entry that says 视频 — clicking it opens the video upload window', () => {
+    // Real device (2026-09-28): clicking the wrong entry popped the video upload
+    // dialog. The right entry says 「上传图片」, so the text is a cheap guard.
+    const slot = document.querySelector('[data-index="5"]') as HTMLElement;
+    slot.innerHTML =
+      '<div class="upload-content"><div class="upload-text-wrap"><span>上传视频</span></div></div>';
+
+    const survey = page.locator.findVisibleUploadButtons(document, window);
+    expect(survey.visibleCount).toBe(1);
+
+    expect(page.bridge.chooseUploadButton(survey)).toBeNull();
+    expect(page.bridge.skippedEntriesOf(survey)).toEqual([
+      { text: '上传视频', reason: 'video-entry' },
+    ]);
+  });
+
+  it('refuses an entry on a slot outside the image area (SKU module)', () => {
+    // The fixture ships a `.sell-o-image-item` OUTSIDE `.imageUploadWrap`. It has
+    // the very same class name, so "has a slot ancestor" is not enough to trust
+    // an entry — the slot has to be inside the product image widget.
+    const skuSlot = document.querySelector('.skuImageSection .sell-o-image-item') as HTMLElement;
+    skuSlot.classList.remove('has-url');
+    skuSlot.innerHTML =
+      '<div class="upload-content"><div class="upload-text-wrap"><span>上传图片</span></div></div>';
+
+    const survey = page.locator.findVisibleUploadButtons(document, window);
+    expect(survey.visibleCount).toBe(2);
+
+    const choice = page.bridge.chooseUploadButton(survey);
+    expect(choice?.emptyCount).toBe(1);
+    expect(choice?.item.element.closest('.sell-o-image-item')?.getAttribute('data-index')).toBe('5');
+    expect(page.bridge.skippedEntriesOf(survey)).toContainEqual({
+      text: '上传图片',
+      reason: 'outside-image-area',
+    });
   });
 
   it('tells an occupied slot from an empty one the same way the scanner does', () => {
@@ -353,6 +416,23 @@ describe('page-fill bridge — runFill', () => {
     // the image was applied rather than merely staged.
     expect(result.confirmUpload?.panelClosed).toBe(true);
     expect(panel.panelIsOpen()).toBe(false);
+  });
+
+  it('opens the panel from the live entry (div.upload-content) and lands in the last slot', async () => {
+    // Real console (2026-09-28): the entry renders as div.upload-content without
+    // the old image-upload-btn wrapper. The flow must click it — and, because the
+    // panel binds to the slot it was opened from, the image ends up in slot 5.
+    const panel = installFakeUploadPanel();
+    const slot = document.querySelector('[data-index="5"]') as HTMLElement;
+    slot.innerHTML =
+      '<div class="upload-content"><div class="upload-text-wrap"><span>上传图片</span></div></div>';
+
+    const result = await page.bridge.runFill(fillRequest());
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('success');
+    expect(panel.openClicks).toBe(1);
+    expect(panel.clickedSlots).toEqual(['5']);
   });
 
   it('injects the exported file under its real name, type and byte length', async () => {
@@ -557,16 +637,18 @@ describe('page-fill bridge — remove first image', () => {
     expect(panel.clickedSlots).toEqual(['5']);
   });
 
-  it('uploads into whatever slot the page frees, instead of assuming a position', async () => {
-    // The opposite page behaviour: slot 0 itself becomes empty again, so the new
-    // image does become the main image. Neither behaviour is assumed in advance.
+  it('appends into the LAST empty slot even when the page frees slot 0 in place', async () => {
+    // The opposite page behaviour: slot 0 itself becomes empty again. The flow
+    // still appends at the END — the last empty slot — because the panel binds to
+    // the slot it was opened from, and landing in the main position would silently
+    // make the new image the main image. The gap at slot 0 stays for the seller.
     const panel = installFakeUploadPanel();
     installEmptyInPlaceOnDelete();
 
     const result = await page.bridge.runFill(fillRequest({ removeFirstImage: true }));
 
     expect(result.status).toBe('success');
-    expect(panel.clickedSlots).toEqual(['0']);
+    expect(panel.clickedSlots).toEqual(['5']);
   });
 
   it('leaves every image alone unless the delete was explicitly asked for', async () => {
@@ -694,23 +776,27 @@ describe('page-fill bridge — panel probe', () => {
     page = loadVendorChain();
   });
 
-  it('tracks the resolved panel element instead of re-scanning the document', () => {
+  it('keeps reporting an open panel after the drag zone is swapped for the result list', () => {
+    // Real-device regression (2026-09-28 screenshot): once the upload succeeds the
+    // panel switches to the 「已添加图片」 list state and REMOVES the drag zone.
+    // A probe anchored only on the drag zone then reports "panel closed", the flow
+    // skips 「确认上传」 as "applied on drop", and the dialog is stuck on screen.
+    // With the modal root still connected the panel IS still open.
     installFakeUploadPanel();
     (document.querySelector('div.image-upload-btn') as HTMLElement).click();
 
     const zone = page.locator.findDropZone(document, window);
     expect(zone.ok).toBe(true);
-    const probe = page.bridge.makePanelProbe(zone.element as Element, document, window);
+    const modal = document.querySelector('div.material-center-modal');
+    const probe = page.bridge.makePanelProbe(zone.element as Element, modal, document, window);
     expect(probe()).toBe(true);
 
-    // Closing the panel is exactly the case a fresh scan gets wrong: once the
-    // modal is gone the generic `[class*="uploader"]` fallback matches the form's
-    // own six wrappers, so the scan reports AMBIGUOUS rather than "no panel".
-    (document.querySelector('div.material-center-modal') as HTMLElement).remove();
+    (document.querySelector('div.material-center-upload-drag') as HTMLElement).remove();
+    expect(probe()).toBe(true);
 
-    const rescan = page.locator.findDropZone(document, window);
-    expect(rescan.ok).toBe(false);
-    expect(rescan.code).toBe('DROP_ZONE_AMBIGUOUS');
+    // Only when both anchors are gone (and a rescan cannot find a drop zone that
+    // actually sits inside a modal) is the panel really closed.
+    (document.querySelector('div.material-center-modal') as HTMLElement).remove();
     expect(probe()).toBe(false);
   });
 
@@ -721,7 +807,7 @@ describe('page-fill bridge — panel probe', () => {
     expect(failed.ok).toBe(false);
     expect(failed.element).toBeUndefined();
 
-    expect(page.bridge.makePanelProbe(document.body, document, window)()).toBe(false);
+    expect(page.bridge.makePanelProbe(document.body, null, document, window)()).toBe(false);
   });
 });
 

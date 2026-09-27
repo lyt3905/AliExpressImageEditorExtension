@@ -316,12 +316,18 @@ type EditorLayer = ImageLayer | TextLayer;
 
 ### 与姊妹项目的三点差异
 
-1. **追加语义**（`chooseUploadButton`）：新图必须落在**空槽位**上，所以上传按钮的挑选优先空槽位。
-   判据与 `content/image-scanner.ts` 的 `isFilledSlot` 一致（`has-url` 类，或槽内有带 URL 的 `<img>`），
-   这样「扫描到的图」和「判定为空槽」不会互相矛盾。
-   一个空槽都没有时**降级**为第 0 个按钮，并记一条 `notice` —— 这种情况很可能覆盖已有图片，
-   必须让用户看见（见下面的「警告通道」）。注意：真实页面在图片位全满时**连按钮都不渲染**，
-   所以这条降级路径只在「按钮确实挂在已占用槽位上」时才走得到，见下面的「两种原因」。
+1. **追加语义**（`chooseUploadButton`）：面板绑定在「从哪个槽位的入口打开」上，「确认上传」就把
+   新图放进那个槽位 —— 所以只在**空槽位**的入口里挑，并且挑**最后一个**（新图追加到末尾）。
+   空槽判据与 `content/image-scanner.ts` 的 `isFilledSlot` 一致（`has-url` 类，或槽内有带 URL 的
+   `<img>`），这样「扫描到的图」和「判定为空槽」不会互相矛盾。入口本身是
+   `div.upload-content`（真机 2026-09-28 确认；旧快照里包在 `div.image-upload-btn` 内，
+   两个选择器都扫、嵌套去重）。一个空槽入口都没有时**直接返回 null 拒绝** ——
+   绝不点击已占用槽位上的入口，那会让「确认上传」覆盖旧图（真机踩过，2026-09-28 修复时
+   删掉了旧的「降级到第 0 个按钮」路径）。
+   另有两道「宁可少点、不可点错」的排除（`partitionEntries`）：文本含**「视频」**的入口跳过
+   （真机点错入口会弹出视频上传窗口）；槽位不在 `.imageUploadWrap` 内的入口跳过
+   （页面别处如 SKU 模块也有 `.sell-o-image-item`，光看「祖先链上有槽位」信不过）。
+   被排除的入口会记进 `skippedEntries` 诊断 —— 否则真机上「明明有入口却不点」没法从日志看出原因。
 2. **可选删图**（`removeFirstImage`）：6 个图片位常是满的，没有空位就无处可放。所以
    `payload.removeFirstImage` 为真时，先删掉第 1 张（原主图）腾出空位 —— **这是全流程唯一一处
    改动商品页数据的动作**，因此默认由调用方显式开启（编辑器勾选框默认勾选、可关），且只有第一次
@@ -384,14 +390,21 @@ type EditorLayer = ImageLayer | TextLayer;
 结果是「可见拖拽区有 5 个」（`DROP_ZONE_AMBIGUOUS`）而不是「没有拖拽区」（`DROP_ZONE_NOT_FOUND`），
 关闭判定永远不成立，每次回填都要白等满 8 秒并报一条假警告。
 
-因此 `makePanelProbe` 锚定在**已经解析出的那个拖拽区元素**上，只在它 `isConnected` 为假时才回退重扫；
-并且显式拒绝 `document.body` / `documentElement` 这种永远 `isConnected` 的锚点 —— `findDropZone`
-失败时返回的报告**根本不含 `element`**，调用方一旦用 `body` 兜底就会把「没有面板」谎报成「面板开着」。
+因此 `makePanelProbe` 用**双锚点**：已经解析出的那个拖拽区元素 + 弹层根元素（`findModalScope`），
+任一仍 `isConnected` 就算面板开着；只在**两个锚点都断开**时才回退重扫，且重扫结果必须能确认
+「拖拽区在弹层里」（`findModalScope` 命中）—— 否则 `[class*="uploader"]` 兜底命中的商品表单
+`.image-uploader` 包裹层会把「没有面板」谎报成「面板开着」。锚点也显式拒绝 `document.body` /
+`documentElement` 这种永远 `isConnected` 的节点 —— `findDropZone` 失败时返回的报告**根本不含
+`element`**，调用方一旦用 `body` 兜底就会踩到。
+
+第二个锚点是真机踩坑（2026-09-28 截图）补上的：上传完成后面板切到「已添加图片」列表态，
+**拖拽区会从 DOM 里被移除**，只锚拖拽区的探针于是误报「面板已关」，流程按「投进去即生效」
+跳过「确认上传」直接结束 —— 弹层永远留在屏幕上。弹层根还在，就必须继续等确认按钮。
 
 ### 「一个可见上传按钮都没有」的两种原因（不能都报同一句话）
 
-真实页面**只在空槽位上**渲染 `div.image-upload-btn`：已占用的槽位里只有
-`image-upload-edit` / `image-upload-remove` 两个 SVG 图标，没有按钮节点。所以「一个可见按钮都没有」
+真实页面**只在空槽位上**渲染上传入口（`div.upload-content` / `div.image-upload-btn`）：已占用的槽位里只有
+`image-upload-edit` / `image-upload-remove` 两个 SVG 图标，没有入口节点。所以「一个可见入口都没有」
 至少有两种互不相干的原因，而用户要做的事完全不同：
 
 | 原因 | 用户该做什么 |
@@ -404,17 +417,19 @@ type EditorLayer = ImageLayer | TextLayer;
 也有 `.sell-o-image-item` 同名节点，不收敛就永远判不出「满」），按 `slots.filled === slots.total`
 选文案，并把 `slotCount` / `filledSlotCount` / `allSlotsFull` 一并记进诊断，事后能分清是哪一种。
 
-同时允许**复用已经开着的面板**：判据就是「第 2 步要的那个拖拽区已经存在」（`findDropZone(doc, win).ok`），
-所以跳过点击不会把流程带进更差的状态。反过来，不认这种情况的话，我们给的
+同时允许**复用已经开着的面板**，但判据收紧为「拖拽区已经存在**且真的在弹层里**」：
+`findDropZone(doc, win).ok` **且** `findModalScope(doc, dropZone.element, win)` 命中。只看前者的话，
+商品表单自己的 `.image-uploader` 包裹层（`[class*="uploader"]` 兜底选择器的命中项）会把一个
+根本没开面板的页面谎报成「面板已开」，文件就被注进错误的面板 —— 真机踩过：确认上传后覆盖了
+第 1 张图（2026-09-28 修复）。反过来，不认真正开着的面板也不行：我们给的
 「请先手动打开上传面板」就是一句**死循环指引** —— 用户照做、再点一次回填，仍然会因为「没有按钮」
-报同一个错。这个判据也不会误判：`findDropZone` 只在可见候选**恰好 1 个**时才 `ok`，而商品表单
-自己的 6 个 `.image-uploader` 包裹层会走 `DROP_ZONE_AMBIGUOUS`（见上一节）。复用走的是 `ok` 而不是
-`notice` —— `notice` 会被提成用户眼前的「需确认」红色警告，而这条纯属审计信息，没有可执行含义。
+报同一个错。复用走的是 `ok` 而不是 `notice` —— `notice` 会被提成用户眼前的「需确认」红色警告，
+而这条纯属审计信息，没有可执行含义。
 
 ### 警告通道（为什么不能只报「成功」）
 
 桥在自己的阶段日志里记 `notice`。这些提示如果只留在 `stages` 里，**回填成功时用户只会看到成功文案**，
-「没有空槽位、可能覆盖了已有图片」这类信息就永远没人看见。所以 `page-filler.ts` 把它提成
+「已点击『确认上传』，但上传面板仍未关闭」这类信息就永远没人看见。所以 `page-filler.ts` 把它提成
 `PageFillResult.warnings`（只在**已确认成功**时提取；`unconfirmed` 本身已经让人去人工核对），
 编辑器拿到后把提示条渲染成红色，而不是绿色成功。
 

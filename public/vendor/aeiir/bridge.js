@@ -204,35 +204,94 @@
     return false;
   }
 
+  /** 视频上传入口的文本特征。命中就不点 —— 真机踩过：点错入口会弹出视频上传窗口。 */
+  var VIDEO_ENTRY_TEXT = '视频';
+
+  function isVideoEntry(text) {
+    return String(text || '').indexOf(VIDEO_ENTRY_TEXT) >= 0;
+  }
+
   /**
-   * 挑选要点击的上传按钮。
+   * 入口所在的槽位是否落在商品图片区内。
    *
-   * 追加语义：速卖通删掉第 1 张图后，后面的图会自动前移，所以「新建一张」必须落在
-   * 空槽位上。优先可见按钮中第一个挂在空槽位上的；一个空槽位都没有时退化为第 0 个，
-   * 并把 degraded 标出来 —— 那种情况下很可能覆盖已有图片，必须让用户看见。
+   * 页面别处（SKU 模块）也有 `.sell-o-image-item`，所以「祖先链上有槽位」不等于
+   * 「这是商品图片的槽位」。`.imageUploadWrap` 找不到时不拒绝 —— 那是另一种故障
+   * （页面改版），交给后面的阶段按它自己的判据报错，不在这里替它做决定。
    */
-  function chooseUploadButton(survey) {
+  function isInsideImageArea(slot) {
+    var doc = slot && slot.ownerDocument;
+    if (!doc) {
+      return true;
+    }
+    var area = imageAreaOf(doc);
+    if (!area || typeof area.contains !== 'function') {
+      return true;
+    }
+    return area.contains(slot);
+  }
+
+  /**
+   * 把可见入口分成「可用（空槽位）/ 已占用 / 被排除」三类。
+   *
+   * 排除规则一律是「宁可少点，不可点错」：
+   *   - 不在任何槽位里 —— 跟商品图片区无关的节点；
+   *   - 文本含「视频」 —— 点了会弹出视频上传窗口；
+   *   - 槽位不在 `.imageUploadWrap` 内 —— 页面别处（SKU 模块）的槽位。
+   */
+  function partitionEntries(survey) {
     var visible = (survey && survey.visibleItems) || [];
-    var empty = [];
-    var filled = [];
+    var usable = [];
+    var filledCount = 0;
+    var skipped = [];
     for (var i = 0; i < visible.length; i += 1) {
       var item = visible[i];
-      if (isFilledSlot(slotOf(item.element))) {
-        filled.push(item);
+      var slot = slotOf(item.element);
+      if (!slot) {
+        skipped.push({ text: item.text, reason: 'not-inside-a-slot' });
+        continue;
+      }
+      if (isVideoEntry(item.text)) {
+        skipped.push({ text: item.text, reason: 'video-entry' });
+        continue;
+      }
+      if (!isInsideImageArea(slot)) {
+        skipped.push({ text: item.text, reason: 'outside-image-area' });
+        continue;
+      }
+      if (isFilledSlot(slot)) {
+        filledCount += 1;
       } else {
-        empty.push(item);
+        usable.push(item);
       }
     }
-    var pool = empty.length ? empty : filled;
-    if (!pool.length) {
+    return { usable: usable, filledCount: filledCount, skipped: skipped };
+  }
+
+  /** 被排除的入口（失败诊断用：让用户看见「我们看到过但不敢点」的东西）。 */
+  function skippedEntriesOf(survey) {
+    return partitionEntries(survey).skipped;
+  }
+
+  /**
+   * 挑选要点击的上传入口。
+   *
+   * 追加语义（真机 2026-09-28 确认）：面板绑定在哪个槽位上，「确认上传」就把
+   * 新图放进哪个槽位 —— 所以只考虑挂在**空槽位**上的入口，并在其中选**最后一个**，
+   * 新图才会追加到末尾。没有空槽位入口时返回 null：绝不点击挂在已占用槽位上的
+   * 入口（真机踩过：从那种入口开面板，确认上传后覆盖了第 1 张图），也绝不点击
+   * 图片区之外的入口（页面别处也有 upload-content 一类的节点）。
+   */
+  function chooseUploadButton(survey) {
+    var parts = partitionEntries(survey);
+    if (!parts.usable.length) {
       return null;
     }
     return {
-      item: pool[0],
-      degraded: empty.length === 0,
-      emptyCount: empty.length,
-      filledCount: filled.length,
-      buttonTexts: visible.map(function (entry) {
+      item: parts.usable[parts.usable.length - 1],
+      emptyCount: parts.usable.length,
+      filledCount: parts.filledCount,
+      skippedEntries: parts.skipped,
+      buttonTexts: ((survey && survey.visibleItems) || []).map(function (entry) {
         return entry.text;
       })
     };
@@ -241,9 +300,9 @@
   /**
    * 图片区的槽位占用情况。
    *
-   * 真实页面**只在空槽位上**渲染 div.image-upload-btn（已占用槽位只有
-   * image-upload-edit / image-upload-remove 两个 SVG 图标）。所以「一个可见按钮都没有」
-   * 有两种完全不同的原因，必须分开说：
+   * 真实页面**只在空槽位上**渲染上传入口（div.upload-content / div.image-upload-btn；
+   * 已占用槽位只有 image-upload-edit / image-upload-remove 两个 SVG 图标）。所以
+   * 「一个可见入口都没有」有两种完全不同的原因，必须分开说：
    *   - 槽位全满 -> 用户要先去删一张（不是「去打开上传面板」）
    *   - 页面改版 / 面板没渲染 -> 才让人手动打开面板
    * 给错指引会让用户去找一个根本不存在的东西。
@@ -621,26 +680,37 @@
   /**
    * 「上传面板是否还开着」的判定。
    *
-   * 锚定在**已经解析出的那个拖拽区元素**上，而不是每次重新跑一遍 findDropZone：
-   * 面板一旦关闭，findDropZone 会继续往下试 `[class*="uploader"]` 这个兜底选择器，
-   * 而它正好命中商品表单自己的 `.image-uploader` 包裹层 —— 于是结果是「可见拖拽区
-   * 有 5 个」（DROP_ZONE_AMBIGUOUS）而不是「没有拖拽区」（DROP_ZONE_NOT_FOUND），
-   * 关闭判定永远不成立：每次回填都要白等满 8 秒并报一条假警告。
+   * 双锚点：拖拽区元素 + 弹层根元素。只锚拖拽区在真机上踩过坑（2026-09-28 截图）：
+   * 上传完成后面板切到「已添加图片」列表态，拖拽区从 DOM 里被移除，探针于是误报
+   * 「面板已关」，流程跳过「确认上传」直接结束 —— 弹层永远留在屏幕上。
+   *
+   * 锚点必须是「具体元素」：document.body / documentElement 永远 isConnected，
+   * 拿它们当锚点会把「没有面板」谎报成「面板开着」。两个锚点都断开时允许重扫一次，
+   * 但重扫结果必须能确认「拖拽区在弹层里」—— findDropZone 的兜底选择器会命中
+   * 商品表单自己的 .image-uploader，不验这一层就会把「没有面板」谎报成「开着」。
    */
-  function makePanelProbe(dropZoneElement, doc, win) {
-    // 锚点必须是一个「具体元素」：document.body / documentElement 永远 isConnected，
-    // 拿它们当锚点会把「没有面板」谎报成「面板开着」，进而白等满 8 秒。
-    // findDropZone 失败时返回的报告本来就不带 element，调用方一旦用 body 兜底就会踩到。
+  function makePanelProbe(dropZoneElement, modalElement, doc, win) {
     var body = doc && doc.body;
     var docRoot = doc && doc.documentElement;
-    var anchored = dropZoneElement && dropZoneElement !== body && dropZoneElement !== docRoot ? dropZoneElement : null;
+    function usable(node) {
+      return !!(node && node !== body && node !== docRoot);
+    }
+    var zoneAnchor = usable(dropZoneElement) ? dropZoneElement : null;
+    var modalAnchor = usable(modalElement) ? modalElement : null;
 
     return function () {
-      if (anchored && anchored.isConnected) {
+      if (zoneAnchor && zoneAnchor.isConnected) {
+        return true;
+      }
+      if (modalAnchor && modalAnchor.isConnected) {
         return true;
       }
       var zone = uploadLocator.findDropZone(doc, win);
-      return !!zone.ok;
+      if (!zone.ok) {
+        return false;
+      }
+      var modal = uploadLocator.findModalScope(doc, zone.element, win);
+      return !!(modal && modal.element);
     };
   }
 
@@ -828,24 +898,37 @@
         // 这种情况页面同样可能一个可见按钮都没有，但流程完全可以继续：第 2 步要的
         // 正是这个拖拽区。不认这种情况，我们给的「请手动打开面板」就是死循环指引：
         // 用户照做、再点一次回填，仍然会因为「没有按钮」而报同一个错。
-        var reuseOpenPanel = !choice && uploadLocator.findDropZone(doc, win).ok;
+        //
+        // 但复用必须确认「拖拽区真的在弹层里」：findDropZone 的兜底选择器
+        // （[class*="uploader"]）会命中商品表单自己的 .image-uploader 包裹层，
+        // 不加这道闸就会把文件注进错误的面板 —— 真机踩过：确认上传后覆盖了第 1 张图。
+        var openZone = choice ? null : uploadLocator.findDropZone(doc, win);
+        var openModal = openZone && openZone.ok
+          ? uploadLocator.findModalScope(doc, openZone.element, win)
+          : null;
+        var reuseOpenPanel = !!(openModal && openModal.element);
 
         if (!choice && !reuseOpenPanel) {
           var slots = surveySlots(doc);
-          // 页面只在空槽位渲染上传按钮，所以「没有可见按钮」最可能的原因是图片位满了。
+          // 页面只在空槽位渲染上传入口，所以「没有可见入口」最可能的原因是图片位满了。
           // 这两件事的处理方式完全不同，绝不能都报成「请先打开上传面板」。
           var allFull = slots.total > 0 && slots.filled === slots.total;
           var noButton = allFull
-            ? '商品页的图片位已经全部占用（' + slots.total + ' 个槽位都有图），页面上已经没有「上传图片」按钮，' +
-              '请先在商品页删掉一张、腾出空位再回填'
-            : '页面上 div.image-upload-btn 共 ' + survey.domCount + ' 个，可见 0 个，' +
+            ? '商品页的图片位已经全部占用（' + slots.total + ' 个槽位都有图），页面上没有空槽位的上传入口，' +
+              '请先删掉一张、腾出空位再回填'
+            : '图片区还有空槽位，但没有找到可点击的上传入口（找过 ' +
+              uploadLocator.UPLOAD_BUTTON_SELECTORS.join('、') + '），' +
               '请先在商品页把图片上传面板打开，打开后再点一次回填即可继续';
           recorder.fail('OPEN_PANEL', 'UPLOAD_BUTTON_NOT_FOUND', noButton, {
             domUploadButtonCount: survey.domCount,
             visibleUploadButtonCount: survey.visibleCount,
+            entrySelectors: uploadLocator.UPLOAD_BUTTON_SELECTORS,
             slotCount: slots.total,
             filledSlotCount: slots.filled,
-            allSlotsFull: allFull
+            allSlotsFull: allFull,
+            // 「看到过但不敢点」的入口：没有它的话，真机上「明明有按钮却不点」
+            // 这类问题完全没法从日志里看出来。
+            skippedEntries: skippedEntriesOf(survey)
           });
           var noButtonFailure = recorder.failure();
           return finish({ stage: noButtonFailure.stage, code: noButtonFailure.code, message: noButton });
@@ -859,15 +942,6 @@
             domUploadButtonCount: survey.domCount
           });
         } else {
-          if (choice.degraded) {
-            recorder.notice(
-              'OPEN_PANEL',
-              '没有找到空槽位（可见上传按钮 ' + choice.filledCount + ' 个都挂在已占用的槽位上），已改用第 0 个按钮，' +
-                '可能会覆盖已有图片，请回商品页核对',
-              { filledSlotCount: choice.filledCount, buttonTexts: choice.buttonTexts }
-            );
-          }
-
           var clickMethods;
           try {
             clickMethods = clickElement(choice.item.element, win);
@@ -987,7 +1061,7 @@
         win: win,
         recorder: recorder,
         buttonScope: modalScope || panelScope,
-        isPanelOpen: makePanelProbe(dropZone.element, doc, win),
+        isPanelOpen: makePanelProbe(dropZone.element, modalScope, doc, win),
         click: payload.confirmUploadClick,
         timeout: payload.confirmTimeout
       });
@@ -1079,6 +1153,7 @@
   NS.pageFillBridge = {
     MESSAGE_TYPE: MESSAGE_TYPE,
     chooseUploadButton: chooseUploadButton,
+    skippedEntriesOf: skippedEntriesOf,
     surveySlots: surveySlots,
     removeFirstImage: removeFirstImage,
     findRemoveIcon: findRemoveIcon,

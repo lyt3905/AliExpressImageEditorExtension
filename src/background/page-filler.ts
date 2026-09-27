@@ -310,10 +310,10 @@ function delay(ms: number): Promise<void> {
  * Warnings the bridge recorded while still reporting success.
  *
  * Only consulted for a CONFIRMED success, which is precisely the case where the
- * success message would otherwise be the whole story: the bridge falls back to
- * clicking an already-occupied slot when it finds no empty one, and that may
- * overwrite an existing product image. A run that is merely "unconfirmed"
- * already tells the user to go and check the page by hand.
+ * success message would otherwise be the whole story — for example「已点击
+ * 『确认上传』，但上传面板仍未关闭」：the click happened, yet whether the image
+ * really landed on the product page is up to the seller to verify. A run that
+ * is merely "unconfirmed" already tells the user to go and check the page.
  */
 export function successWarnings(result: PageFillBridgeResult): string[] {
   if (result.status !== 'success') return [];
