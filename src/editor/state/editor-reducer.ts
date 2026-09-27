@@ -53,7 +53,6 @@ export interface EditorState {
   /** true = preview on white; false = preview on the checkerboard. */
   showWhiteBackground: boolean;
   exporting: boolean;
-  notice: string | null;
 }
 
 export function emptyDocument(): EditorDocument {
@@ -66,7 +65,6 @@ export function createEditorState(document: EditorDocument = emptyDocument()): E
     selectedLayerId: null,
     showWhiteBackground: true,
     exporting: false,
-    notice: null,
   };
 }
 
@@ -176,7 +174,6 @@ export type EditorAction =
   | { type: 'REDO' }
   | { type: 'SET_BACKGROUND'; showWhite: boolean }
   | { type: 'SET_EXPORTING'; exporting: boolean }
-  | { type: 'SET_NOTICE'; notice: string | null }
   | { type: 'LOAD_DOCUMENT'; document: EditorDocument };
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
@@ -236,9 +233,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'SET_EXPORTING':
       return state.exporting === action.exporting ? state : { ...state, exporting: action.exporting };
-
-    case 'SET_NOTICE':
-      return { ...state, notice: action.notice };
 
     case 'LOAD_DOCUMENT':
       return { ...createEditorState(action.document), showWhiteBackground: state.showWhiteBackground };

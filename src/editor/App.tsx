@@ -35,13 +35,47 @@ interface Notice {
   text: string;
 }
 
+/**
+ * How long an operation notice stays on the status bar.
+ *
+ * Errors linger longer than successes on purpose: a download confirmation is a
+ * nicety the user can also see in their downloads folder, whereas a failure is
+ * the only place the reason is ever shown.
+ */
+const NOTICE_TIMEOUT_MS: Record<Notice['kind'], number> = { ok: 6000, error: 9000 };
+
 export function App(): JSX.Element {
   const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
   const { loading, fatalError, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
     useEditorSession(sessionId);
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
-  const [notice, setNotice] = useState<Notice | null>(null);
+  // Raw setter: always go through `showNotice` so the dismiss timer is armed.
+  const [notice, setNoticeState] = useState<Notice | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
+  /**
+   * Show a notice, then let it clear itself.
+   *
+   * Re-arming on every call is what lets a second notice take over from the
+   * first instead of being cut short by the first one's pending timer.
+   */
+  const showNotice = useCallback((next: Notice) => {
+    setNoticeState(next);
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => {
+      noticeTimerRef.current = null;
+      setNoticeState(null);
+    }, NOTICE_TIMEOUT_MS[next.kind]);
+  }, []);
+
+  // A timer armed just before teardown must not fire into an unmounted tree.
+  useEffect(
+    () => () => {
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    },
+    [],
+  );
 
   // The watermark is deliberately kept out of the layer document so UNDO / REDO
   // / CLEAR can never remove it (see use-watermark.ts).
@@ -149,10 +183,10 @@ export function App(): JSX.Element {
       try {
         const outcome = await addUploadedImages(files);
         if (!outcome) return;
-        setNotice(describeUploadOutcome(outcome));
+        showNotice(describeUploadOutcome(outcome));
       } catch (error) {
         // Reached only when persisting the record itself failed.
-        setNotice({ kind: 'error', text: `添加图片失败：${messageOf(error)}` });
+        showNotice({ kind: 'error', text: `添加图片失败：${messageOf(error)}` });
       }
     },
     [addUploadedImages],
@@ -264,7 +298,7 @@ export function App(): JSX.Element {
     const filename = buildExportFileName();
 
     if (!handle || !stage) {
-      setNotice({ kind: 'error', text: '画布尚未就绪，请稍后再试' });
+      showNotice({ kind: 'error', text: '画布尚未就绪，请稍后再试' });
       return;
     }
 
@@ -295,19 +329,19 @@ export function App(): JSX.Element {
       if (!response?.ok) {
         throw new AppError(ErrorCode.UNKNOWN, response?.error?.message ?? '下载失败');
       }
-      setNotice({ kind: 'ok', text: `已下载 ${filename}（800×800 白底 PNG）` });
+      showNotice({ kind: 'ok', text: `已下载 ${filename}（800×800 白底 PNG）` });
     } catch (error) {
       // A failed export must never clear the canvas.
       if (blob) {
         try {
           await downloadBlobInPage(blob, filename);
-          setNotice({ kind: 'ok', text: `已通过页面下载 ${filename}` });
+          showNotice({ kind: 'ok', text: `已通过页面下载 ${filename}` });
           return;
         } catch {
           /* fall through to the error notice */
         }
       }
-      setNotice({ kind: 'error', text: `导出失败：${messageOf(error)}` });
+      showNotice({ kind: 'error', text: `导出失败：${messageOf(error)}` });
     } finally {
       dispatch({ type: 'SET_EXPORTING', exporting: false });
     }
@@ -347,22 +381,39 @@ export function App(): JSX.Element {
         onExport={() => void handleExport()}
       />
 
-      <div className="progress-line">
-        <span>
-          抠图进度：{progress.success + progress.failed}/{progress.total}
+      <div className="status-bar">
+        <div className="status-bar__progress">
+          <span>
+            抠图进度：{progress.success + progress.failed}/{progress.total}
+          </span>
+          <span>成功 {progress.success}</span>
+          <span>失败 {progress.failed}</span>
+          <span>进行中 {progress.active}</span>
+          <span>排队 {progress.waiting}</span>
+        </div>
+        {/*
+          Stays mounted even while empty: a live region has to exist before its
+          text changes, otherwise screen readers never announce the update.
+          `title` carries the full text, which the ellipsis may cut off.
+        */}
+        <span
+          className={
+            notice ? `status-bar__notice status-bar__notice--${notice.kind}` : 'status-bar__notice'
+          }
+          role="status"
+          aria-live="polite"
+          title={notice?.text}
+        >
+          {notice?.text}
         </span>
-        <span>成功 {progress.success}</span>
-        <span>失败 {progress.failed}</span>
-        <span>进行中 {progress.active}</span>
-        <span>排队 {progress.waiting}</span>
       </div>
 
+      {/*
+        Kept as its own box rather than folded into the status bar: this one
+        means "your configuration is broken", not "the last action finished".
+      */}
       {watermark.error ? (
         <div className="notice notice--error">水印框加载失败：{watermark.error}</div>
-      ) : null}
-
-      {notice ? (
-        <div className={`notice${notice.kind === 'error' ? ' notice--error' : ''}`}>{notice.text}</div>
       ) : null}
 
       <div className="editor__body">
