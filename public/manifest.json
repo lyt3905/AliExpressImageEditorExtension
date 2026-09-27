@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "AliExpress 图片编辑器（主图抠图 + 800×800 合成）",
+  "version": "0.1.0",
+  "description": "扫描 AliExpress 商品编辑页主图，本地保存，自动抠图，在 800×800 画布上编辑并导出白底 PNG。",
+  "minimum_chrome_version": "114",
+
+  "permissions": ["storage", "tabs", "downloads", "scripting"],
+
+  "host_permissions": [
+    "https://*.aliexpress.com/*",
+    "https://*.aliexpress.us/*",
+    "https://*.aliexpress-media.com/*",
+    "https://*.alicdn.com/*",
+    "https://39.107.244.239/*",
+    "https://*.aliyuncs.com/*"
+  ],
+
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://*.aliexpress.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "options_page": "options/index.html",
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "action": {
+    "default_title": "扫描当前 AliExpress 商品主图并打开编辑器",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}

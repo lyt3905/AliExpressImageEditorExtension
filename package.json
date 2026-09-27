@@ -1,0 +1,37 @@
+{
+  "name": "aliexpress-image-editor-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Chrome MV3 extension: scan AliExpress product main images, download locally, auto cutout, edit on an 800x800 canvas, export white-background PNG.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run tests/live",
+    "build:ui": "vite build",
+    "build:sw": "vite build -c vite.sw.config.ts",
+    "build:content": "vite build -c vite.content.config.ts",
+    "check:dist": "node scripts/check-dist.mjs",
+    "build": "npm run build:ui && npm run build:sw && npm run build:content && npm run check:dist"
+  },
+  "dependencies": {
+    "konva": "^9.3.16",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-konva": "^18.2.10"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}

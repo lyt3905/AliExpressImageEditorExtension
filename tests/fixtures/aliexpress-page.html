@@ -1,0 +1,161 @@
+<!-- Fixture mirroring the REAL AliExpress seller-console product image widget,
+     copied from the live edit page (SVG internals trimmed).
+
+     Hazards deliberately preserved:
+       - every occupied slot renders a hover tooltip holding a SECOND <img> with
+         the same URL (must not be double-counted);
+       - the trailing empty slot is a `.sell-o-image-item` WITHOUT `has-url` and
+         without an <img> (must be skipped);
+       - `.sell-o-image-item.has-url` also exists OUTSIDE the widget (SKU module)
+         and must be ignored;
+       - `alt="url"` on every slot image (meaningless — the label is in
+         `.header-text`);
+       - page chrome (icon / logo / data: URL) that must never be picked up. -->
+<div class="imageUploadWrap form-width-xl" style="display: flex; gap: 12px;">
+  <div class="mainImageSection">
+    <div class="sectionLabel"><span class="required">*</span><span class="labelText">主图</span></div>
+    <div class="imageItemWrapper">
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="0" class="sell-o-image-item has-url image-balloon" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品正面图</span></div>
+              <div class="sell-o-image-item-preview">
+                <div class="image-card" style="display: block;">
+                  <img src="https://ae-pic-a1.aliexpress-media.com/kf/S8fd9295e27d5466ca11dedc3a64857b2n.jpg" alt="url" />
+                </div>
+                <div class="image-tools">
+                  <span class="tool"></span>
+                  <span class="anticon tool image-upload-edit"><svg viewBox="64 64 896 896"><path d="M817 840" /></svg></span>
+                  <span class="anticon tool image-upload-remove"><svg viewBox="64 64 896 896"><path d="M601 73" /></svg></span>
+                </div>
+              </div>
+              <div style="position: absolute; top: 0px; left: 0px; width: 100%;">
+                <div>
+                  <div class="ait-tooltip ait-tooltip-white ait-tooltip-hidden" style="max-width: 280px;">
+                    <div class="ait-tooltip-content">
+                      <div class="ait-tooltip-inner" role="tooltip">
+                        <div class="ae-image-hover">
+                          <div class="img-wrap" style="padding-bottom: 0px;">
+                            <img src="https://ae-pic-a1.aliexpress-media.com/kf/S8fd9295e27d5466ca11dedc3a64857b2n.jpg" alt="url" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="moreImagesSection">
+    <div class="sectionLabel"><span class="labelText">更多图片</span></div>
+    <div class="moreImagesList">
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="1" class="sell-o-image-item has-url image-balloon" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品背面图</span></div>
+              <div class="sell-o-image-item-preview">
+                <div class="image-card" style="display: block;">
+                  <img src="https://ae-pic-a1.aliexpress-media.com/kf/S4ecf10a187e34daabddbfca15997e2929.jpg" alt="url" />
+                </div>
+              </div>
+              <div style="position: absolute;">
+                <div class="ait-tooltip ait-tooltip-white ait-tooltip-hidden">
+                  <div class="ait-tooltip-inner">
+                    <div class="ae-image-hover">
+                      <div class="img-wrap"><img src="https://ae-pic-a1.aliexpress-media.com/kf/S4ecf10a187e34daabddbfca15997e2929.jpg" alt="url" /></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="2" class="sell-o-image-item has-url image-balloon" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品实拍图</span></div>
+              <div class="sell-o-image-item-preview">
+                <div class="image-card" style="display: block;">
+                  <img src="https://ae-pic-a1.aliexpress-media.com/kf/Sd257025ca09147e391b716941dc54c37j.jpg" alt="url" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="3" class="sell-o-image-item has-url image-balloon" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品侧面图</span></div>
+              <div class="sell-o-image-item-preview">
+                <div class="image-card" style="display: block;">
+                  <img data-src="https://ae-pic-a1.aliexpress-media.com/kf/S042f77574d3e44efbc856a35174cdd7fn.jpg" src="" alt="url" width="800" height="800" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="4" class="sell-o-image-item has-url image-balloon" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品细节图</span></div>
+              <div class="sell-o-image-item-preview">
+                <div class="image-card" style="display: block;">
+                  <img src="https://ae-pic-a1.aliexpress-media.com/kf/S6c7fb06b3d21475d9acc4319e9cdeef7Y.jpg" alt="url" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- empty slot: no `has-url`, no <img>, only the upload placeholder -->
+      <div class="image-uploader" draggable="true">
+        <div class="ait-spin-nested-loading">
+          <div class="ait-spin-container">
+            <div data-index="5" class="sell-o-image-item" draggable="true">
+              <div class="image-item-header-bar"><span class="header-text">商品细节图</span></div>
+              <div class="image-upload-btn">
+                <div class="upload-content">
+                  <span class="anticon upload-btn-icon aiticon aiticon-add" style="color: rgb(22, 119, 255);">
+                    <svg viewBox="64 64 896 896"><path d="M785 472" /></svg>
+                  </span>
+                  <div class="upload-text-wrap"><span>上传图片</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Same class name OUTSIDE the widget (SKU module) — must be ignored. -->
+<div class="skuImageSection">
+  <div class="sell-o-image-item has-url" data-index="0">
+    <div class="image-card"><img src="https://ae-pic-a1.aliexpress-media.com/kf/Ssku999notwanted.jpg" alt="sku" /></div>
+  </div>
+</div>
+
+<!-- Page chrome — must never be picked up. -->
+<div class="page-footer">
+  <img src="https://ae-pic-a1.aliexpress-media.com/kf/icon-cart.png" alt="icon" />
+  <img src="data:image/png;base64,iVBORw0KGgo=" alt="placeholder" />
+  <img src="https://example.com/logo.svg" alt="logo" />
+</div>
