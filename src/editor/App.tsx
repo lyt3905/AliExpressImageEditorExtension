@@ -2,10 +2,17 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { CANVAS_SIZE, STORAGE_KEYS } from '../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
-import type { EditorLayer, EditorMaterial, EditorSessionMeta, ExportInput } from '../shared/types';
+import type { EditorMaterial, EditorSessionMeta, ExportInput, ImageLayer, LayerPatch } from '../shared/types';
+import { DEFAULT_TEXT_STYLE, pickTextStyle, type TextStyleDefaults } from '../shared/text-style';
 import { downloadBlobInPage } from '../services/downloader';
 import { blobToDataUrl, buildExportFileName, exportStageToPng } from '../services/exporter';
 import { readBlobSize } from '../services/image-size';
+import {
+  clearTextDefaults,
+  loadTextDefaults,
+  saveTextDefaults,
+} from '../services/text-defaults';
+import { describeUploadOutcome } from '../services/upload-images';
 import { EditorStage, type EditorStageHandle } from './components/EditorStage';
 import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
@@ -13,11 +20,14 @@ import { Toolbar } from './components/Toolbar';
 import {
   createEditorState,
   createLayerFromMaterial,
+  createTextLayer,
   editorReducer,
+  findLayer,
 } from './state/editor-reducer';
 import { canRedo, canUndo } from './state/history';
 import { useEditorSession } from './state/use-editor-session';
 import { useImageMap } from './state/use-image-map';
+import { usePasteImages } from './state/use-paste-images';
 import { useWatermark } from './state/use-watermark';
 
 interface Notice {
@@ -27,7 +37,7 @@ interface Notice {
 
 export function App(): JSX.Element {
   const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
-  const { loading, fatalError, materials, statusByImageId, initialDocument, progress, retryCutout } =
+  const { loading, fatalError, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
     useEditorSession(sessionId);
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
@@ -40,7 +50,49 @@ export function App(): JSX.Element {
   const stageHandleRef = useRef<EditorStageHandle | null>(null);
   const hydratedRef = useRef(false);
 
+  // ---- remembered text style
+  //
+  // A preference, not document state: it never enters the history stack, and
+  // loading it dispatches nothing, so hydrating still yields exactly one
+  // history entry.
+  //
+  // Refs rather than state on purpose — nothing renders from the remembered
+  // style (it is only read when a text layer is created), and reacting to it
+  // with state would re-render the whole stage on every field blur.
+  const textStyleRef = useRef<TextStyleDefaults>({ ...DEFAULT_TEXT_STYLE });
+  const textStyleTouchedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadTextDefaults().then((loaded) => {
+      // A style the user already changed always beats the stored one.
+      if (cancelled || textStyleTouchedRef.current) return;
+      textStyleRef.current = loaded;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * Remember a style change. Fire-and-forget on purpose: this runs on every
+   * field blur, and blocking the commit on a storage round-trip would make the
+   * panel feel sticky for no benefit.
+   */
+  const rememberTextStyle = useCallback((style: Partial<TextStyleDefaults>) => {
+    const next = { ...textStyleRef.current, ...style };
+    textStyleTouchedRef.current = true;
+    textStyleRef.current = next;
+    void saveTextDefaults(next);
+  }, []);
+
   const document = state.history.present;
+
+  /** Non-null only while the current selection is a text layer. */
+  const selectedTextLayer = useMemo(() => {
+    const layer = findLayer(document, state.selectedLayerId);
+    return layer?.kind === 'text' ? layer : null;
+  }, [document, state.selectedLayerId]);
 
   // ---- hydrate the persisted composition once the session is ready
   useEffect(() => {
@@ -66,7 +118,7 @@ export function App(): JSX.Element {
   const images = useImageMap(materialUrls);
 
   const imageForLayer = useCallback(
-    (layer: EditorLayer): HTMLImageElement | undefined => {
+    (layer: ImageLayer): HTMLImageElement | undefined => {
       const url = materialUrlById[layer.materialId];
       return url ? images[url] : undefined;
     },
@@ -78,6 +130,63 @@ export function App(): JSX.Element {
     dispatch({ type: 'ADD_LAYER', layer: createLayerFromMaterial(material) });
   }, []);
 
+  /** Text layers enter through the very same ADD_LAYER path as pictures. */
+  const handleAddText = useCallback(() => {
+    dispatch({ type: 'ADD_LAYER', layer: createTextLayer(textStyleRef.current) });
+  }, []);
+
+  /**
+   * Local uploads (picker or clipboard) are persisted into the session record
+   * first and only then handed to the cutout queue — that ordering is what makes
+   * them survive a refresh.
+   *
+   * Uploads deliberately do NOT land on the canvas: the material panel is the
+   * place where the user decides which picture to compose with.
+   */
+  const handleUpload = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      try {
+        const outcome = await addUploadedImages(files);
+        if (!outcome) return;
+        setNotice(describeUploadOutcome(outcome));
+      } catch (error) {
+        // Reached only when persisting the record itself failed.
+        setNotice({ kind: 'error', text: `添加图片失败：${messageOf(error)}` });
+      }
+    },
+    [addUploadedImages],
+  );
+
+  // Pasting a screenshot is just a second entry point into the same path.
+  usePasteImages({
+    enabled: !loading && !fatalError,
+    onPaste: (files) => void handleUpload(files),
+  });
+
+  /**
+   * Committed once per finished edit (blur, or a discrete click) so a single
+   * change produces exactly one undo step.
+   */
+  const handleCommitText = useCallback(
+    (layerId: string, patch: LayerPatch) => {
+      dispatch({ type: 'COMMIT_LAYER', layerId, patch });
+      // Only style edits are remembered — `pickTextStyle` returns null for a
+      // patch that is purely copy / position / transform.
+      const style = pickTextStyle(patch);
+      if (style) rememberTextStyle(style);
+    },
+    [rememberTextStyle],
+  );
+
+  /** Back to the factory style: the current layer *and* the stored preference. */
+  const handleResetTextStyle = useCallback((layerId: string) => {
+    dispatch({ type: 'COMMIT_LAYER', layerId, patch: { ...DEFAULT_TEXT_STYLE } });
+    textStyleTouchedRef.current = true;
+    textStyleRef.current = { ...DEFAULT_TEXT_STYLE };
+    void clearTextDefaults();
+  }, []);
+
   const handleSelect = useCallback((layerId: string | null) => {
     dispatch({ type: 'SELECT_LAYER', layerId });
   }, []);
@@ -86,7 +195,7 @@ export function App(): JSX.Element {
     dispatch({ type: 'COMMIT_LAYER', layerId, patch: { x, y } });
   }, []);
 
-  const handleTransformEnd = useCallback((layerId: string, patch: Partial<EditorLayer>) => {
+  const handleTransformEnd = useCallback((layerId: string, patch: LayerPatch) => {
     dispatch({ type: 'COMMIT_LAYER', layerId, patch });
   }, []);
 
@@ -227,6 +336,8 @@ export function App(): JSX.Element {
         activeWatermarkId={watermark.activeId}
         watermarkEnabled={watermark.enabled && Boolean(watermark.layer)}
         onBack={() => void handleBack()}
+        onAddText={handleAddText}
+        onUpload={(files) => void handleUpload(files)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onToggleBackground={handleToggleBackground}
@@ -282,10 +393,13 @@ export function App(): JSX.Element {
             watermark.layer ? { name: watermark.meta?.name ?? '默认水印' } : null
           }
           selectedLayerId={state.selectedLayerId}
+          selectedTextLayer={selectedTextLayer}
           onSelect={handleSelect}
           onMove={handleMoveLayer}
           onDelete={handleDeleteLayer}
           onMoveEnd={() => undefined}
+          onCommitText={handleCommitText}
+          onResetTextStyle={handleResetTextStyle}
         />
       </div>
     </div>

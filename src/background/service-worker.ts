@@ -16,6 +16,7 @@ import { EXTENSION_TITLE, IMAGE_DOWNLOAD_CONCURRENCY } from '../shared/constants
 import { AppError, ErrorCode, messageOf, toAppError, type ErrorCodeValue } from '../shared/errors';
 import { createRequestId, sendToTab, type ExtensionMessage, type MessageResponse } from '../shared/messages';
 import type { ScannedImage, SessionImage } from '../shared/types';
+import { evaluatePageGate } from '../shared/page-gate';
 import { downloadImageBlob, runWithConcurrency } from './download-manager';
 import { registerMessageRouter, type MessageHandlers } from './message-router';
 import { buildSessionRecord, createSessionId, openEditorTab, saveSessionMeta } from './session-manager';
@@ -24,7 +25,6 @@ import { downloadDataUrl } from '../services/downloader';
 import { ServerApi, type AuthUser } from '../services/server-api';
 import { clearCredentials, loadCredentials, loadSettings, saveCredentials, saveSettings } from '../services/settings';
 
-const ALIEXPRESS_TAB = /^https:\/\/([a-z0-9-]+\.)*aliexpress\.com\//i;
 const LAST_ERROR_KEY = 'aiee:last-error';
 
 // ---------------------------------------------------------------- badge feedback
@@ -90,15 +90,18 @@ async function scanTab(tabId: number): Promise<{ images: ScannedImage[]; strateg
 
 export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
   const tabId = tab.id;
-  const tabUrl = tab.url ?? '';
 
   if (typeof tabId !== 'number') throw new AppError(ErrorCode.NO_ACTIVE_TAB, '找不到当前标签页');
-  if (!/^https?:\/\//i.test(tabUrl)) {
-    throw new AppError(ErrorCode.UNSUPPORTED_PAGE, '请先在 AliExpress 商品编辑页点击插件图标');
+
+  const gate = evaluatePageGate(tab.url);
+  if (!gate.ok) {
+    // Log the offending URL: the badge can only show one short line, and
+    // without the raw value a rejection like this is undebuggable.
+    console.warn('[AIEE] page gate rejected', gate.reason, gate.rawUrl || '(无地址)');
+    throw new AppError(ErrorCode.UNSUPPORTED_PAGE, gate.message);
   }
-  if (!ALIEXPRESS_TAB.test(tabUrl)) {
-    throw new AppError(ErrorCode.UNSUPPORTED_PAGE, '当前页面不是 AliExpress 页面（第一版仅支持 AliExpress 商品编辑页）');
-  }
+
+  const tabUrl = gate.url.href;
 
   await setBadge('…', `${EXTENSION_TITLE}：正在扫描商品主图…`);
 

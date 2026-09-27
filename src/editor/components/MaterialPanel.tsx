@@ -25,7 +25,7 @@ export function MaterialPanel({ materials, statusByImageId, onAdd, onRetry }: Ma
             <span>{originals.length}</span>
           </h3>
           {originals.length === 0 ? (
-            <div className="empty">暂无原图</div>
+            <div className="empty">暂无素材：可点「上传图片」，或直接 Ctrl+V 粘贴截图</div>
           ) : (
             <div className="material-grid">
               {originals.map((material) => (

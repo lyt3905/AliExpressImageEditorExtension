@@ -8,6 +8,7 @@
 import { AliExpressPageAdapter } from './aliexpress-page-adapter';
 import { ErrorCode, messageOf, toAppError } from '../shared/errors';
 import { errorResponse, isExtensionMessage, okResponse, type MessageResponse } from '../shared/messages';
+import { SUPPORTED_PAGE_DESCRIPTION } from '../shared/page-gate';
 import type { ScannedImage } from '../shared/types';
 
 declare global {
@@ -18,13 +19,26 @@ declare global {
 
 const FLAG = '__AIEE_CONTENT_SCRIPT__';
 
+/** Best-effort hostname for diagnostics; never throws. */
+function currentHostname(): string {
+  try {
+    return document.location?.hostname || '';
+  } catch {
+    return '';
+  }
+}
+
 function handleScan(requestId: string): MessageResponse<{ images: ScannedImage[]; strategy: string }> {
   try {
     const adapter = new AliExpressPageAdapter(document);
     const { images, strategy } = adapter.scanMainImagesWithStrategy();
 
     if (!adapter.isSupportedPage() && images.length === 0) {
-      return errorResponse(requestId, ErrorCode.UNSUPPORTED_PAGE, '当前页面不是受支持的 AliExpress 商品编辑页');
+      return errorResponse(
+        requestId,
+        ErrorCode.UNSUPPORTED_PAGE,
+        `当前页面不是 ${SUPPORTED_PAGE_DESCRIPTION}（当前站点：${currentHostname() || '未知'}）`,
+      );
     }
     if (images.length === 0) {
       return errorResponse(

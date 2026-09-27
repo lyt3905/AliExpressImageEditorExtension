@@ -4,3 +4,13 @@ dist/
 .env.local
 *.log
 .DS_Store
+
+# 打包好的可加载版本（dist/ 已忽略，这个是对外分发用的 zip）
+dist.zip
+
+# Vite 构建中断时泄漏在根目录的临时配置模块
+vite.*.timestamp-*.mjs
+vitest.config.ts.timestamp-*.mjs
+
+# 本地 agent 工作记忆，不属于源码
+.workbuddy/

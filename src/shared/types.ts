@@ -63,25 +63,99 @@ export interface EditorSessionRecord extends EditorSessionMeta {
 // ---------------------------------------------------------------- editor document
 
 /**
- * A node on the canvas.
- *
- * NOTE: the locked watermark frame is NOT part of `EditorDocument.layers` — it
- * lives in `useWatermark` state instead, so UNDO / REDO / CLEAR structurally
- * cannot remove it. The `'watermark'` kind exists so it can reuse this shape.
+ * Fields every canvas node shares. `x` / `y` are always the node's CENTRE in
+ * the 800x800 logical space.
  */
-export interface EditorLayer {
+export interface BaseLayer {
   id: string;
+  x: number;
+  y: number;
+  /** Degrees. */
+  rotation: number;
+}
+
+/** Payload only picture layers and the watermark frame carry. */
+export interface ImagePayload {
   materialId: string;
   blobId: string;
   sourceWidth: number;
   sourceHeight: number;
-  /** Logical centre position on the 800x800 canvas. */
-  x: number;
-  y: number;
+}
+
+/** A picture on the canvas: an original scan or a cutout result. */
+export interface ImageLayer extends BaseLayer, ImagePayload {
+  kind: 'original' | 'cutout';
   scale: number;
-  /** Degrees. */
-  rotation: number;
-  kind: 'original' | 'cutout' | 'watermark';
+}
+
+/**
+ * A text node.
+ *
+ * It carries no material / blob / source size — it is plain JSON data rendered
+ * directly by Konva, so it must never be routed through `imageForLayer`.
+ */
+export interface TextLayer extends BaseLayer {
+  kind: 'text';
+  text: string;
+  /** Wrap width in logical px. The box grows downwards as lines wrap. */
+  width: number;
+  fontSize: number;
+  fontFamily: string;
+  /** CSS colour, e.g. `#000000`. */
+  fill: string;
+  fontStyle: 'normal' | 'bold';
+  align: 'left' | 'center' | 'right';
+  scale: number;
+  /** Outline colour — only read while `strokeWidth > 0`. */
+  stroke: string;
+  /** Outline width in logical px; 0 disables the outline entirely. */
+  strokeWidth: number;
+  shadowColor: string;
+  /** Shadow blur in logical px. No shadow is drawn while blur and both offsets are 0. */
+  shadowBlur: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  /** 0–1 (Konva's unit), not 0–100 — the panel shows it as a percentage. */
+  shadowOpacity: number;
+}
+
+/**
+ * The locked watermark frame.
+ *
+ * NOTE: it is NOT part of `EditorDocument.layers` — it lives in `useWatermark`
+ * state instead, so UNDO / REDO / CLEAR structurally cannot remove it. It only
+ * reuses the image payload shape so `EditorStage` can draw it like a picture.
+ */
+export interface WatermarkLayer extends BaseLayer, ImagePayload {
+  kind: 'watermark';
+  scale: number;
+}
+
+export type EditorLayer = ImageLayer | TextLayer;
+
+/**
+ * The fields a layer edit may touch. Identity (`id`), `kind` and the image
+ * payload are deliberately absent — they are immutable for a layer's lifetime.
+ */
+export interface LayerPatch {
+  x?: number;
+  y?: number;
+  scale?: number;
+  rotation?: number;
+  text?: string;
+  width?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  fill?: string;
+  fontStyle?: 'normal' | 'bold';
+  align?: 'left' | 'center' | 'right';
+  stroke?: string;
+  strokeWidth?: number;
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
+  shadowOpacity?: number;
 }
 
 export interface EditorDocument {

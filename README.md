@@ -21,7 +21,8 @@ Chrome Manifest V3 扩展：扫描 AliExpress 卖家后台**商品主图** → �
   → 抠图结果自动进入「已抠素材」
   → 默认水印框自动加到图层最上层（锁定，不可编辑）
   → 用户点击素材加入 800×800 画布，拖动 / 缩放 / 旋转 / 排序
-  → 导出 800×800 白底 PNG（含水印）→ chrome.downloads 下载到本地
+  → 需要时「添加文字」：文字是普通可编辑图层（内容 / 字体 / 字号 / 颜色 / 加粗 / 对齐）
+  → 导出 800×800 白底 PNG（含水印与文字）→ chrome.downloads 下载到本地
 ```
 
 **绝不发生的行为**：不修改 AliExpress 商品数据、不回填主图、不自动点击保存、不提交商品、不上传商品信息、不修改服务端。
@@ -135,8 +136,27 @@ npm run check:dist
 2. 点击工具栏插件图标
 3. 插件自动下载主图并打开编辑器；编辑器打开后**立即**可用，抠图在后台自动进行，完成后自动出现在「已抠素材」
 4. 点击素材加入画布 → 拖动 / 缩放 / 旋转 / 图层排序 → **下载 PNG（800×800 白底）**
+5. 想用页面外的图？点工具栏「上传图片」选本地文件，或直接 `Ctrl+V` 粘贴截图 —— 会自动抠图并出现在「已抠素材」
 
 点击插件后若出错，工具栏图标会显示红色 `!` 徽标，鼠标悬停可看错误原因；最近一次错误也会显示在选项页。
+
+### 排错：悬停提示「当前页面不是 …」「读取不到当前标签页的地址」
+
+点击图标时，插件先用**当前标签页的 URL** 判断这个页面能不能扫描。判断逻辑只有一份，
+在 `src/shared/page-gate.ts`（Service Worker、页面适配器、`content_scripts.matches` 共用同一套主机规则）。
+被拒绝时徽标显示红色 `!`，悬停提示会带上**实际站点**，Service Worker 控制台还会打印一行
+`[AIEE] page gate rejected <原因> <URL>`，对照下表即可定位：
+
+| 悬停提示 | 真实原因 | 处理 |
+| --- | --- | --- |
+| 读取不到当前标签页的地址 | 浏览器根本没给出 URL | 切到商品编辑页再点一次；仍无效则到 `chrome://extensions` 重载扩展 |
+| 当前标签页不是普通网页（`chrome://…`） | 当前页是 `chrome://`、`edge://`、`file://`、`about:` 等 | 新建标签页打开商品编辑页 |
+| 当前标签页是插件自己的页面 | 焦点在编辑器/选项页那个标签上 | 切回商品编辑页再点图标 |
+| 检测到 AliExpress 的其他地区站点（…） | 当前是 `aliexpress.us` / `.ru` 等地区站点 | 第一版只支持 `aliexpress.com` 卖家后台 |
+| 当前页面不是 … 商品编辑页（当前站点：…） | 当前是其他网站 | 同上 |
+
+> 早期版本把以上五种情况都报成「请先在 AliExpress 商品编辑页点击插件图标」，
+> 于是「点错标签页」被误读成「页面不支持」，且日志里没有 URL 可查。现已分开报。
 
 ---
 
@@ -169,6 +189,103 @@ npm run check:dist
 
 文件：`src/services/watermark-store.ts`（存储）、`src/editor/state/use-watermark.ts`（注入与锁定）、
 `src/editor/components/EditorStage.tsx`（渲染在最上层且 `listening={false}`）。
+
+---
+
+## 文字图层
+
+工具栏的「添加文字」会在画布中心放一个 `Konva.Text` 图层。它和图片图层共用同一套机制，没有第二套状态：
+
+| 能力 | 实现 |
+| --- | --- |
+| 数据 | `TextLayer`（`src/shared/types.ts`），纯 JSON —— 不进 IndexedDB、不上传服务端 |
+| 增删 / 上移下移 | 复用 `ADD_LAYER` / `DELETE_LAYER` / `MOVE_LAYER` |
+| 拖动 / 等比缩放 / 旋转 | 复用同一个 `Transformer`，`scale` 仍是唯一缩放来源（`transformEnd` 后归一化回 1） |
+| Undo / Redo | 复用现有 history：**一次编辑只留一条记录** |
+| 持久化 | 与图片图层一起写进 `aiee:doc:<sessionId>`，刷新后原样恢复 |
+| 导出 | 它就是 Stage 里的真实节点，`toCanvas` 时自然进入 800×800 白底 PNG |
+
+`EditorLayer` 现在是判别联合（`ImageLayer | TextLayer`）：`TextLayer` 没有 `materialId` / `blobId` /
+`sourceWidth` / `sourceHeight`，所以 `imageForLayer`（图片加载路径）只认图片，文字永不进入。
+水印仍是独立的 `WatermarkLayer`，不进入图层文档，因此**依旧固定盖在所有普通图层（含文字）之上**。
+
+文字属性面板（`src/editor/components/TextPropertiesEditor.tsx`）位于右侧栏、图层列表上方：
+文字内容 / 字体 / 字号 / 颜色 / 加粗 / 左中右对齐 / **描边** / **阴影**。
+**内容、字号、颜色、描边与阴影的各输入框都在失焦时提交一次**，字体、加粗、对齐与预设按钮是
+点击即提交 —— 在输入框里打一行字只会留下 1 条 undo 记录。
+
+### 描边 / 阴影
+
+| 项 | 控件 | 说明 |
+| --- | --- | --- |
+| 描边 | 颜色 + 宽度 `0–40` | 宽度 **0 = 无描边**；恢复时负值被夹到 0 |
+| 阴影 | 颜色 + 模糊 `0–80` + 水平/垂直偏移 `-100–100` + 不透明度 `0–100%` | 模糊和两个偏移**都为 0 时不出阴影** |
+
+- 预设：描边「无 / 白描边 / 黑描边」，阴影「无 / 投影 / 柔和 / 发光」。预设就是一次多字段
+  `COMMIT_LAYER`，点一下只占 1 条 undo。
+- 两者都在节点自身坐标系里绘制，**跟随图层缩放一起放大**：描边设 4px 的文字放大到 200% 后看起来是 8px。
+- 文字描边由 Konva 以字形轮廓为中心绘制，因此开启 `fillAfterStrokeEnabled` 让填充最后画；
+  否则一半描边会盖住字身，字看起来比加描边前还细。
+- **不影响拖拽手柄**：Konva 的 Transformer 测量被选节点时硬编码 `skipShadow: true`，并遵循我们已开启的
+  `ignoreStroke`，所以加描边 / 阴影不会把选框撑大。
+- 旧草稿兼容：这两个选项出现之前的文档没有相关字段，恢复时逐字段补默认值（宽度 0 = 关闭），
+  老草稿里的文字不会因此被判成损坏。
+
+### 样式记忆
+
+新增的「添加文字」不再是一律 48px 黑字，而是**沿用你上次调好的样式**。
+
+| 记住（12 个字段） | 不记住 |
+| --- | --- |
+| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `scale` `rotation` |
+
+不记内容是因为新图层绝不能带出上一条文案；不记位置 / 缩放 / 旋转是因为每次都应从画布中心、1 倍、不旋转重新开始。
+
+- 字段清单是 `src/shared/constants.ts` 里的 `TEXT_STYLE_KEYS`，**单一定义**：`pickTextStyle()`（提交时抽取）、`TextStyleDefaults` 类型、`createTextLayer()` 的入参过滤都从它派生，加字段不会漏。
+- 存储在 `chrome.storage.local` 的 `aiee:text-defaults`（`src/services/text-defaults.ts`）。用 `local` 而不是 `session`（关浏览器就该还在），也不用 `sync`（120 次/分钟写配额，样式提交是高频动作）。
+- **不进 `EditorDocument`**：文档描述「这张图有什么」，偏好描述「用户习惯」，而且文档在历史栈里，塞进去会污染 undo。加载偏好不 dispatch 任何 action，所以 hydrate 仍然只产生 1 条历史记录。
+- 只在样式补丁上写存储：`pickTextStyle()` 对纯位置 / 内容 / 变换的补丁返回 `null`，拖动和改字不会触发写盘。
+- 写入是**整个对象覆盖**而不是 `load → merge → set`：连续两次提交（改完字号立刻改颜色）不会交错读写，天然 last-write-wins。
+- 读取和写入都过一遍 `sanitizeTextStyle()`，手工改坏或半截写入的存储项不会把 `fontSize: 99999` 送上画布。
+- 存储不可用时静默降级为默认样式，不影响编辑器任何既有行为。
+- 面板底部的「恢复默认样式」同时把**当前图层**改回默认（算 1 步撤销）并**清除记住的偏好**，避免误存一套夸张描边后每次新建都带着它。
+
+`x / y` 与图片一样是**几何中心**：`offsetX = width / 2`，`offsetY = 实测高度 / 2`，
+因此旋转和缩放都围绕中心发生。文字高度取决于自动换行，首帧用 `estimateTextHeight`
+（Konva 默认 `lineHeight = 1`，即 `fontSize × 行数`）估算，节点上屏后由 `EditorStage` 实测校正。
+
+---
+
+## 本地图片上传 / 粘贴抠图
+
+除了扫描到的商品图，编辑器还接受两种本地来源，二者走**完全相同**的一条路径：
+
+| 入口 | 操作 |
+| --- | --- |
+| 工具栏「上传图片」 | 打开文件选择器，可多选。PNG / JPEG / WebP，单张上限 20MB |
+| 剪贴板 | 在编辑器任意位置 `Ctrl+V`（例如 `Win + Shift + S` 截图后直接粘） |
+
+粘贴不挑焦点：即使光标正停在文字属性输入框里，只要剪贴板里有图片就按图片处理；剪贴板里
+**只有文字时事件原样放行**，往输入框粘文本不受影响。
+
+**上传即自动抠图**：新图以 `selected: true` + `cutoutStatus: 'idle'` 写入会话，随即进入同一个
+`CutoutQueue`，所以「抠图进度 x/y」的分母会同步 +1，抠完自动出现在右侧「已抠素材」里。
+上传的图**不会**自动落到画布上 —— 由你在素材面板里点选，和商品图完全一致。
+
+- 校验是**逐张**的：单张过大 / 非图片 / 尺寸解析失败只跳过那一张，同一批里其余照常加入，
+  顶部提示条会说明跳过了哪些、为什么。
+- 校验顺序：空文件 → 超过 20MB → mime（先信声明类型，不在白名单就嗅探前 16 字节）→ 尺寸。
+  截图粘贴常常没有 `type`，靠的正是这一步嗅探。
+- `src/services/upload-images.ts` 干的是「写 blob + 追加 `SessionImage` + `putSession`」，
+  **不是**纯内存操作。
+- 素材 id / blobId 统一用 `upload-` 前缀；扫描图的 id 是 URL 哈希，两者结构上不可能撞。
+- 粘贴来的无文件名截图会补成 `本地图片-1.png` 这样的标签，否则素材卡片会是一行空标题。
+- 与下载链路共用 `src/shared/image-mime.ts` 的同一套 mime 判定（`background/` 是 SW 专属，
+  编辑器不能 import，所以放在 `shared/`）。
+
+> **为什么必须落盘**：`use-editor-session` 每次加载都是先按会话记录重建素材列表，再用
+> `keepLayerWithMaterials()` 过滤草稿图层。上传的图如果只活在编辑器内存里，刷新之后素材没了，
+> 引用它的图层就会被当成垃圾一并滤掉 —— **画布上那张图凭空消失**。
 
 ---
 
@@ -269,13 +386,13 @@ AliExpressImageEditorExtension/
 ├─ src/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
-│  ├─ editor/                    # index.html / App / components / state（reducer + history + use-watermark）/ styles
+│  ├─ editor/                    # index.html / App / components / state（reducer + history + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 水印框管理）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store
-│  ├─ shared/                    # messages / types / errors / constants
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
+│  ├─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 │  └─ future/page-image-writer.ts
 ├─ tests/
-│  ├─ unit/                      # 134 个单元测试（不联网）
+│  ├─ unit/                      # 258 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -298,11 +415,27 @@ AliExpressImageEditorExtension/
 
 未使用 `<all_urls>`、未使用 `cookies`（登出走服务端 `/api/auth/logout`）。
 
+`host_permissions` 只覆盖扫描链路真正会用到的域，与 `content_scripts.matches` 对齐：
+
+```json
+[
+  "https://*.aliexpress.com/*",          // 卖家后台商品页（与 content_scripts.matches 同一套规则）
+  "https://*.aliexpress-media.com/*",    // 商品图 CDN
+  "https://*.alicdn.com/*",              // 商品图 CDN
+  "https://39.107.244.239/*",            // 自建服务端（登录 / 上传 / 抠图）
+  "https://*.aliyuncs.com/*"             // 抠图结果可能落在 OSS
+]
+```
+
+`aliexpress.us` 等地区站点**未**申请：扫描器只认 `aliexpress.com` 卖家后台，授予了也进不来，
+属于死授权（早期版本误加，已移除）。若将来要支持其他地区站点，必须同时改
+`src/shared/page-gate.ts`、`content_scripts.matches` 与页面适配器的路径判定，只加 host 权限是不够的。
+
 ---
 
 ## 已知限制（第一版）
 
-1. 仅支持 AliExpress 卖家后台商品编辑页的**商品图片控件**（主图 + 更多图片，见上文「提取范围」）；不做详情图 / SKU 图 / 视频封面 / MutationObserver 自适应扫描。
+1. 仅支持 AliExpress 卖家后台商品编辑页的**商品图片控件**（主图 + 更多图片，见上文「提取范围」）；不做详情图 / SKU 图 / 视频封面 / MutationObserver 自适应扫描。`aliexpress.us` / `.ru` 等地区站点会**明确提示不支持**（`src/shared/page-gate.ts`），而不是静默失败。
 2. 扫描到的主图**全部默认 `selected = true`**，暂不支持逐张勾选。
 3. 抠图并发为 6（`CUTOUT_CONCURRENCY`）。已用 6 张各不相同的图片实测线上服务：6/6 全部成功，
    墙钟 5.6s（单项耗时累加约 19.8s，说明确实是并行而非排队）。但这是**小型图片**下的结果，
@@ -312,6 +445,12 @@ AliExpressImageEditorExtension/
 6. 抠图失败仅影响该张图片，界面提供「重试」；失败的图片不阻塞导出。
 7. 未实现：自动上传、AliExpress 回填、Session TTL、孤儿 Blob GC、schema migration、SHA-256 缓存、retry backoff。
 8. `PageImageWriter` 仅为占位接口，调用会返回「当前版本暂不支持商品图片回填」。
+9. 文字图层只做基础排版：内容 / 字体（仅本机字体）/ 字号 / 颜色 / 加粗 / 左中右对齐 / 描边 / 阴影。
+   不含渐变、曲线文字、富文本、每字符不同颜色、字体上传与网络字体，也不做多层描边或内发光。
+   属性在失焦时才提交，所以输入过程中画布不会逐字实时刷新（描边 / 阴影同理）。
+10. 本地图片只有**文件选择器**与**剪贴板粘贴**两个入口，不做拖拽上传；粘贴只取位图，
+    不处理「粘贴一个图片 URL / HTML 片段」。上传后不能删除素材，也无法给素材改名。
+    单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
 
 ---
 
@@ -320,13 +459,14 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（12 文件 / 134 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（18 文件 / 258 测试；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本为合法经典脚本、页面资源可解析） |
 | 服务端接口实测 | **PASS**（登录 / 上传 / 抠图 / 取结果链路已真实调用并返回有效 PNG，magic `89504e47`） |
 | 自动化测试 | **已完成** |
 | 水印框功能 | **仅自动化验证**（选择器 / 尺寸计算 / 存储 CRUD 有单测；画布上的锁定表现未在真实 Chrome 中看过） |
+| 本地上传 / 粘贴抠图 | **仅自动化验证**（校验 / 落盘 / id 生成 / 素材合并有单测；真实剪贴板与文件选择器未在 Chrome 中手点过，步骤见 manual-test 5.46–5.52） |
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

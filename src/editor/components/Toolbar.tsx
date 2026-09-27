@@ -1,3 +1,6 @@
+import { useRef, type ChangeEvent } from 'react';
+import { SUPPORTED_IMAGE_MIME_TYPES } from '../../shared/image-mime';
+
 export interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
@@ -10,6 +13,9 @@ export interface ToolbarProps {
   activeWatermarkId: string | null;
   watermarkEnabled: boolean;
   onBack: () => void;
+  onAddText: () => void;
+  /** Local files from the picker; clipboard paste goes through the same path. */
+  onUpload: (files: File[]) => void;
   onUndo: () => void;
   onRedo: () => void;
   onToggleBackground: () => void;
@@ -31,6 +37,8 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     activeWatermarkId,
     watermarkEnabled,
     onBack,
+    onAddText,
+    onUpload,
     onUndo,
     onRedo,
     onToggleBackground,
@@ -41,6 +49,14 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
   } = props;
 
   const hasWatermarks = watermarkOptions.length > 0;
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    // Clear first: picking the very same file again must still fire a change.
+    event.target.value = '';
+    if (files.length) onUpload(files);
+  };
 
   return (
     <header className="toolbar">
@@ -51,6 +67,27 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
       <span className="toolbar__hint" title={sourceUrl}>
         图层 {layerCount}
       </span>
+
+      <button type="button" onClick={onAddText}>
+        添加文字
+      </button>
+
+      {/* Hidden (.toolbar__file) and opened by the button below it. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="toolbar__file"
+        accept={SUPPORTED_IMAGE_MIME_TYPES.join(',')}
+        multiple
+        onChange={handleFiles}
+      />
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        title="从本地选择图片，或直接 Ctrl+V 粘贴截图（会自动抠图）"
+      >
+        上传图片
+      </button>
 
       <span className="toolbar__spacer" />
 

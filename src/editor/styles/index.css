@@ -70,7 +70,7 @@ button.primary:hover:not(:disabled) {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 220px;
+  grid-template-columns: 240px minmax(0, 1fr) 280px;
   gap: 10px;
   padding: 10px;
 }
@@ -128,6 +128,15 @@ button.primary:hover:not(:disabled) {
 
 .toolbar__spacer {
   flex: 1;
+}
+
+/*
+ * The file input is driven by the 上传图片 button next to it. `display: none`
+ * (rather than the `hidden` attribute) keeps it out of the flex row for good,
+ * and Chrome still opens the picker for a programmatic click.
+ */
+.toolbar__file {
+  display: none;
 }
 
 .toolbar__title {
@@ -497,4 +506,100 @@ button.primary:hover:not(:disabled) {
 .status-line--tight {
   margin-top: 8px;
   padding-top: 8px;
+}
+
+/* ------------------------------------------------------------ text layer */
+
+.text-properties {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.text-properties__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.text-properties__field textarea,
+.text-properties__field input,
+.text-properties__field select {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.text-properties__field textarea {
+  min-height: 52px;
+  resize: vertical;
+}
+
+.text-properties__row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+
+.text-properties__row .text-properties__field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.text-properties__field--color {
+  flex: 0 0 64px;
+}
+
+.text-properties__field--color input[type='color'] {
+  height: 28px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.text-properties__row--buttons {
+  align-items: center;
+  /* Preset chips: allow a second line instead of squeezing the labels. */
+  flex-wrap: wrap;
+}
+
+.text-properties__row--buttons button {
+  min-width: 32px;
+  padding: 4px 9px;
+}
+
+.text-properties__row--buttons button.is-active {
+  border-color: var(--accent);
+  background: #e8f0fe;
+  color: var(--accent);
+}
+
+.text-properties__subtitle {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.text-properties__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/*
+ * Sits alone on its row, so let it span the width — a chip-sized button there
+ * reads as one more preset.
+ */
+.text-properties__reset {
+  flex: 1 1 100%;
+  font-size: 11px;
 }

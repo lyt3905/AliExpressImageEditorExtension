@@ -7,12 +7,12 @@
 
 import { IMAGE_DOWNLOAD_CONCURRENCY, IMAGE_DOWNLOAD_TIMEOUT_MS } from '../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
+import { DECLARED_IMAGE_MIME, MIME_SNIFF_BYTES, sniffImageMime } from '../shared/image-mime';
 import { readBlobSize } from '../services/image-size';
 
 export { readBlobSize };
 
 const ACCEPT_HEADER = 'image/png,image/jpeg,image/webp,*/*;q=0.8';
-const DECLARED_MIME = /^image\/(jpeg|jpg|png|webp)$/i;
 
 export interface DownloadedImage {
   blob: Blob;
@@ -22,28 +22,6 @@ export interface DownloadedImage {
 }
 
 export type SettledResult<T> = { ok: true; value: T } | { ok: false; error: AppError };
-
-/** Probe the first bytes so `application/octet-stream` responses can still be accepted. */
-export function sniffImageMime(bytes: Uint8Array): string | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-    return 'image/png';
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return 'image/webp';
-  }
-  return null;
-}
 
 export interface DownloadOptions {
   timeoutMs?: number;
@@ -90,8 +68,8 @@ export async function downloadImageBlob(url: string, options: DownloadOptions = 
   }
 
   let mimeType = declared;
-  if (!DECLARED_MIME.test(mimeType)) {
-    const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  if (!DECLARED_IMAGE_MIME.test(mimeType)) {
+    const head = new Uint8Array(await blob.slice(0, MIME_SNIFF_BYTES).arrayBuffer());
     const sniffed = sniffImageMime(head);
     if (!sniffed) {
       throw new AppError(ErrorCode.BAD_MIME, `不支持的图片格式：${declared || '未知'}`);

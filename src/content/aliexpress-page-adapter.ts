@@ -6,9 +6,9 @@
  */
 
 import type { PageImageAdapter, ScannedImage } from '../shared/types';
+import { SELLER_HOST_PATTERN } from '../shared/page-gate';
 import { scanDocument, type ScanOptions } from './image-scanner';
 
-const SELLER_HOST = /(^|\.)aliexpress\.com$/i;
 const PRODUCT_PATH = /(publish|product|item|edit|offer)/i;
 
 const PAGE_MARKERS: readonly string[] = [
@@ -29,7 +29,7 @@ export class AliExpressPageAdapter implements PageImageAdapter {
   isSupportedPage(): boolean {
     try {
       const { hostname, pathname } = this.doc.location ?? window.location;
-      if (!SELLER_HOST.test(hostname)) return false;
+      if (!SELLER_HOST_PATTERN.test(hostname)) return false;
       if (PRODUCT_PATH.test(pathname)) return true;
       // Some seller routes are hash-based; fall back to DOM markers.
       return PAGE_MARKERS.some((selector) => this.doc.querySelector(selector) !== null);

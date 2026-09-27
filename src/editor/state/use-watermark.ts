@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import { messageOf } from '../../shared/errors';
-import type { EditorLayer, WatermarkMeta } from '../../shared/types';
+import type { WatermarkLayer, WatermarkMeta } from '../../shared/types';
 import { getDefaultWatermark, listWatermarks, loadWatermarkBlob } from '../../services/watermark-store';
 
 export interface UseWatermarkResult {
@@ -21,7 +21,7 @@ export interface UseWatermarkResult {
   /** Whether the frame is drawn right now. */
   enabled: boolean;
   /** Ready-to-render locked node; null when hidden or nothing is configured. */
-  layer: EditorLayer | null;
+  layer: WatermarkLayer | null;
   image: HTMLImageElement | undefined;
   meta: WatermarkMeta | null;
   error: string | null;
@@ -43,7 +43,7 @@ export function fitWatermarkToCanvas(
   return { x: CANVAS_SIZE / 2, y: CANVAS_SIZE / 2, scale };
 }
 
-export function createWatermarkLayer(meta: WatermarkMeta): EditorLayer {
+export function createWatermarkLayer(meta: WatermarkMeta): WatermarkLayer {
   const width = meta.width > 0 ? meta.width : CANVAS_SIZE;
   const height = meta.height > 0 ? meta.height : CANVAS_SIZE;
   const { x, y, scale } = fitWatermarkToCanvas(width, height);

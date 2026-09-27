@@ -57,6 +57,27 @@ interface MessageResponse<T> { requestId: string; ok: boolean; data?: T; error?:
 
 `src/content/aliexpress-page-adapter.ts` 实现 `PageImageAdapter`，负责页面判定。
 
+### 页面门禁（这个标签页能不能扫）
+
+判定逻辑只有一处：`src/shared/page-gate.ts`。
+
+- `SELLER_HOST_PATTERN`（`(^|\.)aliexpress\.com$`）与 manifest 的 `content_scripts.matches` 是同一套规则，
+  页面适配器的 `isSupportedPage()` 也引用它。这三处曾经各写一份，`host_permissions` 里的
+  `aliexpress.us` 就是这样变成死授权的——权限授予了，但没有任何代码路径会接受它。
+- `evaluatePageGate(rawUrl)` 不抛异常，而是返回带 `reason` 的判别联合，由调用方转成用户提示：
+
+| `reason` | 触发条件 |
+| --- | --- |
+| `NO_TAB_URL` | 拿不到 URL（浏览器没给），**与用户当前在哪个网站无关** |
+| `NOT_A_WEB_PAGE` | `chrome://` / `edge://` / `file://` / `about:` 等非 http(s) 页面，或地址无法解析 |
+| `EXTENSION_PAGE` | 当前标签页是插件自己的编辑器 / 选项页 |
+| `OTHER_LOCALE_HOST` | `aliexpress.us` / `.ru` 等地区站点（第一版不支持，但要说清楚是哪种情况） |
+| `NOT_ALIEXPRESS` | 其他站点 |
+
+被拒绝时 SW 会打印 `[AIEE] page gate rejected <reason> <url>`：徽标只能显示一行短提示，
+真正的排查线索是这行日志（早期版本把五种情况合并成一句「请先在 AliExpress 商品编辑页点击插件图标」，
+既误导用户，也丢掉了唯一的线索）。全部分支由 `tests/unit/page-gate.test.ts` 覆盖。
+
 ## 4. 下载与存储
 
 `src/background/download-manager.ts`
@@ -75,7 +96,9 @@ images { sessionId, record, updatedAt }           keyPath: sessionId, index: upd
 ```
 
 - 原图 blobId = `blob-<imageId>`；抠图 blobId = `blob-<imageId>-cutout`，都是确定性的，刷新后可直接命中。
+  **例外**：本地上传的图（`upload-` 前缀）blobId 就等于 imageId —— 它们没有 URL 可哈希。
 - 会话元数据（轻量）另存 `chrome.storage.session`，key = `aiee:session:<sessionId>`。
+  其中 `imageIds` 只是面包屑，编辑器重建素材一律读 `record.images`，所以两者必须同源。
 - 编辑器画布文档存 `chrome.storage.local`，key = `aiee:doc:<sessionId>`（体积小，且需要跨刷新保留）。
 - 第一版不做 TTL / 孤儿 GC / migration。
 
@@ -93,6 +116,36 @@ Editor 挂载
 - **不阻塞编辑器**：原图素材在抠图开始前就已可用；某张完成后立即 push 进素材区，无需刷新。
 - **不等于自动合成**：抠图完成只生成素材，绝不自动加入 Canvas。
 - **原图始终保留**：抠图不替换原图，两类素材可同时使用。
+
+### 5.1 本地来源（上传 / 粘贴）也走同一条队列
+
+`src/services/upload-images.ts` + `src/editor/state/use-paste-images.ts`
+
+```text
+文件选择器 / Ctrl+V
+  → collectPastedImages + namePastedFiles        （只做采集与命名，不做校验）
+  → appendUploadedImages(record, candidates)     （纯函数式：给定 record 返回新 record）
+      逐张校验：非空 → ≤20MB → mime（声明优先，否则嗅探前 16 字节）→ 能解出尺寸
+      → putBlob(upload-xxx) → 追加 SessionImage{selected:true, cutoutStatus:'idle'}
+      → putSession({...record, images, imageIds: images.map(id)})   ← 已落盘
+  → useEditorSession.addUploadedImages()         （此后才是编辑器内存状态）
+      → setMaterials(原图素材) + setStatusByImageId('queued')
+      → setProgress(total + 1)                   ← 必须同步加，否则分母永远少一个
+      → CutoutQueue.enqueue(imageId)             ← 复用 §5 的同一个队列与 runCutout
+```
+
+- **入口只做采集，校验只在 service 里**：`use-paste-images` 不碰 IndexedDB，
+  因此 `collectPastedImages` / `namePastedFiles` 可以在 node 环境下单测。
+- **粘贴不抢焦点**：剪贴板里没有图片时 handler 直接 return，不 `preventDefault`，
+  往文字属性输入框粘文本照常工作。没有 `drop` 监听，也就不存在 paste / drop 双触发。
+- **失败粒度是逐张的**：一张坏图只跳过它自己，同批其余照常入库；`describeUploadOutcome()`
+  把「添加了几张 / 跳过了几张、为什么」拼成提示条。
+- **写入顺序不可颠倒**：blob 与 record 先落盘，再改内存。落到内存那一步失败也不会丢数据 ——
+  刷新后 `selected && idle` 会被恢复逻辑重新入队（见 §5 的恢复规则）。
+- **`imagesRef` 用合并而不是整体替换**：`appendUploadedImages` 期间可能有别的图抠完并
+  就地打了状态补丁，整体覆盖会把它们回滚。
+- mime 判定放在 `src/shared/image-mime.ts`：`background/` 是 SW 专属，编辑器不能 import，
+  而下载链路（§4）与上传链路必须用同一条规则。
 
 `HttpCutoutClient`（`src/services/cutout-client.ts`）
 
@@ -181,11 +234,71 @@ fetchImageBlob    → GET asset.url → Blob（校验 PNG 魔数）
 - Options 页与编辑器同源，都直接读写该 store，因此**没有新增任何消息类型**，SW 完全不参与。
 - 图层面板顶部固定显示一行「水印框 · 名称 / 锁定」，只作展示：无选中、无上下移、无删除。
 
+### 文字图层（普通可编辑图层）
+
+`EditorLayer` 现在是判别联合：
+
+```ts
+type EditorLayer = ImageLayer | TextLayer;
+```
+
+- `ImageLayer`（`original` / `cutout`）持有 `materialId` / `blobId` / `sourceWidth` / `sourceHeight`；
+  `TextLayer`（`text`）完全没有这些字段，只带
+  `text / width / fontSize / fontFamily / fill / fontStyle / align / stroke / strokeWidth / shadow*`。
+- `WatermarkLayer` 是**第三个独立类型**，不属于 `EditorLayer`，所以水印「不进图层文档」的结论没有被削弱。
+- `EditorStage` 按 `layer.kind` 分支渲染：文字走 `Konva.Text`，**永远不进 `imageForLayer`**（那条路径只认图片）。
+- 文字与图片共用同一个 `Transformer` 和 `COMMIT_LAYER`，`scale` 仍是唯一缩放来源。
+- `TextLayer` 的 `x / y` 同样是几何中心：`offsetX = width / 2`，`offsetY = 实测高度 / 2`。
+  Konva.Text 的高度取决于自动换行，因此首帧用 `estimateTextHeight`（`fontSize × 行数`）估算，
+  节点上屏后由 `EditorStage` 的 ref 测量并写回 state 校正。
+- 属性修改走 `COMMIT_LAYER`，**不用 `UPDATE_LAYER`**：面板内部保留 draft，失焦时才提交一次。
+  这不是偷懒 —— `UPDATE_LAYER` 会经 `replacePresent` 直接改掉 `present`，
+  修改前的状态当场丢失，再 `COMMIT_LAYER` 压进去的就是新值，**Undo 会失效**。
+  用 draft + 单次提交，才能保证「打字一次 = 一条 history」且能正确回退。
+- 草稿恢复分两步：`restoreStoredLayer()` 按 `kind` 分别校验（文字逐字段补默认值，
+  图片保持原有宽松形状），`keepLayerWithMaterials()` 只按 `materialId` 过滤图片层、
+  **无条件保留文字层**。否则刷新一次，文字就会因为「没有 materialId」被整批过滤掉。
+
+#### 描边与阴影（都是 `Konva.Text` 的原生属性）
+
+- 字段扁平化存在 `TextLayer` 上，不进嵌套对象：这样 `LayerPatch = Partial<TextLayer>` 与
+  `restoreTextLayer` 的「逐字段补默认值」两条既有机制都不用改，恢复时按
+  `MIN/MAX_STROKE_WIDTH`、`MAX_SHADOW_BLUR`、`MIN/MAX_SHADOW_OFFSET`、`shadowOpacity ∈ [0,1]` 夹取。
+- **关闭态即默认态**：`strokeWidth = 0`、`shadowBlur = 0` 且两个偏移为 0，
+  所以新增字段不会让任何已有草稿的渲染结果发生变化。
+- `shadowEnabled` 要显式传：Konva 的 `Shape._hasShadow()` 只要 `shadowColor` 非空就返回 true
+  （`Shape.js:94`），模糊和偏移都为 0 时会白建一块 buffer canvas 去画一个看不见的阴影。
+- 文字描边要配 `fillAfterStrokeEnabled`：Konva 以字形轮廓为中心画描边，不配的话半个描边压在字身上，
+  字反而变细。
+- 描边与阴影都在节点自身坐标系绘制，随 `scale` 一起放大（这是特性，不是 bug）。
+- **不会撑大 Transformer 选框**：Konva 的 `Transformer.__getNodeShape()` 硬编码
+  `skipShadow: true`，stroke 则看 `ignoreStroke`（本项目已开启）。
+
+#### 样式记忆（偏好，不是文档状态）
+
+`TextLayer` 的 12 个样式字段会被记住，下一个新建的文字图层直接沿用。
+
+- 权威字段清单只有一处：`src/shared/constants.ts` 的 `TEXT_STYLE_KEYS`。
+  `TextStyleDefaults` 类型、`DEFAULT_TEXT_STYLE`、`pickTextStyle()`、`restore`/`create` 都从它派生，
+  因此「提交时抽取」和「新建时合并」不可能错位。
+- `sanitizeTextStyle()` 同时用于**读**和**写**，坏数据进不了画布。
+  它和 `restoreTextLayer()` 共用 `finiteNumber` / `clampNumber` / `pickColor` / `pickAlign` /
+  `pickFontStyle`（都在 `src/shared/text-style.ts`），但**夹取范围不同**：
+  偏好按面板范围夹（字号 12–200），文档恢复仍用原来的宽松规则，
+  以免旧版/新版文档里的大字号被静默改小。
+- 为什么放 `src/shared/`：`editor/state` 和 `services` 都要用，而 `services` 不依赖 `editor/`，这条分层不能破。
+- 存储：`chrome.storage.local` 的 `aiee:text-defaults`（`src/services/text-defaults.ts`）。
+  **整对象覆盖写**，不做 `load → merge → set`，避免两次快速提交交错读写。
+- 生命周期独立于文档：加载偏好不 dispatch 任何 action，hydrate 仍只产生 1 条历史记录；
+  偏好也从不进入 `EditorDocument`，所以 undo / redo / clear 碰不到它。
+- `createTextLayer(defaults)` 会把入参再过滤一遍 `pickTextStyle()`，
+  即便调用方塞进 `text` / `x` / `scale` 也不会泄漏到新图层上。
+
 ## 7. 撤销 / 重做
 
 `src/editor/state/history.ts`：`{ past, present, future }` 快照栈，最多 50 条。
 
-- 只有**已提交**的操作进历史：`ADD_LAYER` / `DELETE_LAYER` / `COMMIT_LAYER`（dragEnd、transformEnd）/ `MOVE_LAYER` / `CLEAR`。
+- 只有**已提交**的操作进历史：`ADD_LAYER` / `DELETE_LAYER` / `COMMIT_LAYER`（dragEnd、transformEnd、文字属性提交）/ `MOVE_LAYER` / `CLEAR`。
 - `UPDATE_LAYER` 只替换 present（拖动、变换过程中的每一帧），不产生历史条目。
 - `UNDO` / `REDO` 后若选中图层已不存在会自动取消选中。
 

@@ -1,23 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ErrorCode } from '../../src/shared/errors';
-import { downloadImageBlob, runWithConcurrency, sniffImageMime } from '../../src/background/download-manager';
+import { downloadImageBlob, runWithConcurrency } from '../../src/background/download-manager';
 
+// The magic-number probe moved to `src/shared/image-mime.ts` (the editor needs
+// it for local uploads too) and is covered by `image-mime.test.ts`.
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
-const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
-
-describe('sniffImageMime', () => {
-  it('recognises png / jpeg / webp magic numbers', () => {
-    expect(sniffImageMime(PNG)).toBe('image/png');
-    expect(sniffImageMime(JPEG)).toBe('image/jpeg');
-    expect(sniffImageMime(WEBP)).toBe('image/webp');
-  });
-
-  it('returns null for anything else', () => {
-    expect(sniffImageMime(new Uint8Array([1, 2, 3]))).toBeNull();
-    expect(sniffImageMime(new Uint8Array([]))).toBeNull();
-  });
-});
 
 describe('runWithConcurrency', () => {
   it('never runs more than the limit and preserves input order', async () => {

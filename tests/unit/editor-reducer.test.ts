@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_HISTORY } from '../../src/shared/constants';
-import type { EditorLayer, EditorMaterial } from '../../src/shared/types';
+import type { EditorMaterial, ImageLayer } from '../../src/shared/types';
 import {
   addLayer,
   computeInitialPlacement,
@@ -18,7 +18,7 @@ function makeDocument(count: number) {
   return { layers: Array.from({ length: count }, (_, index) => makeLayer(`layer-${index}`)) };
 }
 
-function makeLayer(id: string, patch: Partial<EditorLayer> = {}): EditorLayer {
+function makeLayer(id: string, patch: Partial<ImageLayer> = {}): ImageLayer {
   return {
     id,
     materialId: `material-${id}`,

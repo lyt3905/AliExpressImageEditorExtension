@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
-import { Image as KonvaImage, Layer, Rect, Stage, Transformer } from 'react-konva';
+import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer } from 'react-konva';
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
-import type { EditorLayer } from '../../shared/types';
+import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
+import { estimateTextHeight } from '../state/editor-reducer';
 
 /** Largest visual size of the canvas preview. The logical canvas stays 800x800. */
 export const MAX_PREVIEW_SIZE = 640;
@@ -17,14 +18,15 @@ export interface EditorStageHandle {
 
 export interface EditorStageProps {
   layers: EditorLayer[];
-  imageForLayer: (layer: EditorLayer) => HTMLImageElement | undefined;
+  /** Only picture layers resolve to images — text never enters this map. */
+  imageForLayer: (layer: ImageLayer) => HTMLImageElement | undefined;
   /** Locked watermark frame drawn above every user layer (null = none). */
-  watermark: EditorLayer | null;
+  watermark: WatermarkLayer | null;
   watermarkImage: HTMLImageElement | undefined;
   selectedLayerId: string | null;
   onSelect: (layerId: string | null) => void;
   onDragEnd: (layerId: string, x: number, y: number) => void;
-  onTransformEnd: (layerId: string, patch: Partial<EditorLayer>) => void;
+  onTransformEnd: (layerId: string, patch: LayerPatch) => void;
   handleRef: React.MutableRefObject<EditorStageHandle | null>;
 }
 
@@ -45,6 +47,14 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const [stageSize, setStageSize] = useState(MIN_PREVIEW_SIZE);
+
+  /**
+   * Text nodes are measured after paint so their `offsetY` can centre them.
+   * Konva.Text height depends on line wrapping, which is only known once the
+   * node has been laid out — the first frame uses `estimateTextHeight` instead.
+   */
+  const textNodesRef = useRef<Map<string, Konva.Text>>(new Map());
+  const [textHeights, setTextHeights] = useState<Record<string, number>>({});
 
   const previewScale = stageSize / CANVAS_SIZE;
   const previewScaleRef = useRef(previewScale);
@@ -72,6 +82,21 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     if (parent) observer.observe(parent);
     return () => observer.disconnect();
   }, []);
+
+  // Keep the measured text heights in sync with what is actually drawn.
+  useEffect(() => {
+    let changed = false;
+    const measured: Record<string, number> = {};
+    for (const [id, node] of textNodesRef.current) {
+      if (!node) continue;
+      const height = node.height();
+      if (height <= 0) continue;
+      measured[id] = height;
+      if (textHeights[id] !== height) changed = true;
+    }
+    // Re-running with identical measurements must not loop forever.
+    if (changed) setTextHeights(measured);
+  }, [layers, textHeights]);
 
   // Attach the transformer imperatively: it needs the Konva node instance.
   useEffect(() => {
@@ -139,6 +164,81 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
           />
 
           {layers.map((layer) => {
+            if (layer.kind === 'text') {
+              /*
+                Outline and shadow are drawn in the node's own coordinate space,
+                so they scale with the layer exactly like the glyphs do: an
+                outline of 4px stays visually proportional when the text is
+                blown up to 200%.
+
+                `fillAfterStrokeEnabled` matters — Konva centres the stroke on
+                the glyph path, so without it half of the outline paints over
+                the fill and the text looks thinner than it did before the
+                outline was added.
+
+                `shadowEnabled` is gated on blur/offsets because Konva counts a
+                set `shadowColor` alone as "has shadow", which would allocate a
+                buffer canvas to draw a completely invisible shadow.
+
+                The transformer box is unaffected: Konva hardcodes
+                `skipShadow: true` and honours our `ignoreStroke` when measuring
+                the attached node, so neither option inflates the handles.
+              */
+              const hasShadow =
+                layer.shadowBlur > 0 || layer.shadowOffsetX !== 0 || layer.shadowOffsetY !== 0;
+              return (
+                <KonvaText
+                  key={layer.id}
+                  id={layer.id}
+                  ref={(node) => {
+                    if (node) textNodesRef.current.set(layer.id, node);
+                    else textNodesRef.current.delete(layer.id);
+                  }}
+                  text={layer.text}
+                  x={layer.x}
+                  y={layer.y}
+                  width={layer.width}
+                  // Offset by half the box so (x, y) stays the centre, exactly like pictures.
+                  offsetX={layer.width / 2}
+                  offsetY={(textHeights[layer.id] ?? estimateTextHeight(layer)) / 2}
+                  fontSize={layer.fontSize}
+                  fontFamily={layer.fontFamily}
+                  fontStyle={layer.fontStyle}
+                  fill={layer.fill}
+                  align={layer.align}
+                  stroke={layer.stroke}
+                  strokeWidth={layer.strokeWidth}
+                  fillAfterStrokeEnabled
+                  shadowEnabled={hasShadow}
+                  shadowColor={layer.shadowColor}
+                  shadowBlur={layer.shadowBlur}
+                  shadowOffsetX={layer.shadowOffsetX}
+                  shadowOffsetY={layer.shadowOffsetY}
+                  shadowOpacity={layer.shadowOpacity}
+                  scaleX={layer.scale}
+                  scaleY={layer.scale}
+                  rotation={layer.rotation}
+                  draggable
+                  onClick={() => onSelect(layer.id)}
+                  onTap={() => onSelect(layer.id)}
+                  onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
+                  onTransformEnd={(event) => {
+                    const node = event.target as Konva.Text;
+                    const scale = node.scaleX();
+                    // Normalise the node back to scale 1 so `scale` stays the single source of truth.
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    onTransformEnd(layer.id, {
+                      x: node.x(),
+                      y: node.y(),
+                      scale,
+                      rotation: node.rotation(),
+                    });
+                  }}
+                />
+              );
+            }
+
             const image = imageForLayer(layer);
             if (!image) return null;
             return (

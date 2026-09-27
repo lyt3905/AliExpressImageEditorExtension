@@ -22,6 +22,13 @@ export const CUTOUT_PROCESS_TIMEOUT_MS = 180_000;
 export const CUTOUT_RESULT_TIMEOUT_MS = 60_000;
 export const LOGIN_TIMEOUT_MS = 15_000;
 
+/**
+ * Reject oversized local uploads (file picker / clipboard) before they reach
+ * IndexedDB. The cutout endpoint downscales to `CUTOUT_MAX_SIZE` anyway, so
+ * anything past this only costs a long, blocking write.
+ */
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 export const MAX_HISTORY = 50;
 
 /** Max side (logical px) a layer is scaled to when it first enters the canvas. */
@@ -40,6 +47,8 @@ export const STORAGE_KEYS = {
   sessionPrefix: 'aiee:session:',
   credentials: 'aiee:credentials',
   watermarks: 'aiee:watermarks',
+  /** Last used text style, so a new text layer starts where the last one ended. */
+  textDefaults: 'aiee:text-defaults',
 } as const;
 
 export const DB_NAME = 'aliexpress-image-editor';
@@ -60,3 +69,87 @@ export const MAX_WATERMARK_BYTES = 8 * 1024 * 1024;
 
 /** Accepted watermark mime types. */
 export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+
+// ---------------------------------------------------------------- text layers
+
+/** Fonts the text panel offers. Local system fonts only — never a web font. */
+export const TEXT_FONT_FAMILIES = [
+  'Microsoft YaHei',
+  'Arial',
+  'SimHei',
+  'SimSun',
+  'sans-serif',
+  'serif',
+] as const;
+
+export const MIN_FONT_SIZE = 12;
+export const MAX_FONT_SIZE = 200;
+
+/** Defaults for a freshly created text layer (see `createTextLayer`). */
+export const TEXT_LAYER_DEFAULTS = {
+  text: '请输入文字',
+  width: 400,
+  fontSize: 48,
+  fontFamily: 'Microsoft YaHei',
+  fill: '#000000',
+  fontStyle: 'normal',
+  align: 'center',
+  scale: 1,
+  rotation: 0,
+  // Outline and shadow are OFF by default, so a new text layer still looks
+  // exactly like it did before these options existed.
+  stroke: '#ffffff',
+  strokeWidth: 0,
+  shadowColor: '#000000',
+  shadowBlur: 0,
+  shadowOffsetX: 0,
+  shadowOffsetY: 0,
+  shadowOpacity: 0.5,
+} as const;
+
+/**
+ * Outline width in logical px. 0 = no outline.
+ *
+ * Konva draws it in the node's own coordinates, so it scales with the layer
+ * exactly like the glyphs do.
+ */
+export const MIN_STROKE_WIDTH = 0;
+export const MAX_STROKE_WIDTH = 40;
+
+/**
+ * The text fields that count as "style" — the ones a new text layer inherits
+ * from the last edit.
+ *
+ * Deliberately excludes `text` (a new layer must never inherit the previous
+ * wording), `x` / `y` (otherwise layers stack on top of each other) and
+ * `width` / `scale` / `rotation` (both should restart at their neutral value).
+ *
+ * SINGLE SOURCE OF TRUTH: `pickTextStyle` reads it and `TextStyleDefaults` is
+ * derived from it, so the two can never drift apart.
+ */
+export const TEXT_STYLE_KEYS = [
+  'fontSize',
+  'fontFamily',
+  'fill',
+  'fontStyle',
+  'align',
+  'stroke',
+  'strokeWidth',
+  'shadowColor',
+  'shadowBlur',
+  'shadowOffsetX',
+  'shadowOffsetY',
+  'shadowOpacity',
+] as const;
+
+/**
+ * Shadow limits, logical px. Same units as the outline, same scaling rule.
+ * The shadow is only drawn while `blur` or one of the offsets is non-zero.
+ */
+export const MIN_SHADOW_BLUR = 0;
+export const MAX_SHADOW_BLUR = 80;
+export const MIN_SHADOW_OFFSET = -100;
+export const MAX_SHADOW_OFFSET = 100;
+
+/** Longest label shown for a text layer in the layer list before truncation. */
+export const TEXT_LAYER_LABEL_MAX = 24;

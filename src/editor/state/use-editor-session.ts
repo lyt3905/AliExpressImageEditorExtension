@@ -8,12 +8,13 @@
  *   queued/uploading/processing -> reset to idle and re-queued
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CUTOUT_CONCURRENCY } from '../../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../../shared/errors';
 import type {
   CutoutStatus,
   EditorDocument,
+  EditorLayer,
   EditorMaterial,
   EditorSessionRecord,
   SessionImage,
@@ -23,7 +24,8 @@ import { HttpCutoutClient } from '../../services/cutout-client';
 import { getBlob, getSession, patchSessionImage, putBlob, putSession } from '../../services/indexed-db';
 import { readBlobSize } from '../../services/image-size';
 import { loadSettings } from '../../services/settings';
-import { emptyDocument } from './editor-reducer';
+import { appendUploadedImages, type UploadOutcome } from '../../services/upload-images';
+import { emptyDocument, keepLayerWithMaterials, restoreStoredLayer } from './editor-reducer';
 
 const IN_FLIGHT: ReadonlySet<CutoutStatus> = new Set<CutoutStatus>(['queued', 'uploading', 'processing']);
 
@@ -49,6 +51,12 @@ export interface EditorSessionState {
   initialDocument: EditorDocument;
   progress: CutoutProgress;
   retryCutout: (imageId: string) => void;
+  /**
+   * Add local files (picker or clipboard paste) to the session and hand them to
+   * the cutout queue. Resolves with the outcome for the notice bar, or `null`
+   * when the session is not ready yet.
+   */
+  addUploadedImages: (files: File[]) => Promise<UploadOutcome | null>;
 }
 
 function documentKey(sessionId: string): string {
@@ -59,10 +67,14 @@ async function loadStoredDocument(sessionId: string): Promise<EditorDocument> {
   try {
     const key = documentKey(sessionId);
     const stored = await chrome.storage.local.get(key);
-    const value = stored?.[key] as EditorDocument | undefined;
+    const value = stored?.[key] as { layers?: unknown[] } | undefined;
     if (value && Array.isArray(value.layers)) {
-      // Drop layers whose material no longer exists (checked later by the caller).
-      return { layers: value.layers.filter((layer) => layer && typeof layer.id === 'string') };
+      // Text layers are rebuilt field by field; picture layers keep their stored
+      // shape and are filtered by material availability by the caller.
+      const layers = value.layers
+        .map(restoreStoredLayer)
+        .filter((layer): layer is EditorLayer => layer !== null);
+      return { layers };
     }
   } catch {
     /* ignore */
@@ -80,11 +92,32 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
   const [progress, setProgress] = useState<CutoutProgress>({ total: 0, success: 0, failed: 0, active: 0, waiting: 0 });
 
   const imagesRef = useRef<SessionImage[]>([]);
+  /**
+   * Session metadata as loaded. The image list is read from `imagesRef` — that
+   * one is patched in place as cutouts finish, so this snapshot would be stale.
+   */
+  const sessionRef = useRef<EditorSessionRecord | null>(null);
   const queueRef = useRef<CutoutQueue | null>(null);
   const clientRef = useRef<HttpCutoutClient | null>(null);
   const objectUrlsRef = useRef<Map<string, string>>(new Map());
   /** Serialises read-modify-write persistence of the session record. */
   const persistChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  /** Serialises uploads, which are also a read-modify-write of the record. */
+  const uploadChainRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  /**
+   * One object URL per blob, cached for the lifetime of the hook.
+   *
+   * Hoisted out of the load effect because uploads need it too: a pasted image
+   * becomes a material without waiting for a reload.
+   */
+  const trackUrl = useCallback((blobId: string, blob: Blob): string => {
+    const existing = objectUrlsRef.current.get(blobId);
+    if (existing) return existing;
+    const url = URL.createObjectURL(blob);
+    objectUrlsRef.current.set(blobId, url);
+    return url;
+  }, []);
 
   useEffect(() => {
     if (!sessionId) {
@@ -96,14 +129,6 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
     let cancelled = false;
     const objectUrls = objectUrlsRef.current;
     const persistChain = persistChainRef;
-
-    const trackUrl = (blobId: string, blob: Blob): string => {
-      const existing = objectUrls.get(blobId);
-      if (existing) return existing;
-      const url = URL.createObjectURL(blob);
-      objectUrls.set(blobId, url);
-      return url;
-    };
 
     const setStatus = (imageId: string, entry: MaterialStatusEntry) => {
       if (cancelled) return;
@@ -271,8 +296,10 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
           throw new AppError(ErrorCode.SESSION_NOT_FOUND, '会话中没有任何可用的原图数据');
         }
 
+        const current: EditorSessionRecord = { ...record, images: recovered };
         imagesRef.current = recovered;
-        setSession({ ...record, images: recovered });
+        sessionRef.current = current;
+        setSession(current);
         setMaterials(restoredMaterials);
         setStatusByImageId(statuses);
         setProgress({
@@ -285,14 +312,15 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
 
         // Persist the recovered statuses so a second refresh is a no-op.
         if (changed) {
-          const merged = { ...record, images: recovered };
-          persistChain.current = persistChain.current.then(() => putSession(merged)).catch(() => undefined);
+          persistChain.current = persistChain.current.then(() => putSession(current)).catch(() => undefined);
         }
 
         const storedDocument = await loadStoredDocument(sessionId);
         const materialIds = new Set(restoredMaterials.map((material) => material.id));
         if (!cancelled) {
-          setInitialDocument({ layers: storedDocument.layers.filter((layer) => materialIds.has(layer.materialId)) });
+          // Text layers carry no materialId, so `keepLayerWithMaterials` keeps them
+          // unconditionally — a reload must never wipe the text off the canvas.
+          setInitialDocument({ layers: keepLayerWithMaterials(storedDocument.layers, materialIds) });
         }
 
         // ---- automatic cutout pipeline ----
@@ -334,8 +362,87 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
       for (const url of objectUrls.values()) URL.revokeObjectURL(url);
       objectUrls.clear();
       imagesRef.current = [];
+      sessionRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, trackUrl]);
+
+  /**
+   * The actual upload work: blobs and the session record are persisted first,
+   * then the editor state is updated — from the store's point of view an upload
+   * is committed the moment this resolves.
+   */
+  const uploadFiles = useCallback(
+    async (files: File[]): Promise<UploadOutcome | null> => {
+      const base = sessionRef.current;
+      if (!sessionId || !base || files.length === 0) return null;
+
+      // `imagesRef` is the live list (cutout statuses are patched in place), so
+      // persisting `base.images` would roll those patches back.
+      const outcome = await appendUploadedImages(
+        { ...base, images: imagesRef.current },
+        files.map((file) => ({ name: file.name, blob: file })),
+      );
+      if (outcome.added.length === 0) return outcome;
+
+      const newMaterials: EditorMaterial[] = [];
+      for (const image of outcome.added) {
+        const blob = await getBlob(image.blobId).catch(() => null);
+        if (!blob) continue;
+        newMaterials.push({
+          id: `material-original-${image.id}`,
+          imageId: image.id,
+          blobId: image.blobId,
+          kind: 'original',
+          width: image.width,
+          height: image.height,
+          url: trackUrl(image.blobId, blob),
+          label: image.label || '原图',
+        });
+      }
+
+      // Merge rather than replace: a cutout can finish while the blobs are being
+      // written, and `imagesRef` is where those status patches live. Replacing
+      // the array wholesale would roll them back.
+      const live = new Map(imagesRef.current.map((entry) => [entry.id, entry]));
+      imagesRef.current = outcome.record.images.map((entry) => live.get(entry.id) ?? entry);
+      sessionRef.current = outcome.record;
+      setSession(outcome.record);
+      if (newMaterials.length) setMaterials((previous) => [...previous, ...newMaterials]);
+
+      for (const image of outcome.added) {
+        setStatusByImageId((previous) => ({ ...previous, [image.id]: { status: 'queued' } }));
+        imagesRef.current = imagesRef.current.map((entry) =>
+          entry.id === image.id ? { ...entry, cutoutStatus: 'queued' } : entry,
+        );
+        // One more job means the denominator has to grow with it — otherwise
+        // 抠图进度 x/y could never reach y.
+        setProgress((previous) => ({ ...previous, total: previous.total + 1 }));
+        // A no-op when the queue is gone (fatal error screen): the image is
+        // already persisted, so a reload picks it up.
+        queueRef.current?.enqueue(image.id);
+      }
+
+      return outcome;
+    },
+    [sessionId, trackUrl],
+  );
+
+  /**
+   * Local uploads (file picker / clipboard paste).
+   *
+   * Serialised on purpose: two uploads racing would each branch off the same
+   * record snapshot, and the later `putSession` would drop the earlier batch —
+   * leaving its blob orphaned. Queued, every upload sees the previous result.
+   */
+  const addUploadedImages = useCallback(
+    (files: File[]): Promise<UploadOutcome | null> => {
+      const run = uploadChainRef.current.then(() => uploadFiles(files));
+      // Swallowed here so one failure cannot poison the chain for the next call.
+      uploadChainRef.current = run.catch(() => undefined);
+      return run;
+    },
+    [uploadFiles],
+  );
 
   const updateLocalStatus = (imageId: string, status: CutoutStatus): void => {
     setStatusByImageId((previous) => ({ ...previous, [imageId]: { status } }));
@@ -364,5 +471,6 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
     initialDocument,
     progress,
     retryCutout,
+    addUploadedImages,
   };
 }

@@ -9,7 +9,6 @@
 
   "host_permissions": [
     "https://*.aliexpress.com/*",
-    "https://*.aliexpress.us/*",
     "https://*.aliexpress-media.com/*",
     "https://*.alicdn.com/*",
     "https://39.107.244.239/*",
