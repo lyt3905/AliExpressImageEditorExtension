@@ -15,6 +15,7 @@ export interface MessageHandlers {
   createEditorSession(payload: SessionInput): Promise<{ sessionId: string }>;
   downloadComposite(payload: ExportInput): Promise<{ downloadId: number; filename: string }>;
   replacePageImage(payload: PageFillInput): Promise<PageFillResult>;
+  closeEditorTab(payload: { sessionId: string }): Promise<{ closed: number }>;
   getSettings(): Promise<ExtensionSettings>;
   saveSettings(payload: { serverUrl: string; username: string; password?: string }): Promise<ExtensionSettings>;
   getAuthState(): Promise<{ loggedIn: boolean; user: AuthUser | null }>;
@@ -42,6 +43,10 @@ function buildRoutes(handlers: MessageHandlers): Record<string, Handler> {
     REPLACE_PAGE_IMAGE: (message) => {
       const payload = (message as { payload: PageFillInput }).payload;
       return handlers.replacePageImage(payload);
+    },
+    CLOSE_EDITOR_TAB: (message) => {
+      const payload = (message as { payload: { sessionId: string } }).payload;
+      return handlers.closeEditorTab(payload);
     },
     GET_SETTINGS: () => handlers.getSettings(),
     SAVE_SETTINGS: (message) => handlers.saveSettings((message as { payload: { serverUrl: string; username: string; password?: string } }).payload),
@@ -102,7 +107,20 @@ export function registerMessageRouter(handlers: MessageHandlers): void {
     const candidate = message as ExtensionMessage;
     if (typeof candidate.type !== 'string' || typeof candidate.requestId !== 'string') return false;
 
-    void dispatchMessage(candidate, handlers).then(sendResponse);
+    void dispatchMessage(candidate, handlers).then(
+      (response) => {
+        // The caller may be gone by the time its answer is ready. A page fill
+        // runs for seconds and the editor now closes itself 10 s after starting
+        // one, so answering a dead port is a normal outcome, not a bug — and an
+        // unhandled rejection here would look like one in the worker's console.
+        try {
+          sendResponse(response);
+        } catch {
+          /* the caller's tab was closed while it waited */
+        }
+      },
+      () => undefined, // dispatchMessage returns an error envelope instead of rejecting
+    );
     return true; // keep the channel open for the async response
   });
 }

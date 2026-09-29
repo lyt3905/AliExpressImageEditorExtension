@@ -349,6 +349,29 @@ button.primary:hover:not(:disabled) {
   color: var(--danger);
 }
 
+/* Countdown to the editor closing itself, plus the only way to stop it.
+   `flex: none` on purpose: a long notice is allowed to shrink, but squeezing
+   this away would silently remove the sole escape hatch from a pending close. */
+.status-bar__auto-close {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.status-bar__auto-close button {
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+
+.status-bar__auto-close button:hover {
+  border-color: var(--text-dim);
+}
+
 @keyframes status-bar-fade {
   from {
     opacity: 0;

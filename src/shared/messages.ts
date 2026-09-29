@@ -20,6 +20,7 @@ export type MessageType =
   | 'CREATE_EDITOR_SESSION'
   | 'DOWNLOAD_COMPOSITE'
   | 'REPLACE_PAGE_IMAGE'
+  | 'CLOSE_EDITOR_TAB'
   | 'GET_SETTINGS'
   | 'SAVE_SETTINGS'
   | 'GET_AUTH_STATE'
@@ -48,6 +49,20 @@ export interface ReplacePageImageMessage {
   type: 'REPLACE_PAGE_IMAGE';
   requestId: string;
   payload: PageFillInput;
+}
+
+/**
+ * Editor -> service worker: "close my tab".
+ *
+ * Only ever sent by the editor itself, and only as the fallback half of the
+ * auto-close (the primary path is the page's own `window.close()`). The session
+ * id — not a tab id — is what travels: the background locates the tab by
+ * matching its URL, so a stale or forged id can never close somebody else's tab.
+ */
+export interface CloseEditorTabMessage {
+  type: 'CLOSE_EDITOR_TAB';
+  requestId: string;
+  payload: { sessionId: string };
 }
 
 export interface GetSettingsMessage {
@@ -87,6 +102,7 @@ export type ExtensionMessage =
   | CreateEditorSessionMessage
   | DownloadCompositeMessage
   | ReplacePageImageMessage
+  | CloseEditorTabMessage
   | GetSettingsMessage
   | SaveSettingsMessage
   | GetAuthStateMessage
@@ -109,6 +125,7 @@ const MESSAGE_TYPES: ReadonlySet<string> = new Set<MessageType>([
   'CREATE_EDITOR_SESSION',
   'DOWNLOAD_COMPOSITE',
   'REPLACE_PAGE_IMAGE',
+  'CLOSE_EDITOR_TAB',
   'GET_SETTINGS',
   'SAVE_SETTINGS',
   'GET_AUTH_STATE',

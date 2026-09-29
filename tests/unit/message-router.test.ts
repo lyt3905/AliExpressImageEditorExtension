@@ -32,6 +32,7 @@ function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers
     createEditorSession: async () => ({ sessionId: 'sess-1' }),
     downloadComposite: async (payload) => ({ downloadId: 42, filename: payload.filename }),
     replacePageImage: async () => pageFillResult(),
+    closeEditorTab: async () => ({ closed: 1 }),
     getSettings: async () => ({ serverUrl: 'https://cutout.test', username: 'admin' }),
     saveSettings: async (payload) => ({ serverUrl: payload.serverUrl, username: payload.username }),
     getAuthState: async () => ({ loggedIn: true, user: { id: 1, username: 'admin' } }),
@@ -45,6 +46,7 @@ describe('message protocol helpers', () => {
   it('accepts known message types only', () => {
     expect(isExtensionMessage({ type: 'CREATE_EDITOR_SESSION', requestId: 'r1' })).toBe(true);
     expect(isExtensionMessage({ type: 'REPLACE_PAGE_IMAGE', requestId: 'r1' })).toBe(true);
+    expect(isExtensionMessage({ type: 'CLOSE_EDITOR_TAB', requestId: 'r1' })).toBe(true);
     expect(isExtensionMessage({ type: 'PING', requestId: 'r1' })).toBe(true);
     expect(isExtensionMessage({ type: 'NOPE', requestId: 'r1' })).toBe(false);
     expect(isExtensionMessage(null)).toBe(false);
@@ -174,6 +176,25 @@ describe('dispatchMessage', () => {
     expect(response.ok).toBe(false);
     expect(response.error?.code).toBe(ErrorCode.PAGE_FILL_FAILED);
     expect(response.error?.message).toContain('打开上传面板失败');
+  });
+
+  it('routes CLOSE_EDITOR_TAB and passes the session id through', async () => {
+    // The session id is the ONLY thing the background gets, and it is what the
+    // tab is matched on. A handler that silently received an undefined session
+    // would close nothing, and the auto-close would just look broken.
+    const seen: string[] = [];
+    const response = await dispatchMessage(
+      { type: 'CLOSE_EDITOR_TAB', requestId: 'r12', payload: { sessionId: 'sess-9' } },
+      makeHandlers({
+        closeEditorTab: async (payload) => {
+          seen.push(payload.sessionId);
+          return { closed: 2 };
+        },
+      }),
+    );
+    expect(response.ok).toBe(true);
+    expect(response.data).toEqual({ closed: 2 });
+    expect(seen).toEqual(['sess-9']);
   });
 
   it('rejects SCAN_ACTIVE_TAB on the service worker channel', async () => {

@@ -18,6 +18,7 @@ import { createRequestId, sendToTab, type ExtensionMessage, type MessageResponse
 import type { ScannedImage, SessionImage } from '../shared/types';
 import { evaluatePageGate } from '../shared/page-gate';
 import { downloadImageBlob, runWithConcurrency } from './download-manager';
+import { closeEditorTabs } from './editor-tab';
 import { registerMessageRouter, type MessageHandlers } from './message-router';
 import { fillPageImage } from './page-filler';
 import { buildSessionRecord, createSessionId, openEditorTab, readSessionMeta, saveSessionMeta } from './session-manager';
@@ -233,6 +234,20 @@ const handlers: MessageHandlers = {
       await reportFailure(error);
       throw error;
     }
+  },
+
+  /**
+   * Close the editor tab that has finished its fill.
+   *
+   * Sent by the editor itself as the fallback half of its auto-close, i.e. only
+   * when the page is somehow still alive after asking to close. By then the user
+   * has already been told the fill finished, so this stays silent: no badge, no
+   * error report — a tab that refuses to close is not news worth interrupting
+   * for. See `editor-tab.ts` for why a tab id is never accepted.
+   */
+  async closeEditorTab(payload) {
+    const closed = await closeEditorTabs(payload.sessionId);
+    return { closed };
   },
 
   getSettings() {

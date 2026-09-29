@@ -43,6 +43,30 @@ export const MAX_HISTORY = 50;
  */
 export const PAGE_FILL_MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * Close the editor tab this long after「回填到商品页」is clicked.
+ *
+ * Counted from the CLICK, not from the result. A fill takes 5–25 s on a slow
+ * page, so waiting for it would make the delay unpredictable; the trade-off is
+ * that a fill which outlives the timer carries on inside the service worker —
+ * only the tab goes away, and the outcome lands on the toolbar badge.
+ *
+ * Deliberately not persisted and not exposed in the Options page: it is a
+ * convenience, and a stale stored value would be unexplainable later.
+ */
+export const FILL_AUTO_CLOSE_MS = 10_000;
+
+/**
+ * Grace period before the service worker is asked to close the editor tab.
+ *
+ * `window.close()` is the primary path — this page was opened with
+ * `chrome.tabs.create`, so it is allowed to close itself. But a close that gets
+ * silently ignored looks exactly like "the feature does not work", so the timer
+ * that asks the background for help is armed *before* `window.close()` runs: if
+ * the close works, the page is gone and the timer never fires.
+ */
+export const AUTO_CLOSE_FALLBACK_MS = 300;
+
 /** Max side (logical px) a layer is scaled to when it first enters the canvas. */
 export const INSERT_MAX_SIDE = 480;
 

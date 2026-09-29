@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { CANVAS_SIZE, PAGE_FILL_MAX_BYTES, STORAGE_KEYS } from '../shared/constants';
+import { AUTO_CLOSE_FALLBACK_MS, CANVAS_SIZE, FILL_AUTO_CLOSE_MS, PAGE_FILL_MAX_BYTES, STORAGE_KEYS } from '../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type {
@@ -61,6 +61,15 @@ export function App(): JSX.Element {
   const [notice, setNoticeState] = useState<Notice | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   /**
+   * Seconds left before this editor closes itself, or null when no close is
+   * pending. Drives the status-bar countdown only — the authoritative value is
+   * the deadline in `autoCloseDeadlineRef`, so a throttled timer in a background
+   * tab can make the LABEL lag but can never delay the close itself.
+   */
+  const [autoCloseSecondsLeft, setAutoCloseSecondsLeft] = useState<number | null>(null);
+  const autoCloseTimerRef = useRef<number | null>(null);
+  const autoCloseDeadlineRef = useRef<number | null>(null);
+  /**
    * Whether the in-flight PNG job is the page fill rather than a download.
    * Purely cosmetic (it picks which button says「…中」) — `state.exporting` is
    * what actually locks both buttons while either job runs.
@@ -95,9 +104,70 @@ export function App(): JSX.Element {
   useEffect(
     () => () => {
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+      if (autoCloseTimerRef.current !== null) window.clearInterval(autoCloseTimerRef.current);
     },
     [],
   );
+
+  /** Drop a pending auto-close. Used by the cancel button, and by every new fill. */
+  const cancelAutoClose = useCallback(() => {
+    if (autoCloseTimerRef.current !== null) {
+      window.clearInterval(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+    autoCloseDeadlineRef.current = null;
+    setAutoCloseSecondsLeft(null);
+  }, []);
+
+  /**
+   * Close this tab, now.
+   *
+   * `window.close()` is the real thing — this page was opened with
+   * `chrome.tabs.create`, so the browser lets it close itself. But a close that
+   * is silently ignored would look exactly like the feature not existing and
+   * would leave the tab sitting there forever, so the fallback timer is armed
+   * FIRST: if the close works, the page is torn down and the timer never runs.
+   */
+  const closeEditorTab = useCallback(() => {
+    cancelAutoClose();
+    window.setTimeout(() => {
+      void sendToBackground<{ closed: number }>({
+        type: 'CLOSE_EDITOR_TAB',
+        requestId: createRequestId('close'),
+        // The session id, never a tab id: the background finds the tab by URL,
+        // so this can only ever close an editor belonging to THIS session.
+        payload: { sessionId: sessionId ?? '' },
+      }).catch(() => undefined);
+    }, AUTO_CLOSE_FALLBACK_MS);
+    window.close();
+  }, [cancelAutoClose, sessionId]);
+
+  /**
+   * Start the "close this editor" countdown.
+   *
+   * Counted from the click rather than from the result: a fill takes 5–25 s on a
+   * slow page, so waiting for it would make the delay unpredictable. A fill that
+   * outlives the timer carries on inside the service worker — only this tab goes
+   * away, and the outcome lands on the toolbar badge.
+   */
+  const startAutoClose = useCallback(() => {
+    cancelAutoClose();
+    autoCloseDeadlineRef.current = Date.now() + FILL_AUTO_CLOSE_MS;
+    setAutoCloseSecondsLeft(Math.ceil(FILL_AUTO_CLOSE_MS / 1000));
+
+    // Ticks faster than once a second so the label never skips a number while
+    // the tab is in the foreground. The deadline above decides when to close.
+    autoCloseTimerRef.current = window.setInterval(() => {
+      const deadline = autoCloseDeadlineRef.current;
+      if (deadline === null) return;
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        closeEditorTab();
+        return;
+      }
+      setAutoCloseSecondsLeft(Math.ceil(left / 1000));
+    }, 250);
+  }, [cancelAutoClose, closeEditorTab]);
 
   // The watermark is deliberately kept out of the layer document so UNDO / REDO
   // / CLEAR can never remove it (see use-watermark.ts).
@@ -391,6 +461,10 @@ export function App(): JSX.Element {
    * never cost the seller an image.
    */
   const handleFillPage = useCallback(async () => {
+    // Armed before anything else can fail. An early return (canvas not ready, an
+    // oversized PNG) must still close the tab: a half-started fill is exactly
+    // when the editor is least likely to be looked at again.
+    startAutoClose();
     setFilling(true);
     dispatch({ type: 'SET_EXPORTING', exporting: true });
 
@@ -444,7 +518,7 @@ export function App(): JSX.Element {
       setFilling(false);
       dispatch({ type: 'SET_EXPORTING', exporting: false });
     }
-  }, [composePng, sessionId, showNotice, removeFirstImage]);
+  }, [composePng, removeFirstImage, sessionId, showNotice, startAutoClose]);
 
   if (!sessionId) {
     return <FatalScreen title="缺少 session 参数" detail="请从 AliExpress 商品页点击插件图标重新进入。" />;
@@ -509,6 +583,19 @@ export function App(): JSX.Element {
         >
           {notice?.text}
         </span>
+        {/*
+          Kept outside the notice span on purpose: that one is a polite live
+          region and would re-announce this every second. `role="timer"` is not a
+          live region, which is exactly what a per-second countdown needs.
+        */}
+        {autoCloseSecondsLeft !== null ? (
+          <span className="status-bar__auto-close" role="timer">
+            将在 {autoCloseSecondsLeft} 秒后关闭编辑器
+            <button type="button" onClick={cancelAutoClose}>
+              取消
+            </button>
+          </span>
+        ) : null}
       </div>
 
       {/*
