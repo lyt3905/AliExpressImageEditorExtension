@@ -474,7 +474,7 @@ AliExpressImageEditorExtension/
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 314 个单元测试（不联网）
+│  ├─ unit/                      # 21 文件 / 351 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -549,7 +549,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（20 文件 / 342 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（21 文件 / 351 测试；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |
