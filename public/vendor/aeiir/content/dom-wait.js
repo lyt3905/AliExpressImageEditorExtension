@@ -186,6 +186,10 @@
    * options:
    *   doc, win, stage, description
    *   timeout（默认 8000ms）, pollInterval（默认 120ms）
+   *   throttleMs：两次 check() 之间的最小间隔（默认 0 = 不节流）。
+   *      MutationObserver 挂在 doc 上时会因页面任何一次重排而回调；速卖通后台 DOM 很重，
+   *      每次回调都跑一遍全文档查询会造成主线程抖动 —— 反而让「确认上传」按钮变黑得更慢。
+   *      设这个值把风暴压成有节奏的轮询，代价是最多晚 throttleMs 毫秒发现条件成立。
    *   check(): { done?: boolean, value?: any, abort?: boolean, status?: string, snapshot?: any }
    * 返回（resolve，不 reject）:
    *   { ok, timedOut, aborted, status, value, snapshot, elapsed, polls, description, stage }
@@ -200,6 +204,7 @@
     var description = opts.description || '等待条件满足';
     var stage = opts.stage || 'WAIT_IMAGE_REMOVED';
     var observeTarget = opts.observeTarget || doc;
+    var throttleMs = typeof opts.throttleMs === 'number' && opts.throttleMs > 0 ? opts.throttleMs : 0;
     var startedAt = Date.now();
 
     if (typeof check !== 'function') {
@@ -224,7 +229,14 @@
       var interval = null;
       var observer = null;
 
+      var lastRunAt = 0;
+      var throttleTimer = null;
+
       function cleanup() {
+        if (throttleTimer) {
+          clearTimeout(throttleTimer);
+          throttleTimer = null;
+        }
         if (timer) {
           clearTimeout(timer);
           timer = null;
@@ -254,10 +266,11 @@
         }, result));
       }
 
-      function evaluate() {
+      function runCheck() {
         if (finished) {
           return;
         }
+        lastRunAt = Date.now();
         polls += 1;
         var outcome = null;
         try {
@@ -298,6 +311,37 @@
             value: outcome.value,
             diagnostics: outcome.diagnostics
           });
+        }
+      }
+
+      /**
+       * 入口：所有来源（定时轮询 / MutationObserver / 首次立即执行）都走这里，
+       * 由它按 throttleMs 压成有节奏的执行。lastRunAt 初始为 0，所以第一次
+       * 一定是「距上次足够久」，不会被节流推迟。
+       */
+      function evaluate() {
+        if (finished) {
+          return;
+        }
+        if (throttleMs <= 0) {
+          runCheck();
+          return;
+        }
+        var gap = Date.now() - lastRunAt;
+        if (gap >= throttleMs) {
+          if (throttleTimer) {
+            clearTimeout(throttleTimer);
+            throttleTimer = null;
+          }
+          runCheck();
+          return;
+        }
+        // 风暴期间只保留一个待执行的 redo，把 N 次回调压成 1 次。
+        if (!throttleTimer) {
+          throttleTimer = setTimeout(function () {
+            throttleTimer = null;
+            runCheck();
+          }, throttleMs - gap);
         }
       }
 

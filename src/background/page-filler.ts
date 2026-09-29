@@ -62,7 +62,18 @@ export const VENDORED_MAX_UPLOAD_BYTES = PAGE_FILL_MAX_BYTES;
 
 const PANEL_TIMEOUT_MS = 8000;
 const UPLOAD_TIMEOUT_MS = 25000;
-const CONFIRM_TIMEOUT_MS = 8000;
+/**
+ * How long to keep waiting for 「确认上传」 to become clickable.
+ *
+ * Deliberately longer than the upload itself: the upload-wait step can already
+ * be satisfied by a locally rendered thumbnail, so it may return long before the
+ * image has finished uploading to AliExpress — and until then the confirm button
+ * is greyed out (or not rendered at all). 8s used to expire mid-upload, leaving
+ * the dialog on screen with nobody to click it (real-device bug, 2026-09-28).
+ * A run whose panel really did close exits immediately, so this only bounds the
+ * failure case.
+ */
+const CONFIRM_TIMEOUT_MS = 25000;
 /** Waiting for the delete icon, and then for the image to actually disappear. */
 const DELETE_TIMEOUT_MS = 8000;
 /** Attempt 1 targets the product form; 2..N look for the panel itself. */
@@ -402,7 +413,21 @@ export async function fillPageImage(input: PageFillInput, meta: EditorSessionMet
   }
 
   const result = last.result;
+
+  // Stages alone are hard to read at a glance, so echo the split as one line:
+  // "how long did we wait for the upload" vs "how long for the confirm button"
+  // is the whole point of the timings, and it is invisible inside `stages`.
+  const timings = result.timings;
   console.log('[AIEE] page fill', result.status, result.code ?? '', result.stages ?? []);
+  if (timings) {
+    console.log(
+      '[AIEE] page fill timings',
+      `total=${timings.totalMs}ms`,
+      `upload=${timings.waitUploadMs}ms`,
+      `confirmButton=${timings.waitConfirmButtonMs}ms`,
+      `panelClose=${timings.waitPanelCloseMs}ms`,
+    );
+  }
 
   if (!result.ok || result.status === 'failed') {
     throw new AppError(ErrorCode.PAGE_FILL_FAILED, describeBridgeFailure(result));

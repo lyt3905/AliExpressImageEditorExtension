@@ -265,6 +265,15 @@ export interface PageFillStageRecord {
   stageLabel: string;
   status: 'ok' | 'notice' | 'failed';
   message: string;
+  /**
+   * Milliseconds from the start of the run to this stage being recorded.
+   *
+   * Without it the only timing available is the run's total, which cannot tell
+   * "the upload was slow" apart from "we waited on the confirm button" — the
+   * exact ambiguity that makes a slow fill impossible to diagnose.
+   * Subtract two adjacent values to get that step's own duration.
+   */
+  elapsedMs?: number;
   diagnostics?: unknown;
 }
 
@@ -314,7 +323,21 @@ export interface PageFillBridgeResult {
     panelGone?: boolean;
     panelClosed?: boolean;
     buttonText: string | null;
+    /** How long we waited for the button to become clickable. */
+    waitedMs?: number;
+    /** How long we waited for the panel to close after clicking. */
+    panelCloseWaitedMs?: number;
   } | null;
+  /**
+   * Where the time actually went. Kept separate from `elapsedMs` (which is the
+   * whole run) so a slow fill can be attributed to a specific wait.
+   */
+  timings?: {
+    totalMs: number;
+    waitUploadMs: number | null;
+    waitConfirmButtonMs: number | null;
+    waitPanelCloseMs: number | null;
+  };
 }
 
 /** Service worker -> editor: the bridge result plus which frame it ran in. */
@@ -334,6 +357,8 @@ export interface PageFillResult {
    */
   warnings: string[];
   elapsedMs: number;
+  /** Where the time actually went, forwarded from the bridge. */
+  timings?: PageFillBridgeResult['timings'];
   frameId: number;
   frameUrl: string;
   strategy: 'input' | 'drop-zone' | null;

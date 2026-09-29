@@ -497,6 +497,20 @@ describe('fillPageImage', () => {
     expect(payload.deleteTimeout).toBeLessThan(payload.uploadTimeout);
   });
 
+  it('budgets the confirm step for a slow upload, not for an instant click', async () => {
+    // Real console (2026-09-28): the thumbnail shows up at once, which satisfies
+    // the upload wait, but the image keeps uploading and 「确认上传」 stays greyed
+    // out. An 8s confirm budget expired mid-upload and left the dialog on screen.
+    const { bridgePayloads } = installChrome({
+      frames: [{ frameId: 0, signals: signals({ uploadWrapCount: 1, slotCount: 6 }) }],
+      bridge: () => successResult(),
+    });
+
+    await fillPageImage(FILL_INPUT, SESSION);
+
+    expect(bridgePayloads[0]?.confirmTimeout).toBeGreaterThanOrEqual(20000);
+  });
+
   it('gives up after three frames instead of clicking in a loop', async () => {
     // The frame keeps looking like a plausible panel host, so every attempt runs.
     const { bridgePayloads, scriptCalls } = installChrome({

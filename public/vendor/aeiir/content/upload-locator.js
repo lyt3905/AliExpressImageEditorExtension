@@ -635,6 +635,82 @@
     return { element: best.element, diagnostics: diagnostics, matchedBy: 'panel-selector' };
   }
 
+  /**
+   * 文档里当前「看得见的上传面板（弹层）」——**不依赖拖拽区**。
+   *
+   * findModalScope 必须从一个拖拽区往上找祖先，而真机（2026-09-28）上传完成后面板
+   * 会切到「已添加图片」列表态、**拖拽区被移除**，那之后它就再也定位不到弹层了，
+   * 「面板还开着」于是被误判成「面板已关」，流程跳过「确认上传」直接收工。
+   * 这里改成按面板选择器直接扫全文档，与拖拽区在不在无关。
+   *
+   * 只认**像上传面板**的弹层（见 looksLikeUploadPanel）：否则页面上任意一个
+   * dialog 都会让「面板还开着」永远成立，还会把别处的按钮当成面板按钮。
+   *
+   * @returns {{selectors, domCount, visibleCount, markedCount, elements, visibleElements}}
+   *   elements 是「像上传面板」的可见弹层；visibleElements 是所有可见弹层（诊断用）。
+   */
+  function findOpenPanelScopes(doc, win) {
+    var view = win || (doc && doc.defaultView) || root;
+    var wait = domWait();
+    var report = {
+      selectors: PANEL_SELECTORS,
+      domCount: 0,
+      visibleCount: 0,
+      markedCount: 0,
+      elements: [],
+      visibleElements: []
+    };
+    if (!doc || !doc.querySelectorAll) {
+      return report;
+    }
+    var raw = [];
+    for (var i = 0; i < PANEL_SELECTORS.length; i += 1) {
+      raw = raw.concat(toArray(doc.querySelectorAll(PANEL_SELECTORS[i])));
+    }
+    var deduped = dedupeOutermost(raw);
+    report.domCount = deduped.length;
+
+    for (var v = 0; v < deduped.length; v += 1) {
+      if (!wait || wait.isVisible(deduped[v], view)) {
+        report.visibleElements.push(deduped[v]);
+      }
+    }
+    report.visibleCount = report.visibleElements.length;
+
+    for (var m = 0; m < report.visibleElements.length; m += 1) {
+      if (looksLikeUploadPanel(report.visibleElements[m])) {
+        report.elements.push(report.visibleElements[m]);
+      }
+    }
+    report.markedCount = report.elements.length;
+    return report;
+  }
+
+  /**
+   * 弹层里有没有「这是上传面板」的痕迹。
+   *
+   * 四条里命中一条就算：文件输入框、upload 类节点、「确认上传」按钮、上传提示文案。
+   * 上传完成后的列表态里前三条通常都还在（隐藏的 input 不会被移除）。
+   */
+  function looksLikeUploadPanel(node) {
+    if (!node || !node.querySelector) {
+      return false;
+    }
+    if (node.querySelector(FILE_INPUT_SELECTOR)) {
+      return true;
+    }
+    if (node.querySelector('[class*="upload-drag"], [class*="uploader"], [class*="upload-list"], [class*="upload-item"]')) {
+      return true;
+    }
+    var buttons = toArray(node.querySelectorAll('button, [role="button"]'));
+    for (var i = 0; i < buttons.length; i += 1) {
+      if (CONFIRM_BUTTON_TEXTS.indexOf(normalizeText(buttons[i].textContent || '')) !== -1) {
+        return true;
+      }
+    }
+    return normalizeText(node.textContent || '').indexOf(normalizeText(UPLOAD_HINT_TEXT)) !== -1;
+  }
+
   /** 返回 selectors 中第一个命中的下标，未命中返回 -1 */
   function firstMatchingSelector(node, selectors) {
     if (!node || !node.matches) {
@@ -947,19 +1023,32 @@
       return { ok: false, code: 'CONFIRM_UPLOAD_BUTTON_NOT_FOUND', diagnostics: diagnostics };
     }
     if (pool.length > 1) {
-      // 多个同文案按钮：优先唯一的可点击者
+      // 多个同文案按钮：优先「可见且可点击」的那一个。
+      //
+      // ★ 不能要求「可用数恰好为 1」（真机踩坑 2026-09-28）：上传完成后面板切
+      // 「已添加图片」列表态，React 常常**新节点已渲染、旧节点尚未卸载** ——
+      // 卖家肉眼看到按钮早已变黑，代码却数到 2 个并判定「无法确定唯一目标」，
+      // 一直空等到旧节点被卸载才点击，表现为「按钮可用后很久才点」。
+      // 旧节点即使还 enabled，取 DOM 顺序最后的那个也是安全的：后渲染的
+      // 就是当前列表态在用的节点，而旧节点即将被移除。
       var enabled = pool.filter(function (item) {
         return !item.disabled;
       });
-      if (enabled.length !== 1) {
-        return {
-          ok: false,
-          code: 'CONFIRM_UPLOAD_BUTTON_NOT_FOUND',
-          detail: '文案为「确认上传」的按钮有 ' + pool.length + ' 个，无法确定唯一目标',
-          diagnostics: diagnostics
-        };
+      var enabledVisible = enabled.filter(function (item) {
+        return item.visible;
+      });
+      var pick = enabledVisible.length ? enabledVisible : enabled;
+      if (!pick.length) {
+        // 全都还灰着：正常情况，交给调用方继续等。
+        pick = pool;
       }
-      pool = enabled;
+      diagnostics.multipleCandidates = {
+        candidates: pool.length,
+        enabled: enabled.length,
+        enabledVisible: enabledVisible.length,
+        pickedLast: pick.length > 1
+      };
+      pool = [pick[pick.length - 1]];
     }
 
     var chosen = pool[0];
@@ -980,6 +1069,121 @@
       description: chosen.description,
       diagnostics: diagnostics
     };
+  }
+
+  /**
+   * 在**多个候选作用域**里找「确认上传」按钮。
+   *
+   * 为什么不能只搜一个作用域（真机 2026-09-28 连踩三次）：
+   *   1. findUploadPanelScope 取的是「含 input 的最紧祖先」，底部按钮压根不在里面
+   *      ——在那里面找永远 NOT_FOUND。
+   *   2. 上传前定位到的弹层，上传完成后可能被 React 换掉（节点被卸载）。
+   *   3. 页面上同时存在多个「像上传面板」的弹层时，整页兜底会被
+   *      markedCount <= 1 的守卫否决 —— 于是「所有作用域都找不到」且
+   *      「兜底又被否决」，按钮明明就在屏幕上却一直等满超时。
+   *
+   * 这里把「当前还连在文档里的捕获作用域」+「所有看得见的上传面板」全部列出来
+   * 逐个试，按 可用(2) > 灰着(1) > 没找到(0) 排序，同分时优先「内含 input[type=file]」
+   * 的那个（它是我们正在驱动的上传面板的最强特征）。
+   *
+   * @returns findConfirmUploadButton 的返回值 + scopeSource / scopeElement /
+   *   scopeDescription / scopesTried / openPanels
+   */
+  function findConfirmUploadCandidate(doc, win, options) {
+    var opts = options || {};
+    var scopes = [];
+    var openPanels = findOpenPanelScopes(doc, win);
+    var captured = opts.capturedScope && opts.capturedScope.isConnected !== false ? opts.capturedScope : null;
+
+    /**
+     * 「自己的」面板优先，而且是**排他**的。
+     *
+     * 不能把 capturedScope 与页面上其它可见面板扔进同一个池子里比「谁分高」：
+     * 我们自己的按钮在上传中是灰的（rank 1），而另一个弹层的同名按钮是亮的
+     * （rank 2）—— 一比分数就会**去点别人的按钮**。2026-09-29 单测实证：诱饵
+     * 面板被点了 1 次，而且还要白等 8 秒的「面板关闭」超时。
+     *
+     * capturedScope 只要还在 DOM 里就只用它：
+     *   - 按钮可点击   -> 就是它
+     *   - 存在但灰着   -> 「还在传」，继续等（绝不跨面板去抢一个亮的）
+     *   - 压根找不到   -> 才允许另找候选（面板可能已被 React 换掉）
+     *
+     * 残余风险（本函数不处理）：若 capturedScope 被**整个卸载**，就只能回到下面
+     * 「在可见面板里挑分数最高的」——那时页面若恰好还有另一个弹层的同名亮按钮，
+     * 仍可能选错。不在这里加「markedCount > 1 就拒绝」，是因为页面上常驻多个
+     * 「像上传面板」的节点（连测试夹具里都有一个），一刀切会让正常回填频繁失败；
+     * 真正的收敛点是 bridge 里的整页兜底守卫（markedCount <= 1）。
+     */
+    if (captured) {
+      var own = findConfirmUploadButton(doc, win, captured);
+      if (own.ok || own.code === 'CONFIRM_UPLOAD_BUTTON_DISABLED') {
+        own.scopeSource = 'captured';
+        own.scopeElement = captured;
+        own.scopeDescription = elementDescription(captured);
+        own.scopesTried = [];
+        own.openPanels = openPanels.markedCount;
+        return own;
+      }
+    }
+
+    function push(node, source) {
+      // 已被 React 卸载的节点不能再当作用域：在它里面能 querySelectorAll 到按钮，
+      // 但点它等于点了空气（真机 2026-09-28：点完面板纹丝不动）。
+      if (!node || node.isConnected === false) {
+        return;
+      }
+      for (var i = 0; i < scopes.length; i += 1) {
+        if (scopes[i].element === node) {
+          return;
+        }
+      }
+      scopes.push({ element: node, source: source });
+    }
+
+    push(captured, 'captured');
+    for (var i = 0; i < openPanels.elements.length; i += 1) {
+      push(openPanels.elements[i], 'open-panel');
+    }
+
+    var tried = [];
+    var best = null;
+    for (var s = 0; s < scopes.length; s += 1) {
+      var scope = scopes[s];
+      var probe = findConfirmUploadButton(doc, win, scope.element);
+      var rank = probe.ok ? 2 : (probe.code === 'CONFIRM_UPLOAD_BUTTON_DISABLED' ? 1 : 0);
+      var hasFileInput = !!(scope.element.querySelectorAll &&
+        scope.element.querySelectorAll(FILE_INPUT_SELECTOR).length > 0);
+      tried.push({
+        source: scope.source,
+        description: elementDescription(scope.element),
+        code: probe.ok ? 'CONFIRM_UPLOAD_BUTTON_READY' : (probe.code || null),
+        candidateCount: probe.diagnostics ? probe.diagnostics.candidateCount : null,
+        hasFileInput: hasFileInput
+      });
+      var score = rank * 10 + (hasFileInput ? 1 : 0);
+      if (!best || score > best.score) {
+        best = { score: score, probe: probe, scope: scope };
+      }
+    }
+
+    if (!best) {
+      return {
+        ok: false,
+        code: 'CONFIRM_UPLOAD_BUTTON_NOT_FOUND',
+        scopesTried: tried,
+        openPanels: openPanels.markedCount,
+        scopeSource: 'none',
+        diagnostics: { scanned: [] }
+      };
+    }
+
+    var result = best.probe;
+    result.scopeSource = best.scope.source;
+    result.scopeElement = best.scope.element;
+    result.scopeDescription = elementDescription(best.scope.element);
+    result.scopesTried = tried;
+    result.openPanels = openPanels.markedCount;
+    return result;
   }
 
   /** 一次性汇总上传面板结构（用于阶段日志，便于改版后快速定位问题） */
@@ -1046,10 +1250,13 @@
     findDropZone: findDropZone,
     findUploadPanelScope: findUploadPanelScope,
     findModalScope: findModalScope,
+    findOpenPanelScopes: findOpenPanelScopes,
+    looksLikeUploadPanel: looksLikeUploadPanel,
     findFileInput: findFileInput,
     surveyPanelButtons: surveyPanelButtons,
     isDisabled: isDisabled,
     findConfirmUploadButton: findConfirmUploadButton,
+    findConfirmUploadCandidate: findConfirmUploadCandidate,
     describeUploadPanel: describeUploadPanel
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

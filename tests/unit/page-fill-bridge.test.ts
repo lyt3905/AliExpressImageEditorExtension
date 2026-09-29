@@ -77,6 +77,8 @@ interface BridgeStage {
   stageLabel: string;
   status: 'ok' | 'notice' | 'failed';
   message: string;
+  /** Offset from the start of the run; adjacent values give a step's own duration. */
+  elapsedMs?: number;
   /**
    * Sanitized by `messages.sanitizeForLog` before it leaves the page, so treat
    * values as `unknown` rather than assuming the shape the bridge passed in.
@@ -92,7 +94,20 @@ interface BridgeResult {
   message: string;
   stages: BridgeStage[];
   upload: { status: string; confirmed: boolean; strategy: string } | null;
-  confirmUpload: { clicked: boolean; found: boolean; panelClosed?: boolean; buttonText: string | null } | null;
+  confirmUpload: {
+    clicked: boolean;
+    found: boolean;
+    panelClosed?: boolean;
+    buttonText: string | null;
+    waitedMs?: number | null;
+    panelCloseWaitedMs?: number | null;
+  } | null;
+  timings?: {
+    totalMs: number;
+    waitUploadMs: number | null;
+    waitConfirmButtonMs: number | null;
+    waitPanelCloseMs: number | null;
+  };
 }
 
 interface PageHandles {
@@ -108,6 +123,14 @@ interface PageHandles {
       doc: Document,
       win: Window,
     ) => { ok: boolean; code?: string; element?: Element; matchedBy?: string };
+  };
+  domWait: {
+    waitFor: (options: Record<string, unknown>) => Promise<{
+      ok: boolean;
+      timedOut: boolean;
+      elapsed: number;
+      polls: number;
+    }>;
   };
 }
 
@@ -135,9 +158,16 @@ function loadVendorChain(): PageHandles {
     (0, eval)(readFileSync(resolve(VENDOR_ROOT, file), 'utf-8'));
   }
 
-  const ns = (globalThis as unknown as Record<string, { pageFillBridge: Bridge; uploadLocator: PageHandles['locator'] }>)
-    .AEIIR;
-  return { window: window as Window & typeof globalThis, bridge: ns.pageFillBridge, locator: ns.uploadLocator };
+  const ns = (globalThis as unknown as Record<
+    string,
+    { pageFillBridge: Bridge; uploadLocator: PageHandles['locator']; domWait: PageHandles['domWait'] }
+  >).AEIIR;
+  return {
+    window: window as Window & typeof globalThis,
+    bridge: ns.pageFillBridge,
+    locator: ns.uploadLocator,
+    domWait: ns.domWait,
+  };
 }
 
 /**
@@ -224,6 +254,136 @@ function installFakeUploadPanel(): {
     openPanel();
   });
 
+  return state;
+}
+
+/**
+ * Stand in for the REAL upload-dialog timing (2026-09-28).
+ *
+ * What the live console actually does, and what the old code could not cope with:
+ *   1. the thumbnail appears immediately — which is what the upload-wait step
+ *      treats as "uploaded", so it returns long before the upload is over;
+ *   2. the 「确认上传」 button stays greyed out until the upload finishes;
+ *   3. once it does, the panel switches to its list state and the drop zone —
+ *      the only anchor the old panel probe had — is removed from the DOM.
+ *
+ * @param settleMs how long the fake upload takes
+ * @param rerender replace the whole modal node on settle, the way React does,
+ *   instead of enabling the button in place
+ */
+function installSlowUploadPanel(options: { settleMs: number; rerender?: boolean }): {
+  confirmClicks: number;
+  decoyClicks: number;
+  panelIsOpen: () => boolean;
+} {
+  const state = {
+    confirmClicks: 0,
+    decoyClicks: 0,
+    panelIsOpen: () => document.querySelector('.material-center-modal') !== null,
+  };
+
+  const buildModal = (): HTMLElement => {
+    const modal = document.createElement('div');
+    modal.className = 'material-center-modal';
+    modal.innerHTML = `
+      <div class="material-center-upload-drag">点击此处或者将文件拖至此处</div>
+      <div class="material-center-upload-list"></div>
+      <input type="file" accept="image/png" />
+      <div class="modal-footer">
+        <button type="button" class="confirm-upload" disabled>确认上传</button>
+      </div>`;
+    return modal;
+  };
+
+  const wireConfirm = (modal: HTMLElement): void => {
+    const button = modal.querySelector('button.confirm-upload') as HTMLButtonElement;
+    button.addEventListener('click', () => {
+      state.confirmClicks += 1;
+      modal.remove();
+    });
+  };
+
+  const openPanel = (): void => {
+    const modal = buildModal();
+    document.body.appendChild(modal);
+    wireConfirm(modal);
+
+    const input = modal.querySelector('input[type="file"]') as HTMLInputElement;
+    input.addEventListener('change', () => {
+      const list = modal.querySelector('.material-center-upload-list') as HTMLElement;
+      const item = document.createElement('div');
+      item.className = 'material-center-upload-list-item';
+      item.innerHTML = '<img src="blob:preview" alt="preview" />';
+      list.appendChild(item);
+
+      const progress = document.createElement('div');
+      progress.className = 'ant-progress';
+      modal.appendChild(progress);
+
+      setTimeout(() => {
+        progress.remove();
+        if (options.rerender) {
+          // The whole node is replaced: the modal the flow captured before the
+          // upload is now detached, and so is the drop zone it anchored on.
+          const replacement = buildModal();
+          replacement.querySelector('.material-center-upload-drag')?.remove();
+          (replacement.querySelector('button.confirm-upload') as HTMLButtonElement).disabled = false;
+          document.body.appendChild(replacement);
+          wireConfirm(replacement);
+          modal.remove();
+          return;
+        }
+        modal.querySelector('.material-center-upload-drag')?.remove();
+        (modal.querySelector('button.confirm-upload') as HTMLButtonElement).disabled = false;
+      }, options.settleMs);
+    });
+  };
+
+  const trigger = document.querySelector('.imageUploadWrap');
+  if (!trigger) throw new Error('installSlowUploadPanel 需要 .imageUploadWrap');
+  trigger.addEventListener('click', (event) => {
+    if (!(event.target as Element | null)?.closest?.('div.image-upload-btn, div.upload-content')) return;
+    openPanel();
+  });
+
+  return state;
+}
+
+/**
+ * A panel whose 「确认上传」 never becomes clickable — and which shows no
+ * progress bar either. Used to prove the diagnostics can tell "the page is
+ * still busy" apart from "we are waiting on the wrong button".
+ */
+function installStuckConfirmButton(): void {
+  const trigger = document.querySelector('.imageUploadWrap');
+  if (!trigger) throw new Error('installStuckConfirmButton 需要 .imageUploadWrap');
+  trigger.addEventListener('click', (event) => {
+    if (!(event.target as Element | null)?.closest?.('div.image-upload-btn, div.upload-content')) return;
+    const modal = document.createElement('div');
+    modal.className = 'material-center-modal';
+    modal.innerHTML = `
+      <div class="material-center-upload-drag">点击此处或者将文件拖至此处</div>
+      <div class="material-center-upload-list"></div>
+      <input type="file" accept="image/png" />
+      <div class="modal-footer">
+        <button type="button" class="confirm-upload" disabled>确认上传</button>
+      </div>`;
+    document.body.appendChild(modal);
+  });
+}
+
+/** A second, unrelated upload dialog whose 「确认上传」 is ready right now. */
+function installDecoyUploadPanel(): { clicks: number } {
+  const state = { clicks: 0 };
+  const modal = document.createElement('div');
+  modal.className = 'ant-modal';
+  modal.innerHTML = `
+    <input type="file" accept="image/png" />
+    <div class="modal-footer"><button type="button" class="decoy-confirm">确认上传</button></div>`;
+  document.body.appendChild(modal);
+  (modal.querySelector('button.decoy-confirm') as HTMLButtonElement).addEventListener('click', () => {
+    state.clicks += 1;
+  });
   return state;
 }
 
@@ -529,6 +689,41 @@ describe('page-fill bridge — runFill', () => {
     expect(result.stages[0]?.diagnostics.allSlotsFull).toBe(false);
   });
 
+  it('clicks the freshly rendered 「确认上传」 even while a stale one is still in the DOM', async () => {
+    // Real-device bug (2026-09-28): once the upload finishes the panel switches
+    // to its "added images" list state, and React renders the new footer before
+    // unmounting the old one. Two 「确认上传」 buttons then coexist, the stale one
+    // still disabled. Requiring "exactly one enabled button" made the flow wait
+    // for the old node to disappear — the seller saw a clickable button and
+    // nothing happening for seconds.
+    const panel = installFakeUploadPanel();
+    // No upload entry left, so the run reuses the already-open panel instead of
+    // opening a second one (which would leave the stale button in the wrong dialog).
+    document.querySelector('.image-upload-btn')?.remove();
+    panel.open();
+
+    const footer = document.querySelector('div.material-center-modal .modal-footer');
+    if (!footer) throw new Error('夹具需要 .modal-footer');
+    const stale = document.createElement('button');
+    stale.type = 'button';
+    stale.className = 'stale-confirm';
+    stale.disabled = true;
+    stale.textContent = '确认上传';
+    let staleClicks = 0;
+    stale.addEventListener('click', () => {
+      staleClicks += 1;
+    });
+    footer.insertBefore(stale, footer.firstChild);
+
+    const result = await page.bridge.runFill(fillRequest());
+
+    expect(result.ok).toBe(true);
+    // The stale node must not win, and the fresh one must still be clicked.
+    expect(staleClicks).toBe(0);
+    expect(panel.confirmClicks).toBe(1);
+    expect(result.confirmUpload?.clicked).toBe(true);
+  });
+
   it('resumes when the user already opened the panel by hand, instead of failing again', async () => {
     // "Open the panel yourself" must not be a dead end: the user does it, clicks
     // 回填 again, and the button is still missing because the page renders it only
@@ -585,6 +780,51 @@ describe('page-fill bridge — runFill', () => {
     expect(result.ok).toBe(true);
     expect(result.confirmUpload?.clicked).toBe(false);
     expect(result.stages.some((stage) => stage.stage === 'CONFIRM_UPLOAD' && stage.status === 'notice')).toBe(true);
+  });
+
+  it('waits for a slow upload to finish before clicking 「确认上传」', async () => {
+    // Real console (2026-09-28): the thumbnail arrives instantly, so the upload
+    // wait is satisfied long before the image has actually been uploaded — and
+    // until then the button is greyed out. An 8s ceiling used to expire mid-way,
+    // leaving the dialog on screen with nobody left to click it.
+    const panel = installSlowUploadPanel({ settleMs: 200 });
+
+    const result = await page.bridge.runFill(fillRequest({ confirmTimeout: 3000 }));
+
+    expect(result.status).toBe('success');
+    expect(panel.confirmClicks).toBe(1);
+    expect(result.confirmUpload?.clicked).toBe(true);
+    expect(result.confirmUpload?.panelClosed).toBe(true);
+    expect(panel.panelIsOpen()).toBe(false);
+  });
+
+  it('still finds 「确认上传」 when the panel is re-rendered during the upload', async () => {
+    // The sequel: React swaps the whole modal node, so both anchors the flow
+    // captured before uploading (the drop zone and the modal root) are detached
+    // at the exact moment the button becomes clickable.
+    const panel = installSlowUploadPanel({ settleMs: 200, rerender: true });
+
+    const result = await page.bridge.runFill(fillRequest({ confirmTimeout: 3000 }));
+
+    expect(result.status).toBe('success');
+    expect(panel.confirmClicks).toBe(1);
+    expect(result.confirmUpload?.clicked).toBe(true);
+  });
+
+  it('never clicks another dialog’s 「确认上传」 while this upload is still running', async () => {
+    // The tempting shortcut is a whole-document scan, which would find the decoy
+    // button immediately. Only one upload panel may be trusted as ours.
+    const panel = installSlowUploadPanel({ settleMs: 60_000 });
+    const decoy = installDecoyUploadPanel();
+
+    const result = await page.bridge.runFill(fillRequest({ confirmTimeout: 400 }));
+
+    expect(decoy.clicks).toBe(0);
+    expect(panel.confirmClicks).toBe(0);
+    expect(result.confirmUpload?.clicked).toBe(false);
+    const stage = result.stages.find((entry) => entry.stage === 'CONFIRM_UPLOAD');
+    expect(stage?.status).toBe('notice');
+    expect(stage?.message).toContain('一直不可点击');
   });
 });
 
@@ -848,5 +1088,138 @@ describe('page-fill bridge — message entry point', () => {
     const before = messageListeners.length;
     (0, eval)(readFileSync(resolve(VENDOR_ROOT, 'bridge.js'), 'utf-8'));
     expect(messageListeners).toHaveLength(before);
+  });
+});
+
+describe('timing instrumentation', () => {
+  let page: PageHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = FIXTURE;
+    page = loadVendorChain();
+  });
+
+  /**
+   * A slow fill used to be undiagnosable: the result only carried the run's
+   * total, so "the upload was slow" and "we waited on the confirm button"
+   * looked identical from the outside.
+   */
+  it('stamps every stage with an offset from the start of the run', async () => {
+    installFakeUploadPanel();
+
+    const result = await page.bridge.runFill(fillRequest());
+
+    expect(result.status).toBe('success');
+    expect(result.stages.length).toBeGreaterThan(1);
+    for (const stage of result.stages) {
+      expect(typeof stage.elapsedMs).toBe('number');
+    }
+    // Offsets are cumulative, so they must never go backwards.
+    const offsets = result.stages.map((stage) => stage.elapsedMs ?? 0);
+    const sorted = [...offsets].sort((a, b) => a - b);
+    expect(offsets).toEqual(sorted);
+  });
+
+  it('breaks the total down into the waits that actually cost time', async () => {
+    installFakeUploadPanel();
+
+    const result = await page.bridge.runFill(fillRequest());
+
+    expect(result.timings).toBeDefined();
+    expect(typeof result.timings?.totalMs).toBe('number');
+    // The upload wait is reported by the injector; the confirm wait by the bridge.
+    expect(typeof result.timings?.waitUploadMs).toBe('number');
+    expect(typeof result.timings?.waitConfirmButtonMs).toBe('number');
+    expect(result.confirmUpload?.waitedMs).toBe(result.timings?.waitConfirmButtonMs);
+  });
+
+  it('reports how long the button stayed unclickable, so a slow page is distinguishable from a wrong button', async () => {
+    // Button exists but stays disabled: the diagnostics must say so rather than
+    // just reporting a timeout, otherwise "page was busy" and "we looked in the
+    // wrong place" read the same.
+    installStuckConfirmButton();
+
+    const result = await page.bridge.runFill(fillRequest({ confirmTimeout: 1200 }));
+
+    const confirm = result.stages.find((stage) => stage.stage === 'CONFIRM_UPLOAD');
+    expect(confirm?.status).toBe('notice');
+    const diagnostics = confirm?.diagnostics as {
+      lastSnapshot?: { disabledStalledMs?: number; uploadBusy?: boolean; progressElements?: number };
+    };
+    // Long enough for more than one poll: with a single poll the button becomes
+    // "stalled" and the final snapshot is taken in the same millisecond, so the
+    // stalled duration would legitimately read 0.
+    expect(diagnostics.lastSnapshot?.disabledStalledMs).toBeGreaterThan(0);
+    // And it must not have mistaken the page's own progress bars for an upload
+    // in flight — otherwise "still uploading" would be true forever.
+    expect(diagnostics.lastSnapshot?.uploadBusy).toBe(false);
+  });
+});
+
+describe('polling throttle', () => {
+  let page: PageHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = FIXTURE;
+    page = loadVendorChain();
+  });
+
+  it('compresses a mutation storm instead of re-scanning the document on every callback', async () => {
+    // On a heavy seller page a MutationObserver rooted at `document` fires on
+    // every repaint; running a full-document scan each time makes the page — and
+    // therefore the button we are waiting for — slower.
+    let calls = 0;
+    const storms: number[] = [];
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+
+    const stop = window.setInterval(() => {
+      const node = document.createElement('span');
+      node.textContent = String(storms.length);
+      target.appendChild(node);
+      storms.push(storms.length);
+    }, 5);
+
+    const waited = await page.domWait.waitFor({
+      doc: document,
+      win: window,
+      stage: 'THROTTLE_PROBE',
+      description: 'throttled probe',
+      timeout: 1000,
+      pollInterval: 5,
+      throttleMs: 60,
+      observeTarget: document,
+      check: () => {
+        calls += 1;
+        return { done: storms.length >= 30, snapshot: { calls } };
+      },
+    });
+
+    window.clearInterval(stop);
+    target.remove();
+
+    expect(waited.ok).toBe(true);
+    // ~150ms of storming at 5ms intervals would be ~30 callbacks unthrottled;
+    // throttled to 60ms it must be a small fraction of that.
+    expect(calls).toBeLessThan(12);
+  });
+
+  it('still resolves promptly when the condition is already true', async () => {
+    const started = Date.now();
+    const waited = await page.domWait.waitFor({
+      doc: document,
+      win: window,
+      stage: 'THROTTLE_PROBE',
+      description: 'already true',
+      timeout: 1000,
+      pollInterval: 60,
+      throttleMs: 60,
+      observeTarget: document,
+      check: () => ({ done: true, value: { ok: true } }),
+    });
+
+    expect(waited.ok).toBe(true);
+    // The first check must not be deferred by the throttle window.
+    expect(Date.now() - started).toBeLessThan(200);
   });
 });

@@ -554,6 +554,8 @@
       description: '等待上传结果',
       timeout: typeof opts.timeout === 'number' ? opts.timeout : DEFAULT_UPLOAD_TIMEOUT,
       pollInterval: opts.pollInterval || 300,
+      // 默认 0（不节流）保持原行为；调用方可显式开启来压住 MutationObserver 风暴。
+      throttleMs: typeof opts.throttleMs === 'number' ? opts.throttleMs : 0,
       observeTarget: doc,
       check: function () {
         var success = hasSuccessMarker(doc);

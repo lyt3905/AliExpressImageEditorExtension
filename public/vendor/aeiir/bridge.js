@@ -39,8 +39,26 @@
 
   /** 点击上传按钮后，等待上传面板出现的上限。 */
   var DEFAULT_PANEL_TIMEOUT = 8000;
-  /** 等待「确认上传」按钮可点击、以及点击后等待面板关闭的上限。 */
-  var DEFAULT_CONFIRM_TIMEOUT = 8000;
+  /**
+   * 等待「确认上传」按钮变成可点击的上限。
+   *
+   * 必须比「上传耗时」长：真机（2026-09-28）800×800 的 PNG 传完要十几秒，期间
+   * 按钮是灰的（或压根还没渲染出来）。8 秒的上限会在上传刚过半时就放弃，
+   * 等用户看到图传完，扩展早已经收工了 —— 屏幕上的面板于是永远没人点。
+   * 面板真的关了会立刻退出，所以放宽上限只影响失败场景的等待时长。
+   */
+  var DEFAULT_CONFIRM_TIMEOUT = 25000;
+  /** 点击「确认上传」之后，等待面板关闭的上限。 */
+  var DEFAULT_PANEL_CLOSE_TIMEOUT = 8000;
+  /**
+   * 「确认上传」按钮**压根没找到**（不是「灰着」）时，放弃等待的上限。
+   *
+   * 「没找到」和「还没传完」是两回事：前者说明我们搜错了作用域，再等也不会出现，
+   * 干等到 25 秒只会让用户觉得「上传完还在这个页面卡好久」；后者才是值得等满的。
+   */
+  var CONFIRM_NOT_FOUND_GIVE_UP_MS = 8000;
+  /** 点击「确认上传」的最大次数（只有「点了但被点的节点随即被换掉」才重试）。 */
+  var MAX_CONFIRM_CLICK_ATTEMPTS = 3;
   /** 等待上传完成（服务端信号）的上限。 */
   var DEFAULT_UPLOAD_TIMEOUT = 25000;
   /** 点击旧图的删除图标后，等待它从图片区消失的上限。 */
@@ -574,6 +592,9 @@
   function createRecorder() {
     var stages = [];
     var failure = null;
+    // 阶段耗时：只有「总 elapsedMs」时无法定位慢在哪一步，所以每落一条阶段日志
+    // 就附上它相对 runFill 起点的偏移（相邻两条相减即该段自身耗时）。
+    var startedAt = Date.now();
 
     function push(stage, status, message, diagnostics) {
       stages.push({
@@ -581,6 +602,7 @@
         stageLabel: STAGE_LABELS[stage] || stage,
         status: status,
         message: message || '',
+        elapsedMs: Date.now() - startedAt,
         diagnostics: messagesModule.sanitizeForLog(diagnostics || {})
       });
     }
@@ -685,9 +707,12 @@
    * 「面板已关」，流程跳过「确认上传」直接结束 —— 弹层永远留在屏幕上。
    *
    * 锚点必须是「具体元素」：document.body / documentElement 永远 isConnected，
-   * 拿它们当锚点会把「没有面板」谎报成「面板开着」。两个锚点都断开时允许重扫一次，
-   * 但重扫结果必须能确认「拖拽区在弹层里」—— findDropZone 的兜底选择器会命中
-   * 商品表单自己的 .image-uploader，不验这一层就会把「没有面板」谎报成「开着」。
+   * 拿它们当锚点会把「没有面板」谎报成「面板开着」。
+   *
+   * 两个锚点都断开时（上传完成后面板重渲染、老节点被换掉，同时拖拽区被移除）
+   * 重扫一次，且重扫走 **findOpenPanelScopes 的全文档面板扫描**，不再依赖拖拽区：
+   * 拖拽区在列表态里已经不存在了，拿它当重扫的前提，等于在这个最关键的时刻
+   * 必然得出「面板已关」—— 正是这一步让真机上的「确认上传」没人点。
    */
   function makePanelProbe(dropZoneElement, modalElement, doc, win) {
     var body = doc && doc.body;
@@ -705,12 +730,7 @@
       if (modalAnchor && modalAnchor.isConnected) {
         return true;
       }
-      var zone = uploadLocator.findDropZone(doc, win);
-      if (!zone.ok) {
-        return false;
-      }
-      var modal = uploadLocator.findModalScope(doc, zone.element, win);
-      return !!(modal && modal.element);
+      return uploadLocator.findOpenPanelScopes(doc, win).markedCount > 0;
     };
   }
 
@@ -722,14 +742,34 @@
    * - 按钮可点击 -> 点击，并观察面板是否关闭（关闭是「已应用到商品」的有力旁证）
    * - 等待期间面板已消失 -> 视为「拖入即生效」，不算失败
    * - 始终找不到 -> notice，不阻断整条流程
+   *
+   * 两条真机（2026-09-28）教训，都写进下面的实现：
+   * - **作用域不能钉死在上传前拿到的那个节点上**：面板上传完会重渲染，老节点被
+   *   换掉后就再也扫不到按钮。每轮轮询都重新解析一次作用域。
+   * - **「上传中」不算没找到按钮**：按钮在上传完成前是灰的或尚未渲染，必须一直
+   *   等到它可点击（超时上限见 DEFAULT_CONFIRM_TIMEOUT）。
    */
   function confirmUploadIfNeeded(options) {
     var doc = options.doc;
     var win = options.win;
     var recorder = options.recorder;
     var isPanelOpen = options.isPanelOpen;
-    var scope = options.buttonScope || (doc && doc.body) || doc;
+    var capturedScope = options.buttonScope || null;
     var waitLimit = options.timeout > 0 ? options.timeout : DEFAULT_CONFIRM_TIMEOUT;
+
+    /**
+     * 本轮要在里面找按钮的作用域（诊断 / 进度统计用）。
+     *
+     * 真正的按钮搜索已改由 uploadLocator.findConfirmUploadCandidate 完成：
+     * 它会把「捕获到的弹层」和「所有看得见的上传面板」一起试，不再赌某一个
+     * 作用域一定对（见该函数注释里的三次真机踩坑）。
+     */
+    function resolveScope() {
+      if (capturedScope && capturedScope.isConnected !== false) {
+        return capturedScope;
+      }
+      return uploadLocator.findOpenPanelScopes(doc, win).elements[0] || null;
+    }
 
     if (options.click === false) {
       recorder.notice('CONFIRM_UPLOAD', '已按设置跳过「确认上传」', { skipped: true });
@@ -738,7 +778,14 @@
 
     var found = null;
     var lastProbe = null;
+    var lastSnapshot = null;
     var scopeUsed = 'panel';
+    var sawProgress = false;
+    var notFoundSince = 0;
+    // 「按钮灰着、页面上又看不到任何上传进度」持续了多久。用来区分两种完全不同的
+    // 等待：页面真在传（有进度）vs 我们压根没找对按钮（一直灰着且无进度）。
+    // 目前只做诊断、不改变行为 —— 提前放弃比多等一会儿更容易误伤。
+    var stalledSince = 0;
 
     return domWait
       .waitFor({
@@ -747,105 +794,221 @@
         stage: 'CONFIRM_UPLOAD',
         description: '等待「确认上传」按钮可点击',
         timeout: waitLimit,
-        pollInterval: 150,
-        observeTarget: scope,
+        // 探测粒度：每 0.5 秒探一次「确认上传」是否可用，可用就点。
+        // 500ms 已经足够稀疏，不再需要 throttleMs 挡 MutationObserver 风暴；
+        // 代价是最坏比 60ms 粒度晚 440ms 才发现，换来的是每次回填只扫
+        // 数十次而不是数百次 DOM —— 不跟宿主页面抢主线程更重要。
+        pollInterval: 500,
+        observeTarget: doc,
         check: function () {
-          var probe = uploadLocator.findConfirmUploadButton(doc, win, scope);
+          // 一次把「捕获到的弹层 + 所有看得见的上传面板」都试一遍，取最好的结果。
+          // 只在一个作用域里找会漏：底部按钮不在「含 input 的最紧祖先」里，
+          // 而弹层又可能被 React 换掉。
+          var probe = uploadLocator.findConfirmUploadCandidate(doc, win, { capturedScope: capturedScope });
+
+          // 进度只认「找到按钮的那个面板」里的。扫整个文档会把页面别处常驻的进度条
+          // （商品页其它模块就有）算成上传中，于是「还在传」永远成立，
+          // 恰好把「按钮一直灰着」这个唯一有用的信号盖掉。
+          var progressScope = probe.scopeElement || null;
+          var progress = fileInjector.countProgressElements(progressScope || doc);
+          if (progress.count > 0) {
+            sawProgress = true;
+          }
+
+          // 所有面板作用域里都没有这个按钮（而不是「有但还灰着」）时，才考虑整页扫描：
+          // 有些实现的底部按钮挂在弹层之外。整页扫描只在页面上最多一个上传面板时
+          // 才采信 —— 否则会把别的弹层（例如视频上传）的按钮当成我们这一个。
+          if (!probe || probe.code === 'CONFIRM_UPLOAD_BUTTON_NOT_FOUND') {
+            if (!notFoundSince) {
+              notFoundSince = Date.now();
+            }
+            if (uploadLocator.findOpenPanelScopes(doc, win).markedCount <= 1) {
+              var whole = uploadLocator.findConfirmUploadButton(doc, win, (doc && doc.body) || doc);
+              if (whole.ok) {
+                probe = whole;
+                scopeUsed = 'document';
+              }
+            }
+          } else {
+            notFoundSince = 0;
+          }
+
           lastProbe = probe;
-          if (probe.ok) {
+          var stalled = !!(probe && probe.code === 'CONFIRM_UPLOAD_BUTTON_DISABLED') && progress.count === 0;
+          if (stalled) {
+            if (!stalledSince) {
+              stalledSince = Date.now();
+            }
+          } else {
+            stalledSince = 0;
+          }
+          lastSnapshot = {
+            ready: !!(probe && probe.ok),
+            lastCode: probe ? (probe.ok ? 'CONFIRM_UPLOAD_BUTTON_READY' : probe.code) : 'PANEL_SCOPE_NOT_FOUND',
+            scopeSource: probe ? probe.scopeSource || 'none' : 'none',
+            openPanels: typeof probe.openPanels === 'number' ? probe.openPanels : null,
+            notFoundMs: notFoundSince ? Date.now() - notFoundSince : 0,
+            progressElements: progress.count,
+            uploadBusy: progress.count > 0,
+            disabledStalledMs: stalledSince ? Date.now() - stalledSince : 0
+          };
+
+          if (probe && probe.ok) {
             found = probe;
             return { done: true, value: { text: probe.text }, snapshot: { ready: true, text: probe.text } };
           }
           if (!isPanelOpen()) {
             return { done: true, value: { reason: 'panel-gone' }, snapshot: { ready: false, reason: 'panel-gone' } };
           }
-          return { done: false, snapshot: { ready: false, lastCode: probe.code } };
+          // 「一直没找到」不是「还在传」：搜错了作用域再等也不会出现，
+          // 提前收工并如实上报，别让用户盯着面板干等满 25 秒。
+          if (notFoundSince && Date.now() - notFoundSince >= CONFIRM_NOT_FOUND_GIVE_UP_MS) {
+            return {
+              done: true,
+              value: { reason: 'button-not-found' },
+              snapshot: { ready: false, reason: 'button-not-found' }
+            };
+          }
+          return { done: false, snapshot: lastSnapshot };
         }
       })
       .then(function (waited) {
         var panelGone = !!(waited.value && waited.value.reason === 'panel-gone');
 
-        // 弹层作用域内没找到时，做一次整页扫描（只做一次，不参与轮询）：
-        // 有些实现的底部按钮挂在弹层之外的容器里。
+        // 超时退出时再补一次整页扫描（按钮可能就在这次轮询和上一次之间出现）：
+        // 同样只在页面上最多一个上传面板时才采信。
         if (!found && !panelGone) {
-          var fallback = uploadLocator.findConfirmUploadButton(doc, win, (doc && doc.body) || doc);
-          if (fallback.ok) {
-            found = fallback;
-            scopeUsed = 'document';
+          if (uploadLocator.findOpenPanelScopes(doc, win).markedCount <= 1) {
+            var fallback = uploadLocator.findConfirmUploadButton(doc, win, (doc && doc.body) || doc);
+            if (fallback.ok) {
+              found = fallback;
+              scopeUsed = 'document';
+            }
           }
         }
 
         if (!found) {
           var reason = panelGone
             ? '上传面板已经消失，判断为「投进去即生效」，无需点击「确认上传」'
-            : (waited.snapshot && waited.snapshot.lastCode === 'CONFIRM_UPLOAD_BUTTON_DISABLED'
-                ? '上传面板内的「确认上传」按钮一直不可点击'
+            : (lastProbe && lastProbe.code === 'CONFIRM_UPLOAD_BUTTON_DISABLED'
+                ? '上传面板内的「确认上传」按钮一直不可点击（图片可能还在上传中）'
                 : '上传面板内未找到「确认上传」按钮');
           var scanned = (lastProbe && lastProbe.diagnostics && lastProbe.diagnostics.scanned) || [];
           recorder.notice('CONFIRM_UPLOAD', reason, {
             waitedMs: waited.elapsed,
-            buttonScope: messagesModule.describeElement(scope),
-            lastSnapshot: waited.snapshot,
+            buttonScope: messagesModule.describeElement(resolveScope()),
+            scopeUsed: scopeUsed,
+            sawUploadProgress: sawProgress,
+            lastSnapshot: lastSnapshot || waited.snapshot,
             panelButtons: scanned
           });
-          return { skipped: false, clicked: false, found: false, panelGone: panelGone, text: null, scanned: scanned };
+          return {
+            skipped: false,
+            clicked: false,
+            found: false,
+            panelGone: panelGone,
+            text: null,
+            scanned: scanned,
+            waitedMs: waited.elapsed
+          };
         }
 
-        var clickMethods = [];
-        try {
-          clickMethods = clickElement(found.element, win);
-        } catch (err) {
-          recorder.notice('CONFIRM_UPLOAD', '「确认上传」按钮点击失败：' + (err && err.message ? err.message : String(err)), {
-            buttonText: found.text
-          });
-          return { skipped: false, clicked: false, found: true, text: found.text, panelClosed: false };
-        }
-
-        return domWait
-          .waitFor({
-            doc: doc,
-            win: win,
-            stage: 'CONFIRM_UPLOAD',
-            description: '等待上传面板关闭',
-            timeout: DEFAULT_CONFIRM_TIMEOUT,
-            pollInterval: 150,
-            observeTarget: doc,
-            check: function () {
-              if (!isPanelOpen()) {
-                return { done: true, value: { reason: 'panel-gone' }, snapshot: { panelOpen: false } };
-              }
-              return { done: false, snapshot: { panelOpen: true } };
-            }
-          })
-          .then(function (closed) {
-            var diagnostics = {
-              buttonText: found.text,
-              buttonDescription: found.description,
-              buttonScopeUsed: scopeUsed,
-              clickMethods: clickMethods,
-              waitedMs: waited.elapsed,
-              panelClosed: !!closed.ok,
-              panelCloseWaitedMs: closed.elapsed
-            };
-            if (closed.ok) {
-              recorder.ok('CONFIRM_UPLOAD', '已点击「' + found.text + '」，上传面板已关闭', diagnostics);
-            } else {
-              recorder.notice(
-                'CONFIRM_UPLOAD',
-                '已点击「' + found.text + '」，但上传面板仍未关闭，请回页面人工确认图片是否已应用',
-                diagnostics
-              );
-            }
-            return {
-              skipped: false,
-              clicked: true,
-              found: true,
-              text: found.text,
-              panelClosed: !!closed.ok,
-              clickMethods: clickMethods
-            };
-          });
+        return clickUntilClosed(found, waited.elapsed, []);
       });
+
+    /**
+     * 点击「确认上传」并观察面板是否关闭。
+     *
+     * 只在一种情况下重试：**被点的那个节点随后从 DOM 里消失了，而面板还开着**。
+     * 这说明我们点在了 React 即将丢弃的旧节点上（事件跟着旧节点一起没了），
+     * 这一下等于点了空气。正常情况点一次面板就关，不会走到这里。
+     *
+     * 反过来，如果节点还在、面板也没关，就不能再点第二次 —— 那可能是页面真的慢，
+     * 再点一次有把同一张图插入两遍的风险。
+     */
+    function clickUntilClosed(target, waitedMs, attempts) {
+      var list = attempts || [];
+      var clickMethods = [];
+      try {
+        clickMethods = clickElement(target.element, win);
+      } catch (err) {
+        recorder.notice('CONFIRM_UPLOAD', '「确认上传」按钮点击失败：' + (err && err.message ? err.message : String(err)), {
+          buttonText: target.text
+        });
+        return Promise.resolve({ skipped: false, clicked: false, found: true, text: target.text, panelClosed: false });
+      }
+
+      return domWait
+        .waitFor({
+          doc: doc,
+          win: win,
+          stage: 'CONFIRM_UPLOAD',
+          description: '等待上传面板关闭',
+          timeout: DEFAULT_PANEL_CLOSE_TIMEOUT,
+          pollInterval: 80,
+          throttleMs: 40,
+          observeTarget: doc,
+          check: function () {
+            if (!isPanelOpen()) {
+              return { done: true, value: { reason: 'panel-gone' }, snapshot: { panelOpen: false } };
+            }
+            return { done: false, snapshot: { panelOpen: true } };
+          }
+        })
+        .then(function (closed) {
+          list.push({
+            text: target.text,
+            scopeSource: target.scopeSource || scopeUsed,
+            clickMethods: clickMethods,
+            panelClosed: !!closed.ok,
+            panelCloseWaitedMs: closed.elapsed,
+            clickTargetStillConnected: target.element.isConnected !== false
+          });
+
+          if (!closed.ok && list.length < MAX_CONFIRM_CLICK_ATTEMPTS && target.element.isConnected === false) {
+            var again = uploadLocator.findConfirmUploadCandidate(doc, win, { capturedScope: capturedScope });
+            if (again.ok) {
+              return clickUntilClosed(again, waitedMs, list);
+            }
+          }
+          return finishClick(target, list, waitedMs, !!closed.ok, closed.elapsed);
+        });
+    }
+
+    function finishClick(target, list, waitedMs, closed, closeWaited) {
+      var diagnostics = {
+        buttonText: target.text,
+        buttonDescription: target.description,
+        buttonScopeUsed: target.scopeSource || scopeUsed,
+        scopeDescription: target.scopeDescription || null,
+        scopesTried: target.scopesTried || null,
+        clickAttempts: list,
+        clickMethods: list.length ? list[list.length - 1].clickMethods : [],
+        waitedMs: waitedMs,
+        panelClosed: closed,
+        panelCloseWaitedMs: closeWaited
+      };
+      if (closed) {
+        recorder.ok('CONFIRM_UPLOAD', '已点击「' + target.text + '」，上传面板已关闭', diagnostics);
+      } else {
+        recorder.notice(
+          'CONFIRM_UPLOAD',
+          '已点击「' + target.text + '」，但上传面板仍未关闭，请回页面人工确认图片是否已应用',
+          diagnostics
+        );
+      }
+      return {
+        skipped: false,
+        clicked: true,
+        found: true,
+        text: target.text,
+        panelClosed: closed,
+        clickAttempts: list,
+        clickMethods: diagnostics.clickMethods,
+        waitedMs: waitedMs,
+        panelCloseWaitedMs: closeWaited
+      };
+    }
   }
 
   // ---------------------------------------------------------------- 主流程
@@ -1041,7 +1204,10 @@
         doc: doc,
         win: win,
         baseline: previewBaseline,
-        timeout: payload.uploadTimeout > 0 ? payload.uploadTimeout : DEFAULT_UPLOAD_TIMEOUT
+        timeout: payload.uploadTimeout > 0 ? payload.uploadTimeout : DEFAULT_UPLOAD_TIMEOUT,
+        // 300ms 的默认粒度对「1 秒就传完」的图太粗：最坏要白等 300ms 才进入确认阶段。
+        pollInterval: 80,
+        throttleMs: 40
       });
       if (upload.confirmed) {
         recorder.ok('WAIT_UPLOAD', '已观察到上传完成信号（判据：' + (upload.diagnostics.criteria || '-') + '）', upload.diagnostics);
@@ -1093,7 +1259,20 @@
           found: !!confirm.found,
           panelGone: !!confirm.panelGone,
           panelClosed: !!confirm.panelClosed,
-          buttonText: confirm.text || null
+          buttonText: confirm.text || null,
+          waitedMs: typeof confirm.waitedMs === 'number' ? confirm.waitedMs : null,
+          panelCloseWaitedMs:
+            typeof confirm.panelCloseWaitedMs === 'number' ? confirm.panelCloseWaitedMs : null
+        },
+        timings: {
+          totalMs: Date.now() - startedAt,
+          waitUploadMs:
+            upload.diagnostics && typeof upload.diagnostics.elapsedMs === 'number'
+              ? upload.diagnostics.elapsedMs
+              : null,
+          waitConfirmButtonMs: typeof confirm.waitedMs === 'number' ? confirm.waitedMs : null,
+          waitPanelCloseMs:
+            typeof confirm.panelCloseWaitedMs === 'number' ? confirm.panelCloseWaitedMs : null
         }
       });
     } catch (err) {
