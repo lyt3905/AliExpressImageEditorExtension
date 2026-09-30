@@ -24,6 +24,7 @@ import { EditorStage, type EditorStageHandle } from './components/EditorStage';
 import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
 import { Toolbar } from './components/Toolbar';
+import { autoCloseStep } from './state/auto-close';
 import {
   createEditorState,
   createLayerFromMaterial,
@@ -67,8 +68,21 @@ export function App(): JSX.Element {
    * tab can make the LABEL lag but can never delay the close itself.
    */
   const [autoCloseSecondsLeft, setAutoCloseSecondsLeft] = useState<number | null>(null);
+  /**
+   * The countdown ran out but the fill is still going, so the close is on hold.
+   * Only changes the wording of the status-bar label — `autoCloseStep` decides.
+   */
+  const [autoCloseWaitingForFill, setAutoCloseWaitingForFill] = useState(false);
   const autoCloseTimerRef = useRef<number | null>(null);
   const autoCloseDeadlineRef = useRef<number | null>(null);
+  /**
+   * Whether the page fill that armed this countdown has reported back.
+   *
+   * Starts `true` because "nothing in flight" is what an idle editor is, and it
+   * is also the right reading for a countdown armed on a failure that never
+   * reached the worker at all.
+   */
+  const fillSettledRef = useRef(true);
   /**
    * Whether the in-flight PNG job is the page fill rather than a download.
    * Purely cosmetic (it picks which button says「…中」) — `state.exporting` is
@@ -116,6 +130,10 @@ export function App(): JSX.Element {
       autoCloseTimerRef.current = null;
     }
     autoCloseDeadlineRef.current = null;
+    // Also releases the fill hold: a cancelled countdown must not leave the ref
+    // armed as "a fill is running" for the next one.
+    fillSettledRef.current = true;
+    setAutoCloseWaitingForFill(false);
     setAutoCloseSecondsLeft(null);
   }, []);
 
@@ -142,32 +160,65 @@ export function App(): JSX.Element {
     window.close();
   }, [cancelAutoClose, sessionId]);
 
+  /** Apply one countdown tick. Driven by the interval and by `noteFillSettled`. */
+  const runAutoCloseStep = useCallback(() => {
+    const step = autoCloseStep({
+      deadline: autoCloseDeadlineRef.current,
+      now: Date.now(),
+      fillSettled: fillSettledRef.current,
+    });
+
+    if (step.phase === 'close') {
+      closeEditorTab();
+      return;
+    }
+    if (step.phase === 'idle') {
+      setAutoCloseWaitingForFill(false);
+      setAutoCloseSecondsLeft(null);
+      return;
+    }
+    if (step.phase === 'waiting-for-fill') {
+      setAutoCloseWaitingForFill(true);
+      setAutoCloseSecondsLeft(0);
+      return;
+    }
+    setAutoCloseWaitingForFill(false);
+    setAutoCloseSecondsLeft(step.secondsLeft);
+  }, [closeEditorTab]);
+
   /**
    * Start the "close this editor" countdown.
    *
-   * Counted from the click rather than from the result: a fill takes 5–25 s on a
-   * slow page, so waiting for it would make the delay unpredictable. A fill that
-   * outlives the timer carries on inside the service worker — only this tab goes
-   * away, and the outcome lands on the toolbar badge.
+   * The deadline is counted from the CLICK, because that is the wait the button
+   * promises. It is a floor, not a fixed delay: a fill takes 5–25 s on the real
+   * page, and the close is held off until the fill has reported back (see
+   * `auto-close.ts`). The tab used to disappear mid-fill — the countdown expired
+   * while the worker was still deleting and uploading, so the seller lost the
+   * page and only ever saw the outcome on the toolbar badge.
    */
   const startAutoClose = useCallback(() => {
     cancelAutoClose();
+    fillSettledRef.current = false;
     autoCloseDeadlineRef.current = Date.now() + FILL_AUTO_CLOSE_MS;
+    setAutoCloseWaitingForFill(false);
     setAutoCloseSecondsLeft(Math.ceil(FILL_AUTO_CLOSE_MS / 1000));
 
     // Ticks faster than once a second so the label never skips a number while
     // the tab is in the foreground. The deadline above decides when to close.
-    autoCloseTimerRef.current = window.setInterval(() => {
-      const deadline = autoCloseDeadlineRef.current;
-      if (deadline === null) return;
-      const left = deadline - Date.now();
-      if (left <= 0) {
-        closeEditorTab();
-        return;
-      }
-      setAutoCloseSecondsLeft(Math.ceil(left / 1000));
-    }, 250);
-  }, [cancelAutoClose, closeEditorTab]);
+    autoCloseTimerRef.current = window.setInterval(runAutoCloseStep, 250);
+  }, [cancelAutoClose, runAutoCloseStep]);
+
+  /**
+   * The fill has reported back, so this tab may now close.
+   *
+   * Re-evaluated immediately rather than on the next tick: a slow fill outlives
+   * the deadline, and making the user wait up to 250 ms more after it finally
+   * finishes would look like the close had been forgotten.
+   */
+  const noteFillSettled = useCallback(() => {
+    fillSettledRef.current = true;
+    runAutoCloseStep();
+  }, [runAutoCloseStep]);
 
   // The watermark is deliberately kept out of the layer document so UNDO / REDO
   // / CLEAR can never remove it (see use-watermark.ts).
@@ -461,9 +512,10 @@ export function App(): JSX.Element {
    * never cost the seller an image.
    */
   const handleFillPage = useCallback(async () => {
-    // Armed before anything else can fail. An early return (canvas not ready, an
-    // oversized PNG) must still close the tab: a half-started fill is exactly
-    // when the editor is least likely to be looked at again.
+    // Armed before anything else can fail, and released in `finally` below. An
+    // early return (canvas not ready, an oversized PNG) settles at once, so it
+    // still closes on the 10 s mark — while a fill that really runs holds the
+    // close off until it is done.
     startAutoClose();
     setFilling(true);
     dispatch({ type: 'SET_EXPORTING', exporting: true });
@@ -517,8 +569,11 @@ export function App(): JSX.Element {
     } finally {
       setFilling(false);
       dispatch({ type: 'SET_EXPORTING', exporting: false });
+      // Releasing the hold only now is the whole point: the product page has
+      // stopped being touched, so this tab is finally safe to close.
+      noteFillSettled();
     }
-  }, [composePng, removeFirstImage, sessionId, showNotice, startAutoClose]);
+  }, [composePng, noteFillSettled, removeFirstImage, sessionId, showNotice, startAutoClose]);
 
   if (!sessionId) {
     return <FatalScreen title="缺少 session 参数" detail="请从 AliExpress 商品页点击插件图标重新进入。" />;
@@ -587,10 +642,16 @@ export function App(): JSX.Element {
           Kept outside the notice span on purpose: that one is a polite live
           region and would re-announce this every second. `role="timer"` is not a
           live region, which is exactly what a per-second countdown needs.
+
+          Two states, because the close can be on hold: the countdown is only
+          real once the fill has reported back, and until then saying "0 秒后关闭"
+          would read as a stuck timer.
         */}
         {autoCloseSecondsLeft !== null ? (
           <span className="status-bar__auto-close" role="timer">
-            将在 {autoCloseSecondsLeft} 秒后关闭编辑器
+            {autoCloseWaitingForFill
+              ? '回填完成后将自动关闭编辑器'
+              : `将在 ${autoCloseSecondsLeft} 秒后关闭编辑器`}
             <button type="button" onClick={cancelAutoClose}>
               取消
             </button>

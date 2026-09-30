@@ -44,12 +44,13 @@ export const MAX_HISTORY = 50;
 export const PAGE_FILL_MAX_BYTES = 5 * 1024 * 1024;
 
 /**
- * Close the editor tab this long after「回填到商品页」is clicked.
+ * Earliest the editor tab may close itself after「回填到商品页」is clicked.
  *
- * Counted from the CLICK, not from the result. A fill takes 5–25 s on a slow
- * page, so waiting for it would make the delay unpredictable; the trade-off is
- * that a fill which outlives the timer carries on inside the service worker —
- * only the tab goes away, and the outcome lands on the toolbar badge.
+ * Counted from the CLICK, because that is the wait the button promises — but it
+ * is a floor, not a fixed delay. A fill takes 5–25 s on the real page and runs in
+ * the service worker, so the close is held until the fill has reported back
+ * (`auto-close.ts`); otherwise the tab disappeared mid-fill and the outcome was
+ * only ever visible on the toolbar badge.
  *
  * Deliberately not persisted and not exposed in the Options page: it is a
  * convenience, and a stale stored value would be unexplainable later.
