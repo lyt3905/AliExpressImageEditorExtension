@@ -151,6 +151,10 @@ export function createLayerFromMaterial(material: EditorMaterial): ImageLayer {
     y,
     scale,
     rotation: 0,
+    // Written explicitly so a fresh layer has exactly the shape the restore path
+    // rebuilds — the flags can be absent in documents saved before mirroring.
+    flipX: false,
+    flipY: false,
     kind: material.kind,
   };
 }
@@ -257,6 +261,11 @@ export function createTextLayer(defaults?: Partial<TextStyleDefaults>): TextLaye
     kind: 'text',
     x: CANVAS_SIZE / 2,
     y: CANVAS_SIZE / 2,
+    // Same reason as `createLayerFromMaterial`: keep the factory's shape and the
+    // restore path's shape identical. `TEXT_LAYER_DEFAULTS` carries no mirror
+    // flags, so neither spread below can overwrite these two.
+    flipX: false,
+    flipY: false,
     ...TEXT_LAYER_DEFAULTS,
     // Filtered through the same whitelist as the preference store, so even a
     // caller that smuggles `text` or `x` in cannot leak them onto a new layer.
@@ -309,6 +318,9 @@ export function restoreTextLayer(raw: Record<string, unknown>): TextLayer | null
     align: pickAlign(raw.align, TEXT_LAYER_DEFAULTS.align),
     scale: positiveNumber(raw.scale, TEXT_LAYER_DEFAULTS.scale),
     rotation: finiteNumber(raw.rotation, TEXT_LAYER_DEFAULTS.rotation),
+    // Absent in documents written before mirroring existed — read as "not mirrored".
+    flipX: raw.flipX === true,
+    flipY: raw.flipY === true,
     stroke: pickColor(raw.stroke, TEXT_LAYER_DEFAULTS.stroke),
     strokeWidth: clampNumber(
       raw.strokeWidth,

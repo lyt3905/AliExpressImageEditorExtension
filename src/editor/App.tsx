@@ -33,6 +33,7 @@ import {
   findLayer,
 } from './state/editor-reducer';
 import { canRedo, canUndo } from './state/history';
+import { rotationCommit, transformPatch, type TransformCommand } from './state/transform';
 import { useEditorSession } from './state/use-editor-session';
 import { useImageMap } from './state/use-image-map';
 import { usePasteImages } from './state/use-paste-images';
@@ -376,6 +377,39 @@ export function App(): JSX.Element {
     dispatch({ type: 'COMMIT_LAYER', layerId, patch });
   }, []);
 
+  /**
+   * Live knob drag: painted straight onto the Konva node, exactly like the
+   * transformer's own gesture. It deliberately does NOT dispatch — routing the
+   * preview through UPDATE_LAYER would leave the previewed document as
+   * `history.present`, and the commit below would then push *that* onto the past
+   * stack, so undo would restore the angle the user just dialled in.
+   */
+  const handleRotatePreview = useCallback((layerId: string, rotation: number) => {
+    stageHandleRef.current?.setLayerRotation(layerId, rotation);
+  }, []);
+
+  /** Pointer release or arrow key — one history step for the whole gesture. */
+  const handleRotateCommit = useCallback(
+    (layerId: string, rotation: number) => {
+      const layer = findLayer(document, layerId);
+      if (!layer) return;
+      // `rotationCommit` returns null for "already there"; committing that would
+      // push an undo step that visibly does nothing.
+      const patch = rotationCommit(layer, rotation);
+      if (patch) dispatch({ type: 'COMMIT_LAYER', layerId, patch });
+    },
+    [document],
+  );
+
+  const handleTransform = useCallback(
+    (layerId: string, command: TransformCommand) => {
+      const layer = findLayer(document, layerId);
+      if (!layer) return;
+      dispatch({ type: 'COMMIT_LAYER', layerId, patch: transformPatch(layer, command) });
+    },
+    [document],
+  );
+
   const handleMoveLayer = useCallback((layerId: string, direction: 'up' | 'down') => {
     dispatch({ type: 'MOVE_LAYER', layerId, direction });
   }, []);
@@ -702,6 +736,9 @@ export function App(): JSX.Element {
           onMoveEnd={() => undefined}
           onCommitText={handleCommitText}
           onResetTextStyle={handleResetTextStyle}
+          onTransform={handleTransform}
+          onRotatePreview={handleRotatePreview}
+          onRotateCommit={handleRotateCommit}
         />
       </div>
     </div>

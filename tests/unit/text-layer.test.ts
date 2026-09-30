@@ -270,6 +270,8 @@ describe('text layer restore', () => {
       shadowOffsetX: -6,
       shadowOffsetY: 8,
       shadowOpacity: 0.75,
+      // Mirroring is part of the document, not a remembered style.
+      flipX: true,
     });
 
     expect(layer).toEqual({
@@ -293,6 +295,9 @@ describe('text layer restore', () => {
       shadowOffsetX: -6,
       shadowOffsetY: 8,
       shadowOpacity: 0.75,
+      flipX: true,
+      // Absent above, so it comes back as "not mirrored" rather than undefined.
+      flipY: false,
     });
   });
 

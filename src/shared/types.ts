@@ -80,6 +80,18 @@ export interface BaseLayer {
   y: number;
   /** Degrees. */
   rotation: number;
+  /**
+   * Mirror along the vertical axis (left ↔ right).
+   *
+   * Optional so every document written before mirroring existed stays valid:
+   * `undefined` reads as false. A flag beside `scale` rather than a negative
+   * `scale` on purpose — Konva's transformer decomposes a resize back into a
+   * signed scale, so a negative magnitude there would silently invert every
+   * readout in the layer panel.
+   */
+  flipX?: boolean;
+  /** Mirror along the horizontal axis (top ↔ bottom). See `flipX`. */
+  flipY?: boolean;
 }
 
 /** Payload only picture layers and the watermark frame carry. */
@@ -144,12 +156,16 @@ export type EditorLayer = ImageLayer | TextLayer;
 /**
  * The fields a layer edit may touch. Identity (`id`), `kind` and the image
  * payload are deliberately absent — they are immutable for a layer's lifetime.
+ * The mirror flags ARE patchable: 镜像 flips them in place, exactly like a
+ * 90° turn only changes `rotation`.
  */
 export interface LayerPatch {
   x?: number;
   y?: number;
   scale?: number;
   rotation?: number;
+  flipX?: boolean;
+  flipY?: boolean;
   text?: string;
   width?: number;
   fontSize?: number;

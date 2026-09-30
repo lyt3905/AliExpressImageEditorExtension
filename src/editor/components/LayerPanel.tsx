@@ -1,6 +1,8 @@
 import { TEXT_LAYER_LABEL_MAX } from '../../shared/constants';
 import type { EditorLayer, LayerPatch, TextLayer } from '../../shared/types';
+import type { TransformCommand } from '../state/transform';
 import { TextPropertiesEditor } from './TextPropertiesEditor';
+import { TransformControls } from './TransformControls';
 
 export interface LayerPanelProps {
   layers: EditorLayer[];
@@ -16,6 +18,12 @@ export interface LayerPanelProps {
   onCommitText: (layerId: string, patch: LayerPatch) => void;
   /** Reset the selected text layer to the factory style and forget the preference. */
   onResetTextStyle: (layerId: string) => void;
+  /** 左转 / 右转 / 镜像 for the selected layer — one history step each. */
+  onTransform: (layerId: string, command: TransformCommand) => void;
+  /** Knob drag: painted on the canvas only. */
+  onRotatePreview: (layerId: string, rotation: number) => void;
+  /** Knob release / arrow key: one history step. */
+  onRotateCommit: (layerId: string, rotation: number) => void;
 }
 
 const KIND_LABEL: Record<EditorLayer['kind'], string> = {
@@ -57,9 +65,14 @@ export function LayerPanel({
   onMoveEnd,
   onCommitText,
   onResetTextStyle,
+  onTransform,
+  onRotatePreview,
+  onRotateCommit,
 }: LayerPanelProps): JSX.Element {
   // The panel lists the topmost layer first, mirroring the visual stack.
   const ordered = [...layers].reverse();
+  // Derived here rather than passed in: the panel already owns both halves.
+  const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
 
   return (
     <aside className="panel">
@@ -68,6 +81,24 @@ export function LayerPanel({
         <span className="toolbar__hint">{layers.length + (watermark ? 1 : 0)}</span>
       </div>
       <div className="panel__body">
+        {/*
+          Mirror / rotate always targets the CURRENT selection, so the controls
+          only exist while something is selected. The idle line points at that
+          requirement instead of hiding the feature without a trace.
+        */}
+        {selectedLayer ? (
+          <TransformControls
+            layer={selectedLayer}
+            onCommand={onTransform}
+            onRotatePreview={onRotatePreview}
+            onRotateCommit={onRotateCommit}
+          />
+        ) : layers.length > 0 ? (
+          <p className="transform-controls__hint transform-controls__hint--idle">
+            选中一个图层后，可对它镜像 / 旋转。
+          </p>
+        ) : null}
+
         {selectedTextLayer ? (
           <TextPropertiesEditor
             layer={selectedTextLayer}

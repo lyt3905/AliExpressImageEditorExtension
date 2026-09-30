@@ -280,6 +280,99 @@ button.primary:hover:not(:disabled) {
   line-height: 1.4;
 }
 
+/* ------------------------------------------------ mirror / rotate (layers) */
+
+.transform-controls {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.transform-controls__body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transform-controls__grid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.transform-controls__grid button {
+  padding: 5px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Same treatment as the text presets: a lit 镜像 button IS the state. */
+.transform-controls__grid button.is-active {
+  border-color: var(--accent);
+  background: #e8f0fe;
+  color: var(--accent);
+}
+
+.transform-controls__hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* The "nothing selected" prompt stands in for the whole section. */
+.transform-controls__hint--idle {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/*
+ * `touch-action: none` is what makes a pointer drag work on touch at all:
+ * without it the browser scrolls the layer list instead of turning the knob.
+ */
+.knob {
+  flex: 0 0 auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  outline-offset: 2px;
+}
+
+.knob--dragging {
+  cursor: grabbing;
+}
+
+.knob__box {
+  fill: #fff;
+  stroke: var(--border);
+}
+
+.knob:hover .knob__box {
+  stroke: #b9bfc7;
+}
+
+.knob:focus-visible .knob__box {
+  stroke: var(--accent);
+}
+
+.knob__pointer {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.knob__handle {
+  fill: var(--accent);
+}
+
+.knob__value {
+  fill: var(--text-dim);
+  font: 11px "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  text-anchor: middle;
+}
+
 /* ------------------------------------------------------------ misc */
 
 .empty {

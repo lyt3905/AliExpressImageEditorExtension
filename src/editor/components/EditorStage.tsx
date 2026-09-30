@@ -4,6 +4,7 @@ import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import { estimateTextHeight } from '../state/editor-reducer';
+import { axisScale, splitSignedScale } from '../state/transform';
 
 /** Largest visual size of the canvas preview. The logical canvas stays 800x800. */
 export const MAX_PREVIEW_SIZE = 640;
@@ -14,6 +15,21 @@ export interface EditorStageHandle {
   getStage(): Konva.Stage | null;
   getPreviewScale(): number;
   setChromeVisible(visible: boolean): void;
+  /**
+   * Paint a rotation onto one layer without dispatching anything.
+   *
+   * Used by the rotation knob while it is dragged. The preview has to bypass
+   * React state: routing it through UPDATE_LAYER would leave the previewed
+   * document as `history.present`, and the commit that follows would then push
+   * *that* onto the past stack — so undo would restore the angle the user just
+   * dialled in and appear to do nothing. This is the same trade the transformer
+   * already makes: Konva moves the node live, one COMMIT lands at the end.
+   *
+   * The selection box needs no extra nudge: Konva's rotation setter fires
+   * `rotationChange`, and Konva subscribes the Transformer to that event, so it
+   * re-measures on its own.
+   */
+  setLayerRotation(layerId: string, rotation: number): void;
 }
 
 export interface EditorStageProps {
@@ -128,6 +144,12 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
         if (background) background.visible(!visible);
         stageRef.current?.batchDraw();
       },
+      setLayerRotation: (layerId: string, rotation: number) => {
+        const node = stageRef.current?.findOne<Konva.Node>(`#${layerId}`);
+        if (!node) return;
+        node.rotation(rotation);
+        node.getLayer()?.batchDraw();
+      },
     };
     return () => {
       handleRef.current = null;
@@ -215,8 +237,8 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   shadowOffsetX={layer.shadowOffsetX}
                   shadowOffsetY={layer.shadowOffsetY}
                   shadowOpacity={layer.shadowOpacity}
-                  scaleX={layer.scale}
-                  scaleY={layer.scale}
+                  scaleX={axisScale(layer, 'x')}
+                  scaleY={axisScale(layer, 'y')}
                   rotation={layer.rotation}
                   draggable
                   onClick={() => onSelect(layer.id)}
@@ -224,14 +246,17 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
                   onTransformEnd={(event) => {
                     const node = event.target as Konva.Text;
-                    const scale = node.scaleX();
+                    const signedX = node.scaleX();
+                    const signedY = node.scaleY();
                     // Normalise the node back to scale 1 so `scale` stays the single source of truth.
                     node.scaleX(1);
                     node.scaleY(1);
                     onTransformEnd(layer.id, {
                       x: node.x(),
                       y: node.y(),
-                      scale,
+                      // The transformer reports a SIGNED scale for a mirrored
+                      // layer; the document keeps magnitude and mirror apart.
+                      ...splitSignedScale(signedX, signedY),
                       rotation: node.rotation(),
                     });
                   }}
@@ -250,8 +275,8 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 y={layer.y}
                 offsetX={layer.sourceWidth / 2}
                 offsetY={layer.sourceHeight / 2}
-                scaleX={layer.scale}
-                scaleY={layer.scale}
+                scaleX={axisScale(layer, 'x')}
+                scaleY={axisScale(layer, 'y')}
                 rotation={layer.rotation}
                 draggable
                 onClick={() => onSelect(layer.id)}
@@ -259,14 +284,17 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
                 onTransformEnd={(event) => {
                   const node = event.target as Konva.Image;
-                  const scale = node.scaleX();
+                  const signedX = node.scaleX();
+                  const signedY = node.scaleY();
                   // Normalise the node back to scale 1 so `scale` stays the single source of truth.
                   node.scaleX(1);
                   node.scaleY(1);
                   onTransformEnd(layer.id, {
                     x: node.x(),
                     y: node.y(),
-                    scale,
+                    // The transformer reports a SIGNED scale for a mirrored
+                    // layer; the document keeps magnitude and mirror apart.
+                    ...splitSignedScale(signedX, signedY),
                     rotation: node.rotation(),
                   });
                 }}

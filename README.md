@@ -20,8 +20,9 @@ Chrome Manifest V3 扩展：扫描 AliExpress 卖家后台**商品主图** → �
   → 后台自动对 selected 原图抠图（并发 6，队列调度）
   → 抠图结果自动进入「已抠素材」
   → 默认水印框自动加到图层最上层（锁定，不可编辑）
-  → 用户点击素材加入 800×800 画布，拖动 / 缩放 / 旋转 / 排序
+  → 用户点击素材加入 800×800 画布，拖动 / 缩放 / 旋转 / 镜像 / 排序
   → 需要时「添加文字」：文字是普通可编辑图层（内容 / 字体 / 字号 / 颜色 / 加粗 / 对齐）
+  → （可选）右栏「镜像 / 旋转」把选中的那一个图层左转 / 右转 90°、水平 / 垂直镜像，或拖旋钮调任意角度
   → 导出 800×800 白底 PNG（含水印与文字）→ chrome.downloads 下载到本地
   → （可选，用户点按钮）把这张 PNG 作为**一张新图**回填到商品页图片区
 ```
@@ -143,7 +144,7 @@ npm run check:dist
 1. 打开 AliExpress 卖家后台的商品编辑页（URL 含 `product` / `publish` 等）
 2. 点击工具栏插件图标
 3. 插件自动下载主图并打开编辑器；编辑器打开后**立即**可用，抠图在后台自动进行，完成后自动出现在「已抠素材」
-4. 点击素材加入画布 → 拖动 / 缩放 / 旋转 / 图层排序 → **下载 PNG（800×800 白底）**
+4. 点击素材加入画布 → 拖动 / 缩放 / 旋转 / 镜像 / 图层排序 → **下载 PNG（800×800 白底）**
 5. 想用页面外的图？点工具栏「上传图片」选本地文件，或直接 `Ctrl+V` 粘贴截图 —— 会自动抠图并出现在「已抠素材」
 6. 想直接把这张图放回商品页？点 **回填到商品页** —— 它会把同一张 PNG 作为**一张新图**放到图片区的空槽位上。
    6 个图片位常是满的，所以工具栏上「回填前删第 1 张」**默认勾选**：回填会先删掉原来的第 1 张（原主图）腾出空位。
@@ -251,9 +252,9 @@ npm run check:dist
 
 | 记住（12 个字段） | 不记住 |
 | --- | --- |
-| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `scale` `rotation` |
+| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `scale` `rotation` `flipX` `flipY` |
 
-不记内容是因为新图层绝不能带出上一条文案；不记位置 / 缩放 / 旋转是因为每次都应从画布中心、1 倍、不旋转重新开始。
+不记内容是因为新图层绝不能带出上一条文案；不记位置 / 缩放 / 旋转 / 镜像是因为每次都应从画布中心、1 倍、不旋转也不镜像重新开始。
 
 - 字段清单是 `src/shared/constants.ts` 里的 `TEXT_STYLE_KEYS`，**单一定义**：`pickTextStyle()`（提交时抽取）、`TextStyleDefaults` 类型、`createTextLayer()` 的入参过滤都从它派生，加字段不会漏。
 - 存储在 `chrome.storage.local` 的 `aiee:text-defaults`（`src/services/text-defaults.ts`）。用 `local` 而不是 `session`（关浏览器就该还在），也不用 `sync`（120 次/分钟写配额，样式提交是高频动作）。
@@ -267,6 +268,40 @@ npm run check:dist
 `x / y` 与图片一样是**几何中心**：`offsetX = width / 2`，`offsetY = 实测高度 / 2`，
 因此旋转和缩放都围绕中心发生。文字高度取决于自动换行，首帧用 `estimateTextHeight`
 （Konva 默认 `lineHeight = 1`，即 `fontSize × 行数`）估算，节点上屏后由 `EditorStage` 实测校正。
+
+---
+
+## 镜像 / 旋转（只作用于选中的那一个图层）
+
+右栏图层列表上方会出现「镜像 / 旋转」一栏。**它只变换当前选中的图层**（图片和文字都支持），
+没选中任何图层时那里只有一句「选中一个图层后，可对它镜像 / 旋转」。
+
+| 控件 | 行为 |
+| --- | --- |
+| 旋钮 | 按住拖动即可任意角度旋转，角度读数就在旋钮中央 |
+| 旋钮 + Shift | 每 `ROTATE_SNAP_DEG`（15°）吸附一次；不按 Shift 就是自由角度 |
+| 双击旋钮 | 归零（本来就在 0° 时不做任何事） |
+| 方向键 | 焦点在旋钮上时每按一次 `ROTATE_NUDGE_DEG`（1°），按住 Shift 变成 15°；`Home` 归零 |
+| 左转 90° / 右转 90° | 在**当前角度上加** `ROTATE_STEP_DEG`（90°），不是跳到某个固定角度：拖到 30° 后按「右转 90°」得到 120° |
+| 水平镜像 / 垂直镜像 | 左右 / 上下翻转，**再点一次还原**；按钮点亮表示该轴当前处于镜像状态 |
+
+- 三个数字都在 `src/shared/constants.ts`（`ROTATE_STEP_DEG` / `ROTATE_SNAP_DEG` / `ROTATE_NUDGE_DEG`）。
+- 角度统一归一化到 `[0, 360)`，所以「270° 再右转 90°」是 `0°` 而不是 `360°`。
+- 逻辑全是 `src/editor/state/transform.ts` 里的纯函数，各有一条单测：
+  `normalizeRotation`（归一化）/ `shortestDelta`（拖动时按最短方向累积角度）/ `snapRotation`（吸附）/
+  `transformPatch`（按钮产出哪个补丁）/ `rotationCommit`（旋钮松手要提交什么，或「什么都没变」）/
+  `axisScale` 与 `splitSignedScale`（文档的镜像标志 ↔ 节点的带符号缩放）。
+- **一次操作 = 一条 undo**：按钮点一下算一步，旋钮**整段拖动**只算一步 —— 拖动期间的角度是直接画在
+  Konva 节点上的（`EditorStageHandle.setLayerRotation`），不写状态、不写历史。**不能**走 `UPDATE_LAYER`：
+  那会把预览后的文档变成 `history.present`，随后提交时被压进历史栈的正是它，于是撤销会「回到刚才那个角度」，
+  表现为撤销没反应。
+- 镜像存成 `flipX` / `flipY` 两个布尔字段（`BaseLayer`），**不是负的 `scale`**：Konva 的 Transformer 会把一次
+  缩放还原成带符号的 `scale`，负的幅度一旦进了文档就会污染右栏的读数。`transformEnd` 用 `splitSignedScale`
+  把节点交回来的带符号缩放拆成「幅度 + 两个镜像标志」，所以**镜像过的图层在缩放后依然是镜像的**。
+- 缩放时画布上的选框会跟着角度一起转（Konva 的 Transformer 测量的是节点的绝对变换），这是正常表现。
+- 旋转中心仍是图层中心（`x` / `y` 即几何中心），和拖动、缩放一致。
+- 旧草稿兼容：这两个字段在「镜像」出现之前的文档里根本不存在，恢复时按 `false` 处理，**老草稿不会被判成损坏**。
+- 水印框不受影响：它是锁定图层，永远不会被选中，也就永远拿不到这组按钮。
 
 ---
 
@@ -437,7 +472,7 @@ AIEE_LIVE=1 AIEE_USERNAME=admin AIEE_PASSWORD=<密码> npm run test:live
 
 除抠图必须依赖现有服务外，全部在本地完成：
 
-页面扫描、图片下载、Blob 存储、Session、图片预览、Canvas 编辑、拖动、缩放、旋转、图层排序、
+页面扫描、图片下载、Blob 存储、Session、图片预览、Canvas 编辑、拖动、缩放、旋转、镜像、图层排序、
 Undo/Redo、PNG 合成、PNG 导出、PNG 下载 —— **全部本地**。服务端只承担抠图。
 
 ---
@@ -472,12 +507,12 @@ AliExpressImageEditorExtension/
 ├─ src/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager / page-filler
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
-│  ├─ editor/                    # index.html / App / components / state（reducer + history + use-watermark + use-paste-images）/ styles
+│  ├─ editor/                    # index.html / App / components / state（reducer + history + transform + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 水印框管理）
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 22 文件 / 359 个单元测试（不联网）
+│  ├─ unit/                      # 23 文件 / 382 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -544,6 +579,8 @@ AliExpressImageEditorExtension/
 10. 本地图片只有**文件选择器**与**剪贴板粘贴**两个入口，不做拖拽上传；粘贴只取位图，
     不处理「粘贴一个图片 URL / HTML 片段」。上传后不能删除素材，也无法给素材改名。
     单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
+11. 镜像 / 旋转**只作用于当前选中的那一个图层**：不支持框选或多选后一起变换，也没有「整张画布转 90°」。
+    角度归一化到 `[0, 360)`，所以左右各转 90° 转满一圈不会累积成 360°。
 
 ---
 
@@ -552,7 +589,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（22 文件 / 359 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（23 文件 / 382 测试；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |

@@ -190,3 +190,19 @@ export const MAX_SHADOW_OFFSET = 100;
 
 /** Longest label shown for a text layer in the layer list before truncation. */
 export const TEXT_LAYER_LABEL_MAX = 24;
+
+// ---------------------------------------------------------------- transform
+
+/** Degrees one press of「左转 / 右转」turns the selected layer. */
+export const ROTATE_STEP_DEG = 90;
+
+/**
+ * The knob snaps to multiples of this while Shift is held.
+ *
+ * Free dragging stays free — snapping is opt-in, because it is the only way to
+ * land on a round number with the mouse while still allowing a 3° correction.
+ */
+export const ROTATE_SNAP_DEG = 15;
+
+/** Degrees one arrow-key press turns the knob. */
+export const ROTATE_NUDGE_DEG = 1;

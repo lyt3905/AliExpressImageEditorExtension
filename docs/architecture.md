@@ -298,6 +298,32 @@ type EditorLayer = ImageLayer | TextLayer;
 - `createTextLayer(defaults)` 会把入参再过滤一遍 `pickTextStyle()`，
   即便调用方塞进 `text` / `x` / `scale` 也不会泄漏到新图层上。
 
+#### 镜像 / 旋转（文档存布尔标志，节点才是带符号缩放）
+
+镜像存成 `BaseLayer.flipX` / `flipY` 两个布尔字段，**不是负的 `scale`**。
+两个方向的换算各只有一个入口：`axisScale()`（文档 → 节点）与 `splitSignedScale()`（节点 → 文档），
+都在 `src/editor/state/transform.ts`。
+
+- Konva 的 Transformer 在 `_fitNodesInto()` 里把新包围盒乘进节点自身的局部变换再 `decompose()`，
+  所以一次缩放**不会**抹掉镜像，但它会把 `scaleX` 交回来成负数。直接写进文档的话，
+  右栏读数、镜像按钮的点亮判断都会开始见到负值。
+- 于是 `transformEnd` 走 `splitSignedScale(scaleX, scaleY)`：幅度取绝对值，符号各自变成镜像标志。
+  两条函数互为严格逆运算 —— 这条逆运算有单测钉住，否则每次缩放都会把镜像状态翻一次。
+- 旧文档里这两个字段不存在（类型上是 `optional`），读取一律按 `false` 处理，
+  所以「镜像」上线前的草稿不会被判成损坏。文字图层的 `restoreTextLayer()` 会把它补成显式 `false`，
+  与工厂 `createTextLayer()` / `createLayerFromMaterial()` 产出的形状保持一致。
+
+旋钮拖动中的角度**直接画在 Konva 节点上**（`EditorStageHandle.setLayerRotation`），刻意不走 `UPDATE_LAYER`：
+
+- 走 `UPDATE_LAYER` 会让「预览后的文档」成为 `history.present`，随后那次 `COMMIT_LAYER` 把它压进
+  `past` 栈（`pushHistory()` 记录的是**当时的 present**）—— 撤销于是回到「刚拖到的那个角度」，
+  表现为撤销没反应。
+- 顺带也省掉每帧一次整棵树的重渲染。代价与 Transformer 自己的拖拽完全一致：
+  节点在拖动期间处于「状态之外」，松手时用一次 `COMMIT_LAYER` 收口。
+- 因此旋钮自己持有拖动中的显示值（`rotation` prop 在松手前不变），并且在**没有真正转动**时
+  既不提交也不改动节点 —— 否则点一下旋钮就会多出一条空撤销记录。`rotationCommit()` 返回 `null`
+  就是这道闸。
+
 ## 6.5 回填到商品页（往图片区放一张新图，默认先删第 1 张）
 
 把合成好的 800×800 白底 PNG 送回商品页的图片区。命令行：编辑器「回填到商品页」→ `REPLACE_PAGE_IMAGE`
@@ -515,8 +541,8 @@ type EditorLayer = ImageLayer | TextLayer;
 
 `src/editor/state/history.ts`：`{ past, present, future }` 快照栈，最多 50 条。
 
-- 只有**已提交**的操作进历史：`ADD_LAYER` / `DELETE_LAYER` / `COMMIT_LAYER`（dragEnd、transformEnd、文字属性提交）/ `MOVE_LAYER` / `CLEAR`。
-- `UPDATE_LAYER` 只替换 present（拖动、变换过程中的每一帧），不产生历史条目。
+- 只有**已提交**的操作进历史：`ADD_LAYER` / `DELETE_LAYER` / `COMMIT_LAYER`（dragEnd、transformEnd、文字属性提交、90° 与镜像按钮、旋钮松手）/ `MOVE_LAYER` / `CLEAR`。
+- `UPDATE_LAYER` 只替换 present（拖动、变换过程中的每一帧），不产生历史条目。旋钮拖动**不走**这条路：预览直接画在节点上，松手才提交，理由见 §6「镜像 / 旋转」。
 - `UNDO` / `REDO` 后若选中图层已不存在会自动取消选中。
 
 ## 8. 安全
