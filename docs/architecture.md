@@ -251,7 +251,8 @@ type EditorLayer = ImageLayer | TextLayer;
   `text / width / fontSize / fontFamily / fill / fontStyle / align / stroke / strokeWidth / shadow*`。
 - `WatermarkLayer` 是**第三个独立类型**，不属于 `EditorLayer`，所以水印「不进图层文档」的结论没有被削弱。
 - `EditorStage` 按 `layer.kind` 分支渲染：文字走 `Konva.Text`，**永远不进 `imageForLayer`**（那条路径只认图片）。
-- 文字与图片共用同一个 `Transformer` 和 `COMMIT_LAYER`，`scale` 仍是唯一缩放来源。
+- 文字与图片共用同一个 `Transformer` 和 `COMMIT_LAYER`。图片的可见大小就是 `scale`；
+  文字的可见大小是 `fontSize × scale`，而手柄只动 `scale`，所以文字松手时要折算一次字号（见下「样式记忆」）。
 - `TextLayer` 的 `x / y` 同样是几何中心：`offsetX = width / 2`，`offsetY = 实测高度 / 2`。
   Konva.Text 的高度取决于自动换行，因此首帧用 `estimateTextHeight`（`fontSize × 行数`）估算，
   节点上屏后由 `EditorStage` 的 ref 测量并写回 state 校正。
@@ -297,6 +298,15 @@ type EditorLayer = ImageLayer | TextLayer;
   偏好也从不进入 `EditorDocument`，所以 undo / redo / clear 碰不到它。
 - `createTextLayer(defaults)` 会把入参再过滤一遍 `pickTextStyle()`，
   即便调用方塞进 `text` / `x` / `scale` 也不会泄漏到新图层上。
+- **文字缩放被折算成字号**（`bakeTextScale()`，同在 `transform.ts`）。
+  `TEXT_STYLE_KEYS` 里没有 `scale`，所以用手柄把文字拉大本来是「变换」，不会被记住 ——
+  于是右栏「字号」在拖到 3 倍后仍写 48（面板与画布说法不一致），新建的文字也回到 48。
+  松手时把 `fontSize × scale` 折成新的 `fontSize`、`scale` 归 1，同时解决这两件事。
+  夹取在 12–200，装不下的部分**留在 `scale` 里**（否则超限的拖拽会把文字缩回去），
+  因此记忆只能带走 200。折算保持乘积不变，所以松手瞬间画面不跳。
+  这也是**唯一**一条「变换补丁带样式字段」的路径：`EditorStage` 把 `fontSize` 塞进
+  `transformEnd` 的补丁，`pickTextStyle()` 随之认出它是一次样式改动 ——
+  变换路径因此不需要任何特例，它和属性面板走同一个 `handleCommitLayer`（提交 + 记忆）。
 
 #### 镜像 / 旋转（文档存布尔标志，节点才是带符号缩放）
 
@@ -542,6 +552,7 @@ type EditorLayer = ImageLayer | TextLayer;
 `src/editor/state/history.ts`：`{ past, present, future }` 快照栈，最多 50 条。
 
 - 只有**已提交**的操作进历史：`ADD_LAYER` / `DELETE_LAYER` / `COMMIT_LAYER`（dragEnd、transformEnd、文字属性提交、90° 与镜像按钮、旋钮松手）/ `MOVE_LAYER` / `CLEAR`。
+  文字的 `transformEnd` 也算一条 —— 它同时把缩放折算成字号，但整体只提交一次，所以一次拖拽撤销一次就够。
 - `UPDATE_LAYER` 只替换 present（拖动、变换过程中的每一帧），不产生历史条目。旋钮拖动**不走**这条路：预览直接画在节点上，松手才提交，理由见 §6「镜像 / 旋转」。
 - `UNDO` / `REDO` 后若选中图层已不存在会自动取消选中。
 

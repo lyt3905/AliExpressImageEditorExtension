@@ -4,7 +4,7 @@ import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import { estimateTextHeight } from '../state/editor-reducer';
-import { axisScale, splitSignedScale } from '../state/transform';
+import { axisScale, bakeTextScale, splitSignedScale } from '../state/transform';
 
 /** Largest visual size of the canvas preview. The logical canvas stays 800x800. */
 export const MAX_PREVIEW_SIZE = 640;
@@ -251,13 +251,23 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                     // Normalise the node back to scale 1 so `scale` stays the single source of truth.
                     node.scaleX(1);
                     node.scaleY(1);
+                    const { scale, flipX, flipY } = splitSignedScale(signedX, signedY);
+                    /*
+                      Resizing text is a font-size change, not a transform: fold
+                      the drag back into `fontSize` so the 字号 field shows the
+                      size on screen and the next new layer inherits it (see
+                      `bakeTextScale`). Whatever the 12–200 range could not hold
+                      stays in `scale`, so the text never jumps on release.
+                    */
+                    const baked = bakeTextScale(layer.fontSize, scale);
                     onTransformEnd(layer.id, {
                       x: node.x(),
                       y: node.y(),
-                      // The transformer reports a SIGNED scale for a mirrored
-                      // layer; the document keeps magnitude and mirror apart.
-                      ...splitSignedScale(signedX, signedY),
+                      scale: baked.scale,
+                      fontSize: baked.fontSize,
                       rotation: node.rotation(),
+                      flipX,
+                      flipY,
                     });
                   }}
                 />

@@ -343,14 +343,19 @@ export function App(): JSX.Element {
   });
 
   /**
-   * Committed once per finished edit (blur, or a discrete click) so a single
-   * change produces exactly one undo step.
+   * Committed once per finished edit — a blur, a discrete click, or the canvas
+   * transformer's release — so a single change produces exactly one undo step.
+   *
+   * Every committed edit funnels through here, which is what lets a text resize
+   * reach the style memory with no special case at either call site: the
+   * transformer bakes the drag into `fontSize` (see `bakeTextScale`), and
+   * `pickTextStyle` then picks that up like any other style edit. A patch that
+   * carries no style at all — a move, a picture's resize — returns null and is
+   * simply not remembered.
    */
-  const handleCommitText = useCallback(
+  const handleCommitLayer = useCallback(
     (layerId: string, patch: LayerPatch) => {
       dispatch({ type: 'COMMIT_LAYER', layerId, patch });
-      // Only style edits are remembered — `pickTextStyle` returns null for a
-      // patch that is purely copy / position / transform.
       const style = pickTextStyle(patch);
       if (style) rememberTextStyle(style);
     },
@@ -371,10 +376,6 @@ export function App(): JSX.Element {
 
   const handleDragEnd = useCallback((layerId: string, x: number, y: number) => {
     dispatch({ type: 'COMMIT_LAYER', layerId, patch: { x, y } });
-  }, []);
-
-  const handleTransformEnd = useCallback((layerId: string, patch: LayerPatch) => {
-    dispatch({ type: 'COMMIT_LAYER', layerId, patch });
   }, []);
 
   /**
@@ -718,7 +719,7 @@ export function App(): JSX.Element {
             selectedLayerId={state.selectedLayerId}
             onSelect={handleSelect}
             onDragEnd={handleDragEnd}
-            onTransformEnd={handleTransformEnd}
+            onTransformEnd={handleCommitLayer}
             handleRef={stageHandleRef}
           />
         </div>
@@ -734,7 +735,7 @@ export function App(): JSX.Element {
           onMove={handleMoveLayer}
           onDelete={handleDeleteLayer}
           onMoveEnd={() => undefined}
-          onCommitText={handleCommitText}
+          onCommitText={handleCommitLayer}
           onResetTextStyle={handleResetTextStyle}
           onTransform={handleTransform}
           onRotatePreview={handleRotatePreview}

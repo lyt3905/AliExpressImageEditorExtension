@@ -252,14 +252,25 @@ npm run check:dist
 
 | 记住（12 个字段） | 不记住 |
 | --- | --- |
-| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `scale` `rotation` `flipX` `flipY` |
+| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `rotation` `flipX` `flipY` |
 
-不记内容是因为新图层绝不能带出上一条文案；不记位置 / 缩放 / 旋转 / 镜像是因为每次都应从画布中心、1 倍、不旋转也不镜像重新开始。
+不记内容是因为新图层绝不能带出上一条文案；不记位置 / 旋转 / 镜像是因为每次都应从画布中心、不旋转也不镜像重新开始。
+
+**拖拽缩放不算白做**：用 Transformer 手柄把文字拉大 / 缩小时，松手会把缩放倍数**折算进字号**
+（`bakeTextScale`，纯函数 + 单测）。这是唯一一条会让「大小」被记住的路径，理由有两个：
+
+- 右栏「字号」此前会骗人 —— 拖到 3 倍大，框里还写着 48。折算后框里的数字就是你看到的字号。
+- 不折算的话新图层只会沿用那个 48。缩放是「变换」（不记），字号是「样式」（记），
+  而用户拖手柄时想表达的其实是后者。
+
+折算满足 `fontSize × scale` **严格不变**，所以松手瞬间文字不会跳。字号夹在 12–200，
+超出上限的部分继续留在 `scale` 里，以免把文字缩回去；记忆只能带走 200
+（800×800 画布上的 200px 字已经占了四分之一高）。落地方式见下方「只在样式补丁上写存储」那条。
 
 - 字段清单是 `src/shared/constants.ts` 里的 `TEXT_STYLE_KEYS`，**单一定义**：`pickTextStyle()`（提交时抽取）、`TextStyleDefaults` 类型、`createTextLayer()` 的入参过滤都从它派生，加字段不会漏。
 - 存储在 `chrome.storage.local` 的 `aiee:text-defaults`（`src/services/text-defaults.ts`）。用 `local` 而不是 `session`（关浏览器就该还在），也不用 `sync`（120 次/分钟写配额，样式提交是高频动作）。
 - **不进 `EditorDocument`**：文档描述「这张图有什么」，偏好描述「用户习惯」，而且文档在历史栈里，塞进去会污染 undo。加载偏好不 dispatch 任何 action，所以 hydrate 仍然只产生 1 条历史记录。
-- 只在样式补丁上写存储：`pickTextStyle()` 对纯位置 / 内容 / 变换的补丁返回 `null`，拖动和改字不会触发写盘。
+- 只在样式补丁上写存储：`pickTextStyle()` 对纯位置 / 内容 / 变换的补丁返回 `null`，移动图层和改文案不会触发写盘。文字缩放**会**触发 —— 它折算后带上了 `fontSize`，本来就算一次样式改动；也正因为如此，变换路径不需要任何特例，它和历史栈、属性面板一样都走 `handleCommitLayer`。
 - 写入是**整个对象覆盖**而不是 `load → merge → set`：连续两次提交（改完字号立刻改颜色）不会交错读写，天然 last-write-wins。
 - 读取和写入都过一遍 `sanitizeTextStyle()`，手工改坏或半截写入的存储项不会把 `fontSize: 99999` 送上画布。
 - 存储不可用时静默降级为默认样式，不影响编辑器任何既有行为。
@@ -512,7 +523,7 @@ AliExpressImageEditorExtension/
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 23 文件 / 382 个单元测试（不联网）
+│  ├─ unit/                      # 23 文件 / 389 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试，默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -576,6 +587,8 @@ AliExpressImageEditorExtension/
 9. 文字图层只做基础排版：内容 / 字体（仅本机字体）/ 字号 / 颜色 / 加粗 / 左中右对齐 / 描边 / 阴影。
    不含渐变、曲线文字、富文本、每字符不同颜色、字体上传与网络字体，也不做多层描边或内发光。
    属性在失焦时才提交，所以输入过程中画布不会逐字实时刷新（描边 / 阴影同理）。
+   文字的可见大小是 `字号 × 缩放`；用手柄缩放会自动折算成字号，但字号上限 200，
+   超出上限的那部分只能留在缩放里、**不进样式记忆**（下次新建最多沿用 200）。
 10. 本地图片只有**文件选择器**与**剪贴板粘贴**两个入口，不做拖拽上传；粘贴只取位图，
     不处理「粘贴一个图片 URL / HTML 片段」。上传后不能删除素材，也无法给素材改名。
     单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
@@ -589,7 +602,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（23 文件 / 382 测试；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（23 文件 / 389 测试；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |

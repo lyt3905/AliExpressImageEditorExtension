@@ -1,9 +1,10 @@
 /**
- * Mirror / rotate maths for the selected layer.
+ * Mirror / rotate / resize maths for the selected layer.
  *
- * Pure on purpose: the 90° buttons, the knob and the restore path all funnel
- * through here, so "how an angle wraps" and "how a signed scale becomes a
- * mirror flag" each have exactly one answer — and each is pinned by a test.
+ * Pure on purpose: the 90° buttons, the knob, the transformer's `transformend`
+ * and the restore path all funnel through here, so "how an angle wraps", "how a
+ * signed scale becomes a mirror flag" and "how a resize becomes a font size"
+ * each have exactly one answer — and each is pinned by a test.
  *
  * The document stores a mirror as a boolean beside a positive `scale`, never as
  * a negative scale: Konva's transformer decomposes a resize back into a signed
@@ -11,7 +12,13 @@
  * panel's own readouts.
  */
 
-import { ROTATE_SNAP_DEG, ROTATE_STEP_DEG } from '../../shared/constants';
+import {
+  MAX_FONT_SIZE,
+  MIN_FONT_SIZE,
+  ROTATE_SNAP_DEG,
+  ROTATE_STEP_DEG,
+  TEXT_LAYER_DEFAULTS,
+} from '../../shared/constants';
 import type { BaseLayer, LayerPatch } from '../../shared/types';
 
 /** The one-step transforms the buttons offer. */
@@ -112,4 +119,49 @@ export function splitSignedScale(
     flipX: scaleX < 0,
     flipY: scaleY < 0,
   };
+}
+
+/** A font size the panel can show, plus the part of the resize it could not hold. */
+export interface BakedTextSize {
+  fontSize: number;
+  scale: number;
+}
+
+/**
+ * Fold a text layer's resize back into its font size.
+ *
+ * A transformer drag only moves `scale`, so without this the 字号 field keeps
+ * reading "48" while the text on screen is three times that — and the next new
+ * layer, which inherits the style but never the transform, comes back small.
+ * Baking makes the number in the field the size you actually see, and it rides
+ * the existing style memory for free: the committed patch carries `fontSize`,
+ * which is exactly what `pickTextStyle` remembers.
+ *
+ * Purely cosmetic for the current layer: `fontSize × scale` is preserved, so the
+ * text does not move or change size at the moment of the drag's release.
+ *
+ * The font size is clamped to the panel's range (12–200), so a resize past the
+ * limit keeps the leftover as `scale` rather than silently shrinking the text
+ * back. Only the clamped part is remembered — 200px on an 800px canvas is
+ * already most of the height.
+ */
+export function bakeTextScale(fontSize: number, scale: number): BakedTextSize {
+  const current =
+    Number.isFinite(fontSize) && fontSize > 0 ? fontSize : TEXT_LAYER_DEFAULTS.fontSize;
+  const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+
+  // Guards a multiplication that overflowed: an infinite `scale` reaching the
+  // document would be unrecoverable on the canvas.
+  const product = current * factor;
+  const target = Number.isFinite(product) && product > 0 ? product : MAX_FONT_SIZE;
+
+  // The size the drag asked for, expressed as a font size the panel can show.
+  const baked = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(target)));
+  // Six decimals is far past anything a canvas can resolve, and it keeps the
+  // stored document free of 0.10000000000000002-shaped leftovers.
+  const rest = Math.round((target / baked) * 1e6) / 1e6;
+
+  // `baked` is rounded, so an in-range resize lands within half a pixel of
+  // scale 1 — snap it rather than leaving a 1.004 behind on every layer.
+  return { fontSize: baked, scale: Math.abs(rest - 1) < 0.01 ? 1 : rest };
 }
