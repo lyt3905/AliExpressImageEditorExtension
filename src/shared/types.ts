@@ -61,6 +61,12 @@ export interface EditorSessionMeta {
   sourceTabId: number;
   sourceUrl: string;
   imageIds: string[];
+  /**
+   * Product code extracted from the product edit page (URL `productId` or the
+   * 「商品编号」 text). Absent when the page carried none — everything reading
+   * it must tolerate `undefined`.
+   */
+  productCode?: string;
 }
 
 /** Full session payload persisted in IndexedDB. */

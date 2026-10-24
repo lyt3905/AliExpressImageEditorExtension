@@ -19,6 +19,7 @@ export function buildSessionRecord(input: {
   sourceTabId: number;
   sourceUrl: string;
   images: SessionImage[];
+  productCode?: string | null;
 }): EditorSessionRecord {
   return {
     id: input.id,
@@ -27,6 +28,7 @@ export function buildSessionRecord(input: {
     sourceUrl: input.sourceUrl,
     imageIds: input.images.map((image) => image.id),
     images: input.images,
+    ...(input.productCode ? { productCode: input.productCode } : {}),
   };
 }
 

@@ -17,6 +17,11 @@ const PAGE_MARKERS: readonly string[] = [
   '[class*="image-upload"]',
 ];
 
+/** "商品编号：1000001234567890" / "Product ID: 1000001234567890" and friends. */
+const PRODUCT_CODE_TEXT = /(?:商品编号|商品ID|Product\s*ID)\s*[:：]?\s*(\d{6,20})/i;
+/** URL query keys that carry the product id on the seller console. */
+const PRODUCT_URL_KEYS: readonly string[] = ['productId', 'product_id', 'offerId', 'offer_id'];
+
 export class AliExpressPageAdapter implements PageImageAdapter {
   private readonly doc: Document;
   private readonly scanOptions: ScanOptions;
@@ -53,5 +58,53 @@ export class AliExpressPageAdapter implements PageImageAdapter {
 
   scanMainImagesWithStrategy(): { images: ScannedImage[]; strategy: string } {
     return scanDocument(this.doc, this.scanOptions);
+  }
+
+  /**
+   * Extract the product code from the product edit page.
+   *
+   * Order of preference:
+   *   1. the URL's `productId` / `offerId` query parameter (most reliable);
+   *   2. page text of the form 「商品编号：123…」 / "Product ID: 123…" — the
+   *      seller console usually renders it near the title or in the header.
+   *
+   * Returns `null` when nothing looks like a product code.
+   */
+  extractProductCode(): string | null {
+    try {
+      const { search } = this.doc.location ?? window.location;
+      const params = new URLSearchParams(search);
+      for (const key of PRODUCT_URL_KEYS) {
+        const value = params.get(key);
+        if (value && /^\d{6,20}$/.test(value)) return value;
+      }
+    } catch {
+      /* fall through to DOM extraction */
+    }
+
+    try {
+      const body = this.doc.body;
+      if (body) {
+        // Visible text only: hidden nodes often carry unrelated numeric ids.
+        const walker = this.doc.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            const parent = (node as CharacterData).parentElement;
+            if (!parent) return NodeFilter.FILTER_REJECT;
+            const style = window.getComputedStyle(parent);
+            return style && style.visibility !== 'hidden' && style.display !== 'none'
+              ? NodeFilter.FILTER_ACCEPT
+              : NodeFilter.FILTER_REJECT;
+          },
+        });
+        let node: Node | null;
+        while ((node = walker.nextNode()) !== null) {
+          const match = PRODUCT_CODE_TEXT.exec((node as CharacterData).data || '');
+          if (match?.[1]) return match[1];
+        }
+      }
+    } catch {
+      /* best-effort; a missing code is never fatal */
+    }
+    return null;
   }
 }

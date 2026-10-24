@@ -71,13 +71,21 @@ async function ensureContentScript(tabId: number): Promise<void> {
   }
 }
 
-async function scanTab(tabId: number): Promise<{ images: ScannedImage[]; strategy: string }> {
+async function scanTab(tabId: number): Promise<{
+  images: ScannedImage[];
+  strategy: string;
+  productCode: string | null;
+}> {
   await ensureContentScript(tabId);
   const message: ExtensionMessage = { type: 'SCAN_ACTIVE_TAB', requestId: createRequestId('scan') };
 
-  let response: MessageResponse<{ images: ScannedImage[]; strategy: string }>;
+  let response: MessageResponse<{
+    images: ScannedImage[];
+    strategy: string;
+    productCode: string | null;
+  }>;
   try {
-    response = await sendToTab<{ images: ScannedImage[]; strategy: string }>(tabId, message);
+    response = await sendToTab<{ images: ScannedImage[]; strategy: string; productCode: string | null }>(tabId, message);
   } catch (error) {
     throw new AppError(ErrorCode.CONTENT_SCRIPT_UNAVAILABLE, `内容脚本无响应：${messageOf(error)}`);
   }
@@ -107,7 +115,7 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
 
   await setBadge('…', `${EXTENSION_TITLE}：正在扫描商品主图…`);
 
-  const { images, strategy } = await scanTab(tabId);
+  const { images, strategy, productCode } = await scanTab(tabId);
   console.log('[AIEE] scanned', images.length, 'images via', strategy);
 
   await setBadge('…', `${EXTENSION_TITLE}：正在下载 ${images.length} 张图片…`);
@@ -157,7 +165,13 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
   }
 
   const sessionId = createSessionId();
-  const record = buildSessionRecord({ id: sessionId, sourceTabId: tabId, sourceUrl: tabUrl, images: sessionImages });
+  const record = buildSessionRecord({
+    id: sessionId,
+    sourceTabId: tabId,
+    sourceUrl: tabUrl,
+    images: sessionImages,
+    productCode,
+  });
   await putSession(record);
   await saveSessionMeta({
     id: record.id,
@@ -165,6 +179,7 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
     sourceTabId: record.sourceTabId,
     sourceUrl: record.sourceUrl,
     imageIds: record.imageIds,
+    ...(record.productCode ? { productCode: record.productCode } : {}),
   });
 
   await openEditorTab(sessionId);

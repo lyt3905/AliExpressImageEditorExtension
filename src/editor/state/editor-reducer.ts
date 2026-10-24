@@ -274,6 +274,23 @@ export function createTextLayer(defaults?: Partial<TextStyleDefaults>): TextLaye
 }
 
 /**
+ * Build the default text layer carrying the product code.
+ *
+ * Placed near the top of the canvas, styled from the remembered preference
+ * like any hand-added text. Centre-aligned and wrapped to the default width so
+ * even a long code stays on the canvas.
+ */
+export function createProductCodeTextLayer(productCode: string, defaults?: Partial<TextStyleDefaults>): TextLayer {
+  const layer = createTextLayer(defaults);
+  return {
+    ...layer,
+    text: productCode,
+    x: CANVAS_SIZE / 2,
+    y: 48,
+  };
+}
+
+/**
  * Approximate height before Konva has measured the node.
  *
  * Konva's default `lineHeight` is 1, so an unwrapped line is roughly `fontSize`

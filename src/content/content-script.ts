@@ -28,10 +28,15 @@ function currentHostname(): string {
   }
 }
 
-function handleScan(requestId: string): MessageResponse<{ images: ScannedImage[]; strategy: string }> {
+function handleScan(requestId: string): MessageResponse<{
+  images: ScannedImage[];
+  strategy: string;
+  productCode: string | null;
+}> {
   try {
     const adapter = new AliExpressPageAdapter(document);
     const { images, strategy } = adapter.scanMainImagesWithStrategy();
+    const productCode = adapter.extractProductCode();
 
     if (!adapter.isSupportedPage() && images.length === 0) {
       return errorResponse(
@@ -47,7 +52,7 @@ function handleScan(requestId: string): MessageResponse<{ images: ScannedImage[]
         `未在页面中找到商品主图（页面 img 总数：${adapter.countImages()}）`,
       );
     }
-    return okResponse(requestId, { images, strategy });
+    return okResponse(requestId, { images, strategy, productCode });
   } catch (error) {
     const appError = toAppError(error, '商品主图扫描失败');
     return errorResponse(requestId, appError.code, appError.message);

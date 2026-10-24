@@ -28,6 +28,7 @@ import { autoCloseStep } from './state/auto-close';
 import {
   createEditorState,
   createLayerFromMaterial,
+  createProductCodeTextLayer,
   createTextLayer,
   editorReducer,
   findLayer,
@@ -55,7 +56,7 @@ const NOTICE_TIMEOUT_MS: Record<Notice['kind'], number> = { ok: 6000, error: 900
 
 export function App(): JSX.Element {
   const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
-  const { loading, fatalError, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
+  const { loading, fatalError, session, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
     useEditorSession(sessionId);
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
@@ -276,8 +277,39 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (loading || fatalError || hydratedRef.current) return;
     hydratedRef.current = true;
-    dispatch({ type: 'LOAD_DOCUMENT', document: initialDocument });
-  }, [loading, fatalError, initialDocument]);
+
+    const productCode = session?.productCode;
+    const codeAddedKey = sessionId ? `aiee:code-added:${sessionId}` : null;
+    const alreadyThere =
+      productCode !== undefined &&
+      initialDocument.layers.some(
+        (layer) => layer.kind === 'text' && layer.text.trim() === productCode,
+      );
+
+    const hydrate = async () => {
+      // Default-added exactly once per session: without the marker, deleting
+      // the code text and refreshing would force it back onto the canvas.
+      let addedBefore = false;
+      if (productCode !== undefined && codeAddedKey && !alreadyThere) {
+        try {
+          const stored = await chrome.storage.local.get(codeAddedKey);
+          addedBefore = Boolean(stored?.[codeAddedKey]);
+          if (!addedBefore) void chrome.storage.local.set({ [codeAddedKey]: true });
+        } catch {
+          /* storage unavailable -> fall back to adding it, best effort */
+        }
+      }
+
+      const layers = [...initialDocument.layers];
+      if (productCode !== undefined && !alreadyThere && !addedBefore) {
+        layers.push(createProductCodeTextLayer(productCode, textStyleRef.current));
+      }
+
+      dispatch({ type: 'LOAD_DOCUMENT', document: { layers } });
+    };
+
+    void hydrate();
+  }, [loading, fatalError, initialDocument, session, sessionId]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
   useEffect(() => {
