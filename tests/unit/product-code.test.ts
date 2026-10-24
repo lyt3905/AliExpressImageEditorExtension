@@ -71,9 +71,18 @@ describe('extractProductCode', () => {
     expect(adapter.extractProductCode()).toBe('MTS-TF-0001');
   });
 
-  it('prefers the URL productId over the title code', () => {
-    const adapter = new AliExpressPageAdapter(docWithTitle('code MTS-TF-0001 here'));
-    // docWithTitle has no productId in the URL, so the title wins
-    expect(adapter.extractProductCode()).toBe('MTS-TF-0001');
+  it('prefers the title code over the URL productId', () => {
+    const doc = {
+      location: {
+        hostname: 'seller.aliexpress.com',
+        pathname: '/publish',
+        search: '?productId=1000001234567890',
+      },
+      // The URL is only read when the title carries no code, so a doc WITH a
+      // title code must never consult the URL.
+      querySelector: () => ({ value: 'Hot Sale MTS-TF-SS86-0001 Figures' }),
+    } as unknown as Document;
+    const adapter = new AliExpressPageAdapter(doc);
+    expect(adapter.extractProductCode()).toBe('MTS-TF-SS86-0001');
   });
 });

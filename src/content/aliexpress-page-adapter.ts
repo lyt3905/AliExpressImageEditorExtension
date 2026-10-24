@@ -78,27 +78,18 @@ export class AliExpressPageAdapter implements PageImageAdapter {
    * Extract the product code from the product edit page.
    *
    * Order of preference:
-   *   1. the URL's `productId` / `offerId` query parameter (most reliable);
-   *   2. a `xxx-xxx` style code inside the 标题 input's value (e.g.
-   *      `MTS-TF-SS86-0001` inside the title text);
+   *   1. a `xxx-xxx` style code inside the 标题 input's value (e.g.
+   *      `MTS-TF-SS86-0001` inside the title text) — the seller's own code;
+   *   2. the URL's `productId` / `offerId` query parameter;
    *   3. page text of the form 「商品编号：123…」 / "Product ID: 123…".
    *
    * Returns `null` when nothing looks like a product code.
    */
   extractProductCode(): string | null {
-    try {
-      const { search } = this.doc.location ?? window.location;
-      const params = new URLSearchParams(search);
-      for (const key of PRODUCT_URL_KEYS) {
-        const value = params.get(key);
-        if (value && /^\d{6,20}$/.test(value)) return value;
-      }
-    } catch {
-      /* fall through to DOM extraction */
-    }
-
     // The title input box: its value is the product title as the seller typed
-    // it, which is where the SKU-style code lives.
+    // it, which is where the SKU-style code lives. Checked FIRST — the URL's
+    // numeric productId is always present, so any other order would never
+    // reach the title code at all.
     try {
       const input = this.doc.querySelector<HTMLInputElement>(TITLE_INPUT_SELECTOR);
       const title = input?.value?.trim();
@@ -108,6 +99,17 @@ export class AliExpressPageAdapter implements PageImageAdapter {
       }
     } catch {
       /* fall through */
+    }
+
+    try {
+      const { search } = this.doc.location ?? window.location;
+      const params = new URLSearchParams(search);
+      for (const key of PRODUCT_URL_KEYS) {
+        const value = params.get(key);
+        if (value && /^\d{6,20}$/.test(value)) return value;
+      }
+    } catch {
+      /* fall through to DOM extraction */
     }
 
     try {
