@@ -21,6 +21,20 @@ const PAGE_MARKERS: readonly string[] = [
 const PRODUCT_CODE_TEXT = /(?:商品编号|商品ID|Product\s*ID)\s*[:：]?\s*(\d{6,20})/i;
 /** URL query keys that carry the product id on the seller console. */
 const PRODUCT_URL_KEYS: readonly string[] = ['productId', 'product_id', 'offerId', 'offer_id'];
+/**
+ * Title-input selector: the publish/edit form's 标题 box.
+ * `<input placeholder="请输入标题" field="title" name="title" ...>`
+ */
+const TITLE_INPUT_SELECTOR = 'input[name="title"][type="text"], input[field="title"], input[placeholder="请输入标题"]';
+/**
+ * A code like `xxx-xxx` (e.g. `MTS-TF-SS86-0001`) embedded in the title.
+ *
+ * At least one hyphen is required — a plain word is not a code. Only letters
+ * and digits may form the segments, so hyphenated English words in the title
+ * (e.g. `micro-scale`) can still sneak in; that is accepted because the seller
+ * sees the extracted text on the canvas and can delete it.
+ */
+const TITLE_CODE = /([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)/;
 
 export class AliExpressPageAdapter implements PageImageAdapter {
   private readonly doc: Document;
@@ -65,8 +79,9 @@ export class AliExpressPageAdapter implements PageImageAdapter {
    *
    * Order of preference:
    *   1. the URL's `productId` / `offerId` query parameter (most reliable);
-   *   2. page text of the form 「商品编号：123…」 / "Product ID: 123…" — the
-   *      seller console usually renders it near the title or in the header.
+   *   2. a `xxx-xxx` style code inside the 标题 input's value (e.g.
+   *      `MTS-TF-SS86-0001` inside the title text);
+   *   3. page text of the form 「商品编号：123…」 / "Product ID: 123…".
    *
    * Returns `null` when nothing looks like a product code.
    */
@@ -80,6 +95,19 @@ export class AliExpressPageAdapter implements PageImageAdapter {
       }
     } catch {
       /* fall through to DOM extraction */
+    }
+
+    // The title input box: its value is the product title as the seller typed
+    // it, which is where the SKU-style code lives.
+    try {
+      const input = this.doc.querySelector<HTMLInputElement>(TITLE_INPUT_SELECTOR);
+      const title = input?.value?.trim();
+      if (title) {
+        const match = TITLE_CODE.exec(title);
+        if (match?.[1]) return match[1];
+      }
+    } catch {
+      /* fall through */
     }
 
     try {

@@ -16,6 +16,16 @@ function docWithSearch(search: string): Document {
   } as unknown as Document;
 }
 
+/** Builds a fake `Document` with a 标题 input carrying the given value. */
+function docWithTitle(value: string): Document {
+  const input = { value };
+  return {
+    location: { hostname: 'seller.aliexpress.com', pathname: '/publish', search: '' },
+    querySelector: (selector: string) =>
+      selector.includes('title') ? input : null,
+  } as unknown as Document;
+}
+
 describe('extractProductCode', () => {
   it('reads productId from the URL query', () => {
     const adapter = new AliExpressPageAdapter(docWithSearch('?productId=1000001234567890&foo=bar'));
@@ -40,5 +50,30 @@ describe('extractProductCode', () => {
   it('returns null when no URL key matches and the DOM path is unavailable', () => {
     const adapter = new AliExpressPageAdapter(docWithSearch('?sp=a'));
     expect(adapter.extractProductCode()).toBeNull();
+  });
+
+  it('extracts an xxx-xxx style code from the 标题 input value', () => {
+    const adapter = new AliExpressPageAdapter(
+      docWithTitle('Hot Sale! Transformation Galaxy Toys OP Commander MTS-TF-SS86-0001 Metallic Micro Scale'),
+    );
+    expect(adapter.extractProductCode()).toBe('MTS-TF-SS86-0001');
+  });
+
+  it('returns null when the title contains no hyphenated code', () => {
+    const adapter = new AliExpressPageAdapter(
+      docWithTitle('Hot Sale! Transformation Galaxy Toys OP Commander Metallic Micro Scale Small Scale Mini Action Figures'),
+    );
+    expect(adapter.extractProductCode()).toBeNull();
+  });
+
+  it('picks the first code when the title carries several', () => {
+    const adapter = new AliExpressPageAdapter(docWithTitle('MTS-TF-0001 and MTS-TF-0002'));
+    expect(adapter.extractProductCode()).toBe('MTS-TF-0001');
+  });
+
+  it('prefers the URL productId over the title code', () => {
+    const adapter = new AliExpressPageAdapter(docWithTitle('code MTS-TF-0001 here'));
+    // docWithTitle has no productId in the URL, so the title wins
+    expect(adapter.extractProductCode()).toBe('MTS-TF-0001');
   });
 });
