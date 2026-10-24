@@ -29,6 +29,7 @@ export interface LayerPanelProps {
 const KIND_LABEL: Record<EditorLayer['kind'], string> = {
   original: '原图',
   cutout: '抠图',
+  brand: '品牌Logo',
   text: '文字',
 };
 
@@ -46,7 +47,7 @@ function layerLabel(layer: EditorLayer, stackIndex: number): string {
     return `T ${clipped}`;
   }
   // Pictures: originals stay numbered so several scans remain distinguishable.
-  return layer.kind === 'original' ? `${KIND_LABEL.original} #${stackIndex + 1}` : KIND_LABEL.cutout;
+  return layer.kind === 'original' ? `${KIND_LABEL.original} #${stackIndex + 1}` : KIND_LABEL[layer.kind];
 }
 
 function layerTitle(layer: EditorLayer): string {

@@ -75,6 +75,20 @@ export class AliExpressPageAdapter implements PageImageAdapter {
   }
 
   /**
+   * The product title as the seller typed it (the 标题 input's value).
+   * Used for brand keyword matching; `null` when the box is absent/empty.
+   */
+  extractProductTitle(): string | null {
+    try {
+      const input = this.doc.querySelector<HTMLInputElement>(TITLE_INPUT_SELECTOR);
+      const title = input?.value?.trim();
+      return title || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Extract the product code from the product edit page.
    *
    * Order of preference:

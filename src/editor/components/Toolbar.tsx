@@ -15,6 +15,10 @@ export interface ToolbarProps {
   watermarkOptions: Array<{ id: string; name: string }>;
   activeWatermarkId: string | null;
   watermarkEnabled: boolean;
+  /** Registered brands, for the logo switcher. */
+  brandOptions: Array<{ id: string; name: string }>;
+  activeBrandId: string | null;
+  onSelectBrand: (id: string | null) => void;
   onBack: () => void;
   onAddText: () => void;
   /** Local files from the picker; clipboard paste goes through the same path. */
@@ -48,6 +52,9 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     watermarkOptions,
     activeWatermarkId,
     watermarkEnabled,
+    brandOptions,
+    activeBrandId,
+    onSelectBrand,
     onBack,
     onAddText,
     onUpload,
@@ -105,6 +112,28 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
       </button>
 
       <span className="toolbar__spacer" />
+
+      <label className="toolbar__check" title="选择品牌：标题未匹配到时手动指定，Logo 会加到画布上">
+        品牌
+      </label>
+      <select
+        className="toolbar__select"
+        value={activeBrandId ?? ''}
+        disabled={brandOptions.length === 0}
+        title={
+          brandOptions.length > 0
+            ? '选择品牌后其 Logo 自动加到画布（标题匹配到的品牌已预选）'
+            : '还没有配置品牌，请到扩展设置里添加'
+        }
+        onChange={(event) => onSelectBrand(event.target.value || null)}
+      >
+        <option value="">不使用品牌</option>
+        {brandOptions.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name}
+          </option>
+        ))}
+      </select>
 
       <label className="toolbar__check" title="显示 / 隐藏水印框（不改动默认设置）">
         <input

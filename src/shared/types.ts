@@ -67,6 +67,8 @@ export interface EditorSessionMeta {
    * it must tolerate `undefined`.
    */
   productCode?: string;
+  /** Product title from the 标题 input, used for brand keyword matching. */
+  productTitle?: string;
 }
 
 /** Full session payload persisted in IndexedDB. */
@@ -108,9 +110,9 @@ export interface ImagePayload {
   sourceHeight: number;
 }
 
-/** A picture on the canvas: an original scan or a cutout result. */
+/** A picture on the canvas: an original scan, a cutout result, or a brand logo. */
 export interface ImageLayer extends BaseLayer, ImagePayload {
-  kind: 'original' | 'cutout';
+  kind: 'original' | 'cutout' | 'brand';
   scale: number;
 }
 
@@ -192,7 +194,7 @@ export interface EditorDocument {
   layers: EditorLayer[];
 }
 
-export type MaterialKind = 'original' | 'cutout';
+export type MaterialKind = 'original' | 'cutout' | 'brand';
 
 export interface EditorMaterial {
   id: string;
@@ -222,6 +224,30 @@ export interface WatermarkMeta {
   width: number;
   height: number;
   isDefault: boolean;
+  createdAt: number;
+}
+
+// ---------------------------------------------------------------- brand logo
+
+/**
+ * A brand in the registry.
+ *
+ * `keywords` are the strings matched (case-insensitive, substring) against the
+ * product title to auto-detect the brand. `aliases` are other names the same
+ * brand is known by — they display in the UI and also act as keywords, so a
+ * brand has exactly one matching list to maintain.
+ */
+export interface BrandMeta {
+  id: string;
+  name: string;
+  /** Other names this brand goes by; each is also a title keyword. */
+  aliases: string[];
+  /** Extra title keywords beyond name/aliases. */
+  keywords: string[];
+  /** Id of the logo image blob in IndexedDB (same store as product images). */
+  logoBlobId: string;
+  width: number;
+  height: number;
   createdAt: number;
 }
 

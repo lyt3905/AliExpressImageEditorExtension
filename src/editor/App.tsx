@@ -19,6 +19,10 @@ import {
   loadTextDefaults,
   saveTextDefaults,
 } from '../services/text-defaults';
+import { loadCodePlacement, saveCodePlacement, type CodePlacement } from '../services/code-placement';
+import { listBrands, loadBrandLogo, matchBrandByTitle } from '../services/brand-store';
+import { putBlob } from '../services/indexed-db';
+import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
 import { EditorStage, type EditorStageHandle } from './components/EditorStage';
 import { LayerPanel } from './components/LayerPanel';
@@ -58,6 +62,41 @@ export function App(): JSX.Element {
   const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
   const { loading, fatalError, session, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
     useEditorSession(sessionId);
+
+  // ---- brand registry (logos are EditorMaterials of a special kind)
+  const [brands, setBrands] = useState<BrandMeta[]>([]);
+  const [brandMaterials, setBrandMaterials] = useState<EditorMaterial[]>([]);
+  const [activeBrandId, setActiveBrandId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const list = await listBrands();
+      if (cancelled || list.length === 0) return;
+      setBrands(list);
+      const loaded: EditorMaterial[] = [];
+      for (const brand of list) {
+        const blob = await loadBrandLogo(brand);
+        if (!blob || cancelled) continue;
+        // Reuse the shared blob store: brand materials survive like cutouts.
+        await putBlob(brand.logoBlobId, blob).catch(() => undefined);
+        loaded.push({
+          id: `material-brand-${brand.id}`,
+          imageId: `brand-${brand.id}`,
+          blobId: brand.logoBlobId,
+          kind: 'brand',
+          width: brand.width,
+          height: brand.height,
+          url: URL.createObjectURL(blob),
+          label: `品牌：${brand.name}`,
+        });
+      }
+      if (!cancelled) setBrandMaterials(loaded);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
   // Raw setter: always go through `showNotice` so the dismiss timer is armed.
@@ -240,6 +279,10 @@ export function App(): JSX.Element {
   // with state would re-render the whole stage on every field blur.
   const textStyleRef = useRef<TextStyleDefaults>({ ...DEFAULT_TEXT_STYLE });
   const textStyleTouchedRef = useRef(false);
+  /** Remembered placement of the auto-added code layer (see code-placement.ts). */
+  const codePlacementRef = useRef<CodePlacement>({ x: 400, y: 48, scale: 1 });
+  /** Id of the code layer this session auto-added; commits to it update the memory. */
+  const codeLayerIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +290,10 @@ export function App(): JSX.Element {
       // A style the user already changed always beats the stored one.
       if (cancelled || textStyleTouchedRef.current) return;
       textStyleRef.current = loaded;
+    });
+    void loadCodePlacement().then((placement) => {
+      if (cancelled) return;
+      codePlacementRef.current = placement;
     });
     return () => {
       cancelled = true;
@@ -302,7 +349,14 @@ export function App(): JSX.Element {
 
       const layers = [...initialDocument.layers];
       if (productCode !== undefined && !alreadyThere && !addedBefore) {
-        layers.push(createProductCodeTextLayer(productCode, textStyleRef.current));
+        const codeLayer = createProductCodeTextLayer(
+          productCode,
+          textStyleRef.current,
+          codePlacementRef.current,
+        );
+        codeLayerIdRef.current = codeLayer.id;
+        // Pushed last = top of the z-order, so nothing lands above the code.
+        layers.push(codeLayer);
       }
 
       dispatch({ type: 'LOAD_DOCUMENT', document: { layers } });
@@ -310,6 +364,33 @@ export function App(): JSX.Element {
 
     void hydrate();
   }, [loading, fatalError, initialDocument, session, sessionId]);
+
+  // ---- brand auto-detect
+  //
+  // Runs once per session, after the document is hydrated AND the brand logos
+  // are loaded (they arrive asynchronously). The title is matched against
+  // every brand's name / aliases / keywords; the logo goes UNDER the code
+  // text so the code keeps the topmost slot.
+  const brandAutoAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!hydratedRef.current || brandAutoAppliedRef.current) return;
+    if (brands.length === 0 || brandMaterials.length === 0) return;
+    brandAutoAppliedRef.current = true;
+
+    const title = session?.productTitle ?? '';
+    if (!title) return;
+    const matched = matchBrandByTitle(brands, title);
+    if (!matched) return;
+    setActiveBrandId(matched.id);
+
+    const material = brandMaterials.find((entry) => entry.id === `material-brand-${matched.id}`);
+    if (!material) return;
+    const alreadyOnCanvas = document.layers.some(
+      (layer) => layer.kind === 'brand' && layer.materialId === material.id,
+    );
+    if (alreadyOnCanvas) return;
+    dispatch({ type: 'ADD_LAYER', layer: createLayerFromMaterial(material) });
+  }, [brands, brandMaterials, session, document]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
   useEffect(() => {
@@ -321,10 +402,16 @@ export function App(): JSX.Element {
   const materialUrlById = useMemo(() => {
     const map: Record<string, string> = {};
     for (const material of materials) map[material.id] = material.url;
+    // Brand logos are canvas-only materials: they render through the same map
+    // but never appear in the material panel.
+    for (const material of brandMaterials) map[material.id] = material.url;
     return map;
-  }, [materials]);
+  }, [materials, brandMaterials]);
 
-  const materialUrls = useMemo(() => materials.map((material) => material.url), [materials]);
+  const materialUrls = useMemo(
+    () => [...materials, ...brandMaterials].map((material) => material.url),
+    [materials, brandMaterials],
+  );
   const images = useImageMap(materialUrls);
 
   const imageForLayer = useCallback(
@@ -339,6 +426,25 @@ export function App(): JSX.Element {
   const handleAddMaterial = useCallback((material: EditorMaterial) => {
     dispatch({ type: 'ADD_LAYER', layer: createLayerFromMaterial(material) });
   }, []);
+
+  /**
+   * Manual brand pick from the toolbar: adds the logo (once), or removes all
+   * logos of other brands when switching. "不使用品牌" removes brand layers.
+   */
+  const handleSelectBrand = useCallback(
+    (brandId: string | null) => {
+      setActiveBrandId(brandId);
+      // Remove every existing brand layer first: switching brands must not
+      // pile two logos onto the canvas.
+      for (const layer of document.layers) {
+        if (layer.kind === 'brand') dispatch({ type: 'DELETE_LAYER', layerId: layer.id });
+      }
+      if (!brandId) return;
+      const material = brandMaterials.find((entry) => entry.id === `material-brand-${brandId}`);
+      if (material) handleAddMaterial(material);
+    },
+    [brandMaterials, document, handleAddMaterial],
+  );
 
   /** Text layers enter through the very same ADD_LAYER path as pictures. */
   const handleAddText = useCallback(() => {
@@ -390,8 +496,22 @@ export function App(): JSX.Element {
       dispatch({ type: 'COMMIT_LAYER', layerId, patch });
       const style = pickTextStyle(patch);
       if (style) rememberTextStyle(style);
+
+      // Moving / resizing the auto-added code layer updates its remembered
+      // placement, so the next session's code starts where this one ended.
+      if (layerId === codeLayerIdRef.current && (patch.x !== undefined || patch.y !== undefined || patch.scale !== undefined)) {
+        const layer = findLayer(document, layerId);
+        if (layer) {
+          codePlacementRef.current = {
+            x: patch.x ?? layer.x,
+            y: patch.y ?? layer.y,
+            scale: patch.scale ?? layer.scale,
+          };
+          void saveCodePlacement(codePlacementRef.current);
+        }
+      }
     },
-    [rememberTextStyle],
+    [document, rememberTextStyle],
   );
 
   /** Back to the factory style: the current layer *and* the stored preference. */
@@ -665,6 +785,9 @@ export function App(): JSX.Element {
         watermarkOptions={watermark.options.map((option) => ({ id: option.id, name: option.name }))}
         activeWatermarkId={watermark.activeId}
         watermarkEnabled={watermark.enabled && Boolean(watermark.layer)}
+        brandOptions={brands.map((brand) => ({ id: brand.id, name: brand.name }))}
+        activeBrandId={activeBrandId}
+        onSelectBrand={handleSelectBrand}
         onBack={() => void handleBack()}
         onAddText={handleAddText}
         onUpload={(files) => void handleUpload(files)}

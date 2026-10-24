@@ -4,7 +4,7 @@ import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import { estimateTextHeight } from '../state/editor-reducer';
-import { axisScale, bakeTextScale, splitSignedScale } from '../state/transform';
+import { axisScale, splitSignedScale } from '../state/transform';
 
 /** Largest visual size of the canvas preview. The logical canvas stays 800x800. */
 export const MAX_PREVIEW_SIZE = 640;
@@ -126,6 +126,20 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     const node = stage.findOne<Konva.Node>(`#${selectedLayerId}`);
     // Belt and braces: the watermark is locked, so it never gets handles.
     const selectable = node && node.name() !== WATERMARK_LAYER_ID ? node : null;
+    if (selectable) {
+      /*
+        Text layers get SIDE anchors only: dragging them is a wrap-width change
+        (`width`), not a font-size change. Corner handles stay for pictures; a
+        text resize still goes through `bakeTextScale` below, reachable from
+        the panel's own controls.
+      */
+      const isText = selectable.getAttr('text') !== undefined && selectable instanceof Konva.Text;
+      transformer.enabledAnchors(
+        isText
+          ? ['middle-left', 'middle-right']
+          : ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+      );
+    }
     transformer.nodes(selectable ? [selectable] : []);
     transformer.getLayer()?.batchDraw();
   }, [selectedLayerId, layers, previewScale, watermark]);
@@ -241,6 +255,19 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   scaleY={axisScale(layer, 'y')}
                   rotation={layer.rotation}
                   draggable
+                  /*
+                    Hit detection for text is only the glyph box, not the whole
+                    wrap-width rectangle: a 400px-wide one-line label would
+                    otherwise sit on top of the picture below and swallow every
+                    click meant for it. `fontSize` approximates one line's
+                    height (Konva's default lineHeight = 1).
+                  */
+                  hitFunc={(context, shape) => {
+                    const height = textHeights[layer.id] ?? estimateTextHeight(layer);
+                    context.beginPath();
+                    context.rect(0, 0, layer.width, height);
+                    context.fillStrokeShape(shape);
+                  }}
                   onClick={() => onSelect(layer.id)}
                   onTap={() => onSelect(layer.id)}
                   onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
@@ -248,23 +275,24 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                     const node = event.target as Konva.Text;
                     const signedX = node.scaleX();
                     const signedY = node.scaleY();
-                    // Normalise the node back to scale 1 so `scale` stays the single source of truth.
+                    /*
+                      Text layers only expose the middle-left / middle-right
+                      anchors, so a drag is a WRAP-WIDTH change, not a resize:
+                      fold scaleX back into `width` and keep `fontSize` alone.
+                      The vertical scale is reset with the horizontal one —
+                      a text layer's height follows its wrap, never a drag.
+                    */
+                    const newWidth = Math.max(32, Math.round(layer.width * Math.abs(signedX)));
+                    node.width(newWidth);
                     node.scaleX(1);
                     node.scaleY(1);
-                    const { scale, flipX, flipY } = splitSignedScale(signedX, signedY);
-                    /*
-                      Resizing text is a font-size change, not a transform: fold
-                      the drag back into `fontSize` so the 字号 field shows the
-                      size on screen and the next new layer inherits it (see
-                      `bakeTextScale`). Whatever the 12–200 range could not hold
-                      stays in `scale`, so the text never jumps on release.
-                    */
-                    const baked = bakeTextScale(layer.fontSize, scale);
+                    // Keep (x, y) the centre: offsetX tracks half the new width.
+                    node.offsetX(newWidth / 2);
+                    const { flipX, flipY } = splitSignedScale(signedX, signedY);
                     onTransformEnd(layer.id, {
                       x: node.x(),
                       y: node.y(),
-                      scale: baked.scale,
-                      fontSize: baked.fontSize,
+                      width: newWidth,
                       rotation: node.rotation(),
                       flipX,
                       flipY,

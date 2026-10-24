@@ -20,6 +20,7 @@ export function buildSessionRecord(input: {
   sourceUrl: string;
   images: SessionImage[];
   productCode?: string | null;
+  productTitle?: string | null;
 }): EditorSessionRecord {
   return {
     id: input.id,
@@ -29,6 +30,7 @@ export function buildSessionRecord(input: {
     imageIds: input.images.map((image) => image.id),
     images: input.images,
     ...(input.productCode ? { productCode: input.productCode } : {}),
+    ...(input.productTitle ? { productTitle: input.productTitle } : {}),
   };
 }
 

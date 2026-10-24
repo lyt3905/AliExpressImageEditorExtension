@@ -86,6 +86,10 @@ export const STORAGE_KEYS = {
   watermarks: 'aiee:watermarks',
   /** Last used text style, so a new text layer starts where the last one ended. */
   textDefaults: 'aiee:text-defaults',
+  /** Last committed position/scale of the auto-added product-code text layer. */
+  codePlacement: 'aiee:code-placement',
+  /** Brand registry: [{ id, name, aliases, keywords, logoBlobId, ... }]. */
+  brands: 'aiee:brands',
 } as const;
 
 export const DB_NAME = 'aliexpress-image-editor';
@@ -106,6 +110,17 @@ export const MAX_WATERMARK_BYTES = 8 * 1024 * 1024;
 
 /** Accepted watermark mime types. */
 export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+
+// ---------------------------------------------------------------- brand logo
+
+/** Blob-id prefix for brand logo images inside the shared `blobs` store. */
+export const BRAND_BLOB_PREFIX = 'brand-logo-';
+
+/** Reject oversized logo uploads before they reach IndexedDB. */
+export const MAX_BRAND_LOGO_BYTES = 4 * 1024 * 1024;
+
+/** Accepted brand logo mime types. */
+export const BRAND_LOGO_MIME_TYPES = WATERMARK_MIME_TYPES;
 
 // ---------------------------------------------------------------- text layers
 

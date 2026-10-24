@@ -276,17 +276,22 @@ export function createTextLayer(defaults?: Partial<TextStyleDefaults>): TextLaye
 /**
  * Build the default text layer carrying the product code.
  *
- * Placed near the top of the canvas, styled from the remembered preference
- * like any hand-added text. Centre-aligned and wrapped to the default width so
- * even a long code stays on the canvas.
+ * Placement comes from the remembered preference (`code-placement.ts`): the
+ * seller moved the last code somewhere, so the next one starts there. Centre-
+ * aligned and wrapped to the default width so even a long code stays readable.
  */
-export function createProductCodeTextLayer(productCode: string, defaults?: Partial<TextStyleDefaults>): TextLayer {
+export function createProductCodeTextLayer(
+  productCode: string,
+  defaults?: Partial<TextStyleDefaults>,
+  placement?: { x: number; y: number; scale: number },
+): TextLayer {
   const layer = createTextLayer(defaults);
   return {
     ...layer,
     text: productCode,
-    x: CANVAS_SIZE / 2,
-    y: 48,
+    x: placement?.x ?? layer.x,
+    y: placement?.y ?? 48,
+    scale: placement?.scale ?? layer.scale,
   };
 }
 
@@ -382,7 +387,7 @@ export function restoreStoredLayer(raw: unknown): EditorLayer | null {
 
   if (candidate.kind === 'text') return restoreTextLayer(candidate);
 
-  if (candidate.kind !== 'original' && candidate.kind !== 'cutout') return null;
+  if (candidate.kind !== 'original' && candidate.kind !== 'cutout' && candidate.kind !== 'brand') return null;
   if (typeof candidate.materialId !== 'string') return null;
   return candidate as unknown as ImageLayer;
 }
@@ -391,11 +396,15 @@ export function restoreStoredLayer(raw: unknown): EditorLayer | null {
  * Drop picture layers whose material is gone, keeping every text layer.
  *
  * Text layers carry no `materialId`, so a naive material check would erase all
- * of them on every editor reload.
+ * of them on every editor reload. Brand logo layers are kept too: their blobs
+ * live in the shared IndexedDB store and their materials are rebuilt by the
+ * editor from the brand registry, independent of the session's image list.
  */
 export function keepLayerWithMaterials(
   layers: readonly EditorLayer[],
   materialIds: ReadonlySet<string>,
 ): EditorLayer[] {
-  return layers.filter((layer) => layer.kind === 'text' || materialIds.has(layer.materialId));
+  return layers.filter(
+    (layer) => layer.kind === 'text' || layer.kind === 'brand' || materialIds.has(layer.materialId),
+  );
 }

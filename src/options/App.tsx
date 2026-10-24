@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_SERVER_URL, MAX_WATERMARK_BYTES } from '../shared/constants';
+import { DEFAULT_SERVER_URL, MAX_BRAND_LOGO_BYTES, MAX_WATERMARK_BYTES } from '../shared/constants';
 import { messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
-import type { WatermarkMeta } from '../shared/types';
+import type { BrandMeta, WatermarkMeta } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
 import type { ExtensionSettings } from '../services/settings';
+import {
+  listBrands,
+  loadBrandLogo,
+  parseBrandTerms,
+  removeBrand,
+  saveBrand,
+  updateBrand,
+} from '../services/brand-store';
 import {
   listWatermarks,
   loadWatermarkBlob,
@@ -17,6 +25,7 @@ import {
 const LAST_ERROR_KEY = 'aiee:last-error';
 const ACCEPTED_TYPES = 'image/png,image/jpeg,image/webp';
 const SIZE_LIMIT_MB = Math.round(MAX_WATERMARK_BYTES / 1024 / 1024);
+const LOGO_SIZE_LIMIT_MB = Math.round(MAX_BRAND_LOGO_BYTES / 1024 / 1024);
 
 interface LastError {
   code: string;
@@ -44,6 +53,21 @@ export function OptionsApp(): JSX.Element {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbUrlsRef = useRef<Record<string, string>>({});
+
+  // ---- brand registry state
+  const [brands, setBrands] = useState<BrandMeta[]>([]);
+  const [brandDraftNames, setBrandDraftNames] = useState<Record<string, string>>({});
+  const [brandDraftAliases, setBrandDraftAliases] = useState<Record<string, string>>({});
+  const [brandDraftKeywords, setBrandDraftKeywords] = useState<Record<string, string>>({});
+  const [brandThumbs, setBrandThumbs] = useState<Record<string, string>>({});
+  const [brandStatus, setBrandStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
+  const [brandBusy, setBrandBusy] = useState(false);
+  /** Draft for the "add brand" form. */
+  const [newBrandName, setNewBrandName] = useState('');
+  const [newBrandAliases, setNewBrandAliases] = useState('');
+  const [newBrandKeywords, setNewBrandKeywords] = useState('');
+  const [newBrandFile, setNewBrandFile] = useState<File | null>(null);
+  const brandFileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshAuthState = useCallback(async () => {
     try {
@@ -96,6 +120,39 @@ export function OptionsApp(): JSX.Element {
   useEffect(() => {
     void refreshWatermarks();
   }, [refreshWatermarks]);
+
+  // ---- brand registry
+
+  const refreshBrands = useCallback(async (): Promise<BrandMeta[]> => {
+    const list = await listBrands();
+    setBrands(list);
+    setBrandDraftNames(Object.fromEntries(list.map((entry) => [entry.id, entry.name])));
+    setBrandDraftAliases(Object.fromEntries(list.map((entry) => [entry.id, entry.aliases.join(', ')])));
+    setBrandDraftKeywords(Object.fromEntries(list.map((entry) => [entry.id, entry.keywords.join(', ')])));
+    return list;
+  }, []);
+
+  useEffect(() => {
+    void refreshBrands();
+  }, [refreshBrands]);
+
+  // ---- thumbnail object URLs for the brand list
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const meta of brands) {
+        if (thumbUrlsRef.current[meta.id]) continue;
+        const blob = await loadBrandLogo(meta);
+        if (!blob || cancelled) continue;
+        const url = URL.createObjectURL(blob);
+        thumbUrlsRef.current[meta.id] = url;
+        if (!cancelled) setBrandThumbs((previous) => ({ ...previous, [meta.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [brands]);
 
   // ---- thumbnail object URLs for the watermark list
   useEffect(() => {
@@ -240,6 +297,68 @@ export function OptionsApp(): JSX.Element {
     },
     [],
   );
+
+  // ---- brand management
+
+  const handleAddBrand = useCallback(async () => {
+    if (!newBrandFile) {
+      setBrandStatus({ kind: 'bad', text: '请先选择 Logo 图片' });
+      return;
+    }
+    setBrandBusy(true);
+    setBrandStatus({ kind: 'idle', text: `正在添加品牌「${newBrandName || newBrandFile.name}」…` });
+    try {
+      const meta = await saveBrand({
+        file: newBrandFile,
+        name: newBrandName || newBrandFile.name.replace(/\.[^.]+$/, ''),
+        aliases: parseBrandTerms(newBrandAliases),
+        keywords: parseBrandTerms(newBrandKeywords),
+      });
+      await refreshBrands();
+      setBrandStatus({ kind: 'ok', text: `已添加品牌「${meta.name}」` });
+      setNewBrandName('');
+      setNewBrandAliases('');
+      setNewBrandKeywords('');
+      setNewBrandFile(null);
+      if (brandFileInputRef.current) brandFileInputRef.current.value = '';
+    } catch (error) {
+      setBrandStatus({ kind: 'bad', text: messageOf(error) });
+    } finally {
+      setBrandBusy(false);
+    }
+  }, [newBrandAliases, newBrandFile, newBrandKeywords, newBrandName, refreshBrands]);
+
+  const handleSaveBrandRow = useCallback(
+    async (id: string) => {
+      const meta = brands.find((entry) => entry.id === id);
+      if (!meta) return;
+      setBrands(
+        await updateBrand(id, {
+          name: brandDraftNames[id],
+          aliases: parseBrandTerms(brandDraftAliases[id] ?? ''),
+          keywords: parseBrandTerms(brandDraftKeywords[id] ?? ''),
+        }),
+      );
+      setBrandStatus({ kind: 'ok', text: '已保存品牌修改' });
+    },
+    [brandDraftAliases, brandDraftKeywords, brandDraftNames, brands],
+  );
+
+  const handleRemoveBrand = useCallback(async (meta: BrandMeta) => {
+    if (!window.confirm(`确定删除品牌「${meta.name}」吗？该操作不可撤销。`)) return;
+    const cached = thumbUrlsRef.current[meta.id];
+    if (cached) {
+      URL.revokeObjectURL(cached);
+      delete thumbUrlsRef.current[meta.id];
+    }
+    setBrandThumbs((previous) => {
+      const next = { ...previous };
+      delete next[meta.id];
+      return next;
+    });
+    setBrands(await removeBrand(meta.id));
+    setBrandStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
+  }, []);
 
   return (
     <div className="options">
@@ -389,6 +508,129 @@ export function OptionsApp(): JSX.Element {
       {watermarkStatus ? (
         <div className={`status-line status-line--tight${watermarkStatus.kind === 'bad' ? ' status-bad' : ''}`}>
           {watermarkStatus.text}
+        </div>
+      ) : null}
+
+      <hr className="section-divider" />
+
+      <h2>品牌商标</h2>
+      <p className="hint">
+        维护「品牌 → Logo」列表。打开编辑器时会用 <strong>名称 / 别名 / 关键词</strong> 匹配商品标题，
+        命中的品牌 Logo 会自动作为图层加到画布上；也可以在编辑器工具栏手动选择。
+        同一品牌的多个称呼都填在「别名」里即可，名称和别名本身就参与匹配。
+      </p>
+
+      <div className="field">
+        <label htmlFor="brand-file">Logo 图片</label>
+        <input
+          id="brand-file"
+          ref={brandFileInputRef}
+          type="file"
+          accept={ACCEPTED_TYPES}
+          disabled={brandBusy}
+          onChange={(event) => setNewBrandFile(event.target.files?.[0] ?? null)}
+        />
+        <small>PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {LOGO_SIZE_LIMIT_MB}MB。</small>
+      </div>
+      <div className="field">
+        <label htmlFor="brand-name">品牌名称</label>
+        <input
+          id="brand-name"
+          value={newBrandName}
+          spellCheck={false}
+          disabled={brandBusy}
+          onChange={(event) => setNewBrandName(event.target.value)}
+          placeholder="例：Morph Toys"
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="brand-aliases">别名（同品牌的其他叫法，逗号分隔）</label>
+        <input
+          id="brand-aliases"
+          value={newBrandAliases}
+          spellCheck={false}
+          disabled={brandBusy}
+          onChange={(event) => setNewBrandAliases(event.target.value)}
+          placeholder="例：MT, MorphToys, 摩变"
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="brand-keywords">标题关键词（可选，逗号分隔）</label>
+        <input
+          id="brand-keywords"
+          value={newBrandKeywords}
+          spellCheck={false}
+          disabled={brandBusy}
+          onChange={(event) => setNewBrandKeywords(event.target.value)}
+          placeholder="例：Transformation Galaxy, OP Commander"
+        />
+        <small>标题里出现任一「名称 / 别名 / 关键词」（不区分大小写）即判定为该品牌。</small>
+      </div>
+      <div className="row">
+        <button type="button" className="primary" disabled={brandBusy || !newBrandFile} onClick={() => void handleAddBrand()}>
+          添加品牌
+        </button>
+      </div>
+
+      {brands.length === 0 ? (
+        <div className="empty">还没有品牌，先上传一张 Logo 并填上名称。</div>
+      ) : (
+        <div className="watermark-list">
+          {brands.map((meta) => (
+            <div className="watermark-row watermark-row--brand" key={meta.id}>
+              <span className="watermark-row__thumb">
+                {brandThumbs[meta.id] ? (
+                  <img src={brandThumbs[meta.id]} alt="" />
+                ) : (
+                  <span className="watermark-row__thumb-empty" />
+                )}
+              </span>
+
+              <span className="watermark-row__brand-fields">
+                <input
+                  value={brandDraftNames[meta.id] ?? meta.name}
+                  spellCheck={false}
+                  placeholder="品牌名称"
+                  onChange={(event) =>
+                    setBrandDraftNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
+                  }
+                />
+                <input
+                  value={brandDraftAliases[meta.id] ?? ''}
+                  spellCheck={false}
+                  placeholder="别名（逗号分隔）"
+                  onChange={(event) =>
+                    setBrandDraftAliases((previous) => ({ ...previous, [meta.id]: event.target.value }))
+                  }
+                />
+                <input
+                  value={brandDraftKeywords[meta.id] ?? ''}
+                  spellCheck={false}
+                  placeholder="标题关键词（逗号分隔）"
+                  onChange={(event) =>
+                    setBrandDraftKeywords((previous) => ({ ...previous, [meta.id]: event.target.value }))
+                  }
+                />
+              </span>
+
+              <span className="watermark-row__size">
+                {meta.width}×{meta.height}
+              </span>
+
+              <button type="button" onClick={() => void handleSaveBrandRow(meta.id)}>
+                保存
+              </button>
+              <button type="button" onClick={() => void handleRemoveBrand(meta)}>
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {brandStatus ? (
+        <div className={`status-line status-line--tight${brandStatus.kind === 'bad' ? ' status-bad' : ''}`}>
+          {brandStatus.text}
         </div>
       ) : null}
     </div>
