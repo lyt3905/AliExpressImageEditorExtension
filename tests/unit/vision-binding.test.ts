@@ -9,6 +9,7 @@ import {
   bindMaterialsWithVision,
   buildBindingPrompt,
   parseBindingAnswer,
+  selectVisionCandidates,
   type VisionCandidate,
 } from '../../src/services/composition/vision-binder';
 import type { VisionSettings } from '../../src/services/settings';
@@ -239,17 +240,39 @@ describe('bindMaterialsWithVision', () => {
     expect(JSON.stringify(captured.body)).toContain('商品正面图');
   });
 
-  it('caps the request at the configured candidate limit', async () => {
-    const many: VisionCandidate[] = Array.from({ length: 6 }, (_unused, index) => ({
+  it('sends every candidate when the page has no more than the slot count', async () => {
+    // Six is the number of image slots AliExpress exposes, so this is the normal
+    // case — and it must NOT be trimmed: the package photo is often slot 5 or 6.
+    const six: VisionCandidate[] = Array.from({ length: 6 }, (_unused, index) => ({
       materialId: `m${index}`,
       label: `图${index}`,
       dataUrl: `data:image/png;base64,${index}`,
     }));
     const { impl, captured } = fakeFetch({ hero: 'A', package_found: false });
-    await bindMaterialsWithVision({ config: CONFIG, candidates: many, fetchImpl: impl });
+    await bindMaterialsWithVision({ config: CONFIG, candidates: six, fetchImpl: impl });
     const content = captured.body.messages[0].content as unknown[];
     // prompt + (label + image) per candidate
-    expect(content).toHaveLength(1 + 4 * 2);
+    expect(content).toHaveLength(1 + 6 * 2);
+  });
+
+  it('keeps the packaging photo when there are more candidates than slots', async () => {
+    const many: VisionCandidate[] = [
+      { materialId: 'a', label: '商品正面图', dataUrl: 'data:image/png;base64,0' },
+      { materialId: 'b', label: '商品背面图', dataUrl: 'data:image/png;base64,1' },
+      { materialId: 'c', label: '细节图1', dataUrl: 'data:image/png;base64,2' },
+      { materialId: 'd', label: '细节图2', dataUrl: 'data:image/png;base64,3' },
+      { materialId: 'e', label: '场景图', dataUrl: 'data:image/png;base64,4' },
+      { materialId: 'f', label: '包装图', dataUrl: 'data:image/png;base64,5' },
+      { materialId: 'g', label: '补白图', dataUrl: 'data:image/png;base64,6' },
+    ];
+    const { impl, captured } = fakeFetch({ hero: 'A', package_found: false });
+    await bindMaterialsWithVision({ config: CONFIG, candidates: many, fetchImpl: impl });
+
+    const content = captured.body.messages[0].content as Array<Record<string, unknown>>;
+    expect(content).toHaveLength(1 + 6 * 2);
+    // A naive "first six" would have dropped 包装图 — the one role the model is for.
+    expect(JSON.stringify(content)).toContain('包装图');
+    expect(JSON.stringify(content)).not.toContain('补白图');
   });
 
   it('returns null without spending a request when there is nothing to send', async () => {
@@ -265,6 +288,50 @@ describe('bindMaterialsWithVision', () => {
   it('returns null when the answer names no usable hero', async () => {
     const { impl } = fakeFetch({ hero: null, package_found: false });
     expect(await bindMaterialsWithVision({ config: CONFIG, candidates, fetchImpl: impl })).toBeNull();
+  });
+});
+
+describe('selectVisionCandidates', () => {
+  const make = (label: string, id = label) => ({ materialId: id, label });
+
+  it('keeps everything when the list already fits', () => {
+    const list = [make('正面'), make('背面'), make('包装')];
+    expect(selectVisionCandidates(list)).toEqual(list);
+  });
+
+  it('drops the least informative extras, not the tail of the list', () => {
+    const list = [
+      make('正面'), make('背面'), make('细节1'), make('细节2'), make('场景'), make('包装'), make('补白'),
+    ];
+    const chosen = selectVisionCandidates(list);
+    expect(chosen).toHaveLength(6);
+    expect(chosen.map((entry) => entry.label)).toContain('包装');
+    expect(chosen.map((entry) => entry.label)).not.toContain('补白');
+  });
+
+  it('preserves page order in the chosen list, so A/B/C still read left to right', () => {
+    const list = [make('正面'), make('背面'), make('细节1'), make('细节2'), make('包装'), make('细节3'), make('细节4')];
+    const chosen = selectVisionCandidates(list);
+    expect(chosen.map((entry) => entry.label)).toEqual(['正面', '背面', '细节1', '细节2', '包装', '细节3']);
+  });
+
+  it('falls back to page order when nothing looks like packaging', () => {
+    const list = Array.from({ length: 8 }, (_unused, index) => make(`图${index}`));
+    expect(selectVisionCandidates(list).map((entry) => entry.label)).toEqual([
+      '图0', '图1', '图2', '图3', '图4', '图5',
+    ]);
+  });
+
+  it('honours a custom limit', () => {
+    const list = [make('正面'), make('包装'), make('细节')];
+    expect(selectVisionCandidates(list, 2).map((entry) => entry.label)).toEqual(['正面', '包装']);
+  });
+
+  it('does not mutate the input array', () => {
+    const list = [make('正面'), make('包装'), make('细节')];
+    const before = list.map((entry) => entry.label);
+    selectVisionCandidates(list, 2);
+    expect(list.map((entry) => entry.label)).toEqual(before);
   });
 });
 

@@ -112,11 +112,22 @@ function paint(
   return rgba;
 }
 
-/** A tall blue slab on white: reads as "one product, front view". */
-function productPng(): string {
+/** A tall slab on white: reads as "one product, front view". */
+function productPng(fill: [number, number, number] = [30, 90, 200]): string {
   const rgba = paint(320, 320, (x, y) => {
     const inside = x > 90 && x < 230 && y > 30 && y < 290;
-    return inside ? [30, 90, 200, 255] : [255, 255, 255, 255];
+    return inside ? [fill[0], fill[1], fill[2], 255] : [255, 255, 255, 255];
+  });
+  return dataUrl(encodePng(320, 320, rgba));
+}
+
+/** A white card with a ruled table: reads as "spec sheet, not a product". */
+function specCardPng(): string {
+  const rgba = paint(320, 320, (x, y) => {
+    const border = (x > 40 && x < 280 && y > 60 && y < 260) &&
+      (x < 46 || x > 274 || y < 66 || y > 254);
+    const ruler = x > 60 && x < 260 && y > 100 && y < 250 && (y - 100) % 40 < 3;
+    return border || ruler ? [0, 0, 0, 255] : [255, 255, 255, 255];
   });
   return dataUrl(encodePng(320, 320, rgba));
 }
@@ -187,6 +198,32 @@ describe.skipIf(!READY)('vision gateway (live)', () => {
       console.log('[vision live] binding', JSON.stringify(binding));
       expect(binding).not.toBeNull();
       expect(binding!.heroId).toBe('m-product');
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'still finds the package when it is the fifth of six images',
+    async () => {
+      // The cap question in one test: 6 is what a product page can hold, and the
+      // package photo is often the last one. Four distractors in front of it.
+      const binding = await bindMaterialsWithVision({
+        config,
+        candidates: [
+          { materialId: 'm-product', label: '商品正面图', dataUrl: productPng([30, 90, 200]) },
+          { materialId: 'm-back', label: '商品背面图', dataUrl: productPng([30, 140, 90]) },
+          { materialId: 'm-detail', label: '细节图', dataUrl: productPng([180, 60, 40]) },
+          { materialId: 'm-spec', label: '参数图', dataUrl: specCardPng() },
+          { materialId: 'm-box', label: '包装图', dataUrl: boxPng() },
+          { materialId: 'm-filler', label: '补白图', dataUrl: productPng([120, 120, 120]) },
+        ],
+      });
+
+      // eslint-disable-next-line no-console
+      console.log('[vision live] six-image binding', JSON.stringify(binding));
+      expect(binding).not.toBeNull();
+      expect(binding!.boxId).toBe('m-box');
+      expect(binding!.heroId).not.toBe('m-box');
     },
     TIMEOUT_MS,
   );

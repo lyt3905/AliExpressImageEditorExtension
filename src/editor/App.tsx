@@ -26,10 +26,9 @@ import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
 import { createAlphaProbeCache } from '../services/composition/alpha-probe';
 import { bindMaterialRoles, pickSecondary } from '../services/composition/bind-materials';
-import { bindMaterialsWithVision } from '../services/composition/vision-binder';
+import { bindMaterialsWithVision, selectVisionCandidates } from '../services/composition/vision-binder';
 import { blobToThumbnailDataUrl } from '../services/image-thumbnail';
 import { loadSettings } from '../services/settings';
-import { VISION_MAX_CANDIDATES } from '../shared/constants';
 import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
 import {
   DEFAULT_TEMPLATE_KEY,
@@ -685,7 +684,9 @@ export function App(): JSX.Element {
     try {
       const settings = await loadSettings();
       const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
-      for (const material of cutouts.slice(0, VISION_MAX_CANDIDATES)) {
+      // Selection happens BEFORE decoding: picking the six worth sending is cheap
+      // (labels only), and thumbnailing a dropped material would be wasted work.
+      for (const material of selectVisionCandidates(cutouts)) {
         const blob = await getBlob(material.blobId);
         if (!blob) continue;
         candidates.push({

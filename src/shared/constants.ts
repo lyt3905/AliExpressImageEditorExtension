@@ -97,11 +97,24 @@ export const DEFAULT_VISION_BASE_URL = 'http://127.0.0.1:8788/v1';
 export const DEFAULT_VISION_MODEL = 'glm-5.3';
 
 /**
- * One binding call sends every candidate in a single request (verified: two images
- * in one message, clean JSON back in ~4.5 s). Capped because prompt tokens grow
- * linearly with images and a 6-photo product would cost ~3x for no better answer.
+ * How many candidate images one binding request may carry.
+ *
+ * Six is the number of image slots the AliExpress editor exposes, so a normal
+ * product never exceeds it — this is a page-shaped limit, not a cost guess.
+ *
+ * Measured on the live gateway (synthetic fixtures, 512px, `glm-5.3`):
+ *
+ * | images | prompt tokens | latency |
+ * | --- | --- | --- |
+ * | 4 | 1663 | 3.8-5.8 s |
+ * | 5 | 2029 | 3.8-3.9 s |
+ * | 6 | 2395 | 4.7-9.2 s |
+ *
+ * ~366 tokens per extra image and no accuracy loss at six, so an earlier cap of 4
+ * was costing coverage (the package photo is often the 5th or 6th slot) to save
+ * nothing worth saving.
  */
-export const VISION_MAX_CANDIDATES = 4;
+export const VISION_MAX_CANDIDATES = 6;
 
 /** Longest side of the thumbnail sent to the vision model. */
 export const VISION_THUMBNAIL_SIZE = 512;

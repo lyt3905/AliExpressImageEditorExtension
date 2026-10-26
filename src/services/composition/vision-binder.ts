@@ -15,6 +15,7 @@
 import { VISION_MAX_CANDIDATES } from '../../shared/constants';
 import type { VisionSettings } from '../settings';
 import { askVisionJson, type FetchLike } from '../vision-client';
+import { PACKAGING_LABEL_PATTERN } from './bind-materials';
 
 export interface VisionCandidate {
   materialId: string;
@@ -32,6 +33,38 @@ export interface VisionBinding {
 }
 
 const KEYS = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
+
+/**
+ * Decide which candidates are worth spending a slot on.
+ *
+ * Taking "the first N" is the wrong rule: a product page can carry more cut-outs
+ * than the six slots (extra uploads / pastes), and the packaging photo is exactly
+ * the one most likely to fall off the end — which is the one role the model exists
+ * to find. So when the list is too long, anything whose label looks like packaging
+ * is kept first, and the rest follow in page order.
+ *
+ * The chosen candidates keep their ORIGINAL relative order, so the letters A/B/C
+ * still read left-to-right like the page and a human comparing the answer to the
+ * panel sees the same sequence.
+ */
+export function selectVisionCandidates<T extends { label: string }>(
+  candidates: readonly T[],
+  limit: number = VISION_MAX_CANDIDATES,
+): T[] {
+  if (candidates.length <= limit) return [...candidates];
+
+  const scored = candidates.map((candidate, index) => ({
+    candidate,
+    index,
+    packaging: PACKAGING_LABEL_PATTERN.test(candidate.label) ? 1 : 0,
+  }));
+  scored.sort((left, right) => right.packaging - left.packaging || left.index - right.index);
+
+  return scored
+    .slice(0, limit)
+    .sort((left, right) => left.index - right.index)
+    .map((entry) => entry.candidate);
+}
 
 export function buildBindingPrompt(candidates: ReadonlyArray<{ key: string; label: string }>): string {
   const listing = candidates.map((candidate) => `${candidate.key}（${candidate.label}）`).join('、');
@@ -104,7 +137,7 @@ export interface VisionBindRequest {
  * says "gateway unreachable", the other says "the model could not decide".
  */
 export async function bindMaterialsWithVision(request: VisionBindRequest): Promise<VisionBinding | null> {
-  const candidates = request.candidates.slice(0, VISION_MAX_CANDIDATES);
+  const candidates = selectVisionCandidates(request.candidates);
   if (candidates.length === 0) return null;
 
   const keyed = candidates.map((candidate, index) => ({

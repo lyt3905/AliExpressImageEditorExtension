@@ -25,8 +25,15 @@ export interface BindResult {
   reason: string;
 }
 
-/** Labels that mean "this is packaging, not the product". */
-const BOX_LABEL_PATTERN = /包装|彩盒|礼盒|盒子|外箱|箱|packag|package|box|carton/i;
+/**
+ * Labels that mean "this is packaging, not the product".
+ *
+ * Exported because the vision binder needs the same notion to decide which
+ * candidates are worth a slot in its request — two copies of this pattern would
+ * drift, and then the heuristic and the model would disagree about what packaging
+ * looks like.
+ */
+export const PACKAGING_LABEL_PATTERN = /包装|彩盒|礼盒|盒子|外箱|箱|packag|package|box|carton/i;
 
 export function bindMaterialRoles(candidates: readonly BindCandidate[]): BindResult {
   if (candidates.length === 0) {
@@ -40,7 +47,7 @@ export function bindMaterialRoles(candidates: readonly BindCandidate[]): BindRes
     };
   }
 
-  const box = candidates.find((candidate) => BOX_LABEL_PATTERN.test(candidate.label ?? ''));
+  const box = candidates.find((candidate) => PACKAGING_LABEL_PATTERN.test(candidate.label ?? ''));
   const heroPool = box ? candidates.filter((candidate) => candidate !== box) : candidates;
   // Largest area wins: on a product page the 正面图 is usually the biggest crop.
   const hero = heroPool.reduce((best, candidate) =>
