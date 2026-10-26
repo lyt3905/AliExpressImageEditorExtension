@@ -7,6 +7,8 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 /** Service worker build: single ESM file, no code splitting. */
 export default defineConfig({
   root: resolve(rootDir, 'src'),
+  // Same reason as vite.config.ts: `.env*` lives at the repo root, not under src/.
+  envDir: rootDir,
   publicDir: false,
   base: './',
   build: {

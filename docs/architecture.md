@@ -732,8 +732,24 @@ type EditorLayer = ImageLayer | TextLayer;
 其余按页面顺序补齐；选中的候选保持原相对顺序，所以 A/B/C 与面板里的顺序仍然一一对应。
 判据与 `bind-materials.ts` 共用同一个 `PACKAGING_LABEL_PATTERN`——两份正则迟早会漂移。
 
-Key 存 `chrome.storage.local`（跨浏览器重启可用），**不进代码、不进 `.env`、不进 git**；
-错误消息只带 endpoint 与 HTTP 状态码，从不回显 key（有测试钉住）。
+Key 存 `chrome.storage.local`（跨浏览器重启可用），**不进代码、不进 git**；本地构建还可以从 gitignored
+的 `.env.local` 注入默认值（`VITE_VISION_API_KEY`），于是开发者自己的 `dist/` 打开就是填好的，而仓库与
+CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，从不回显 key（有测试钉住）。
+
+**401 要分两种说法**：第一版只有"请检查 API Key"，而当时的真实原因是**根本没配**——这句话把人引向了
+"是不是抄错了/过期了"，而不是"你还没填"。现在 `config.apiKey` 为空时明确说"当前没有配置 Key"。
+另有一条容易踩的：`chrome.storage.local` 里存着空字符串时**不能**直接采用，否则一次"仅保存设置"
+（那时还没有这个字段）就会永久压住内置默认值——字段看着是填过的，请求却一直不带鉴权。空值一律回落到默认。
+
+### 10.7.2 `.env.local` 放仓库根目录会被 Vite 静默忽略（真实踩坑）
+
+三个 Vite 配置都设了 `root: src/`，而 `envDir` 默认等于 `root`。于是根目录的 `.env.local` **根本不会被
+加载**，`import.meta.env.VITE_*` 是 `undefined`：构建照常成功，只是值消失了。第一次把 Key 写进
+`.env.local` 后，在产物里搜不到它，就是这么发现的。
+
+修法是三个配置都显式写 `envDir: rootDir`。顺带修好了一个更早的哑炮：`.env.example` 一直写着
+`VITE_DEFAULT_SERVER_URL`，但没有任何代码读过它（`DEFAULT_SERVER_URL` 是硬编码的同一个值），
+现在这个变量真的生效了。
 
 ### 10.8 测试边界
 

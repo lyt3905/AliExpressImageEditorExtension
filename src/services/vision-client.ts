@@ -145,7 +145,20 @@ export async function askVisionJson(options: AskVisionOptions): Promise<VisionAn
 
     const raw = await response.text();
     if (response.status === 401 || response.status === 403) {
-      throw new VisionError('auth', `视觉接口拒绝访问（HTTP ${response.status}），请检查 API Key`, response.status);
+      /*
+        Two different causes with two different fixes. The generic "请检查 API Key"
+        said nothing when the real problem was that no key existed at all — which is
+        exactly what happened on the first real run: the request reached the gateway
+        (so network and host permissions were fine), and the 401 was the only clue
+        that the Authorization header had been omitted.
+      */
+      throw new VisionError(
+        'auth',
+        config.apiKey
+          ? `视觉接口拒绝访问（HTTP ${response.status}）：Key 无效或已过期，请到选项页更新`
+          : `视觉接口要求鉴权（HTTP ${response.status}），但当前没有配置 Key：请在选项页填写「视觉接口 Key」`,
+        response.status,
+      );
     }
     if (!response.ok) {
       throw new VisionError(

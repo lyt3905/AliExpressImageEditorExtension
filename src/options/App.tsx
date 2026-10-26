@@ -454,9 +454,12 @@ export function OptionsApp(): JSX.Element {
           spellCheck={false}
           autoComplete="off"
           onChange={(event) => setVisionApiKey(event.target.value)}
-          placeholder="留空则不发送 Authorization 头"
+          placeholder="留空 = 使用构建期内置的默认 Key"
         />
-        <small>保存在本地扩展存储中（不写入代码仓库），日志里不会出现。</small>
+        <small>
+          本地构建时会从 gitignored 的 <code>.env.local</code> 预填（<code>VITE_VISION_API_KEY</code>），
+          这里保存的值会覆盖它；留空则继续用内置默认值，两者都没有时不发送 <code>Authorization</code> 头。
+        </small>
       </div>
 
       <div className="row">

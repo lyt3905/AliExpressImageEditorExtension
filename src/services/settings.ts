@@ -17,6 +17,7 @@
 
 import {
   DEFAULT_SERVER_URL,
+  DEFAULT_VISION_API_KEY,
   DEFAULT_VISION_BASE_URL,
   DEFAULT_VISION_MODEL,
   STORAGE_KEYS,
@@ -43,7 +44,9 @@ export interface SessionCredentials {
 const DEFAULT_VISION: VisionSettings = {
   baseUrl: DEFAULT_VISION_BASE_URL,
   model: DEFAULT_VISION_MODEL,
-  apiKey: '',
+  // Comes from the gitignored `.env.local` at build time (see constants.ts), so the
+  // Options page starts pre-filled on a developer's own build and empty in CI.
+  apiKey: DEFAULT_VISION_API_KEY,
 };
 
 const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -56,7 +59,15 @@ function normalizeVision(value: Partial<VisionSettings> | undefined): VisionSett
   return {
     baseUrl: value?.baseUrl?.trim() || DEFAULT_VISION.baseUrl,
     model: value?.model?.trim() || DEFAULT_VISION.model,
-    apiKey: value?.apiKey?.trim() ?? DEFAULT_VISION.apiKey,
+    /*
+      An empty stored key falls back to the build-time default instead of staying
+      empty. Reason: the Options page saves all three vision fields together, so a
+      single "仅保存设置" click taken before the key existed would persist `''` and
+      silently shadow every future default — the field would look configured while
+      every request went out unauthenticated (HTTP 401). Clearing the field now means
+      "use the built-in default", which is also what the hint on that input says.
+    */
+    apiKey: value?.apiKey?.trim() || DEFAULT_VISION.apiKey,
   };
 }
 

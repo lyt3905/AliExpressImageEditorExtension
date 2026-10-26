@@ -7,6 +7,8 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 /** Content script build: content scripts cannot use ESM, so emit a single IIFE. */
 export default defineConfig({
   root: resolve(rootDir, 'src'),
+  // Same reason as vite.config.ts: `.env*` lives at the repo root, not under src/.
+  envDir: rootDir,
   publicDir: false,
   base: './',
   build: {

@@ -97,6 +97,20 @@ export const DEFAULT_VISION_BASE_URL = 'http://127.0.0.1:8788/v1';
 export const DEFAULT_VISION_MODEL = 'glm-5.3';
 
 /**
+ * Pre-filled API key for the vision gateway, from `VITE_VISION_API_KEY`.
+ *
+ * Read at BUILD time, so the value lives in a gitignored `.env.local` instead of in
+ * source: the repo (and any CI-built artifact) keeps shipping no secret, while a
+ * developer's own `dist/` comes with the key already filled in. The Options page
+ * still wins per browser — once anything is saved to `chrome.storage.local`, that
+ * value is used instead of this default.
+ *
+ * Empty by default, and an empty key means "send no Authorization header": some
+ * gateways do not check one, and a blank `Bearer ` would be worse than none.
+ */
+export const DEFAULT_VISION_API_KEY = (import.meta.env?.VITE_VISION_API_KEY ?? '').trim();
+
+/**
  * How many candidate images one binding request may carry.
  *
  * Six is the number of image slots the AliExpress editor exposes, so a normal

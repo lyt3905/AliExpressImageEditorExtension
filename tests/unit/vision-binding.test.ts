@@ -91,6 +91,26 @@ describe('askVisionJson', () => {
     expect(error).toBeInstanceOf(VisionError);
     expect((error as VisionError).code).toBe('auth');
     expect((error as VisionError).message).not.toContain('test-key');
+    // With a key present the message must point at the key being WRONG, not at it
+    // being absent — the two need different actions from the user.
+    expect((error as VisionError).message).toContain('无效或已过期');
+  });
+
+  it('says the key is MISSING when no key was configured', async () => {
+    // This is the failure that actually happened on the first real run: the request
+    // reached the gateway (so network + host permissions were fine), and "请检查 API
+    // Key" was a dead end for someone who had never filled one in.
+    const { impl, captured } = fakeFetch('nope', { status: 401, raw: 'unauthorized' });
+    const error = (await askVisionJson({
+      config: { ...CONFIG, apiKey: '' },
+      prompt: 'p',
+      images: [],
+      fetchImpl: impl,
+    }).catch((caught: unknown) => caught)) as VisionError;
+
+    expect(captured.headers.Authorization).toBeUndefined();
+    expect(error.code).toBe('auth');
+    expect(error.message).toContain('没有配置 Key');
   });
 
   it('reports a 5xx as a server error with a short snippet', async () => {
