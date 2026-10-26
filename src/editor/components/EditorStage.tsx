@@ -177,6 +177,37 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     [onSelect],
   );
 
+  /** Layer whose drag was taken over by the selection; its dragend is ignored. */
+  const suppressDragEndRef = useRef<string | null>(null);
+
+  /**
+   * Hand a drag to the selected layer.
+   *
+   * A picture can be completely covered by an opaque layer above it — then no
+   * amount of clicking reaches it on the canvas, and dragging moves the top
+   * layer instead ("移动错误"). When the press landed inside the selected
+   * layer (`intersects` is alpha-accurate thanks to the custom hitFunc), the
+   * gesture belongs to the selection: cancel this layer's drag and start the
+   * selected one from the same pointer position.
+   */
+  const handoffDragToSelection = useCallback(
+    (event: Konva.KonvaEventObject<MouseEvent | TouchEvent | DragEvent>) => {
+      const node = event.target;
+      if (!selectedLayerId || node.id() === selectedLayerId) return;
+      const stage = node.getStage();
+      const pointer = stage?.getPointerPosition();
+      if (!stage || !pointer) return;
+      const selected = stage.findOne<Konva.Shape>(`#${selectedLayerId}`);
+      if (!selected || !(selected instanceof Konva.Shape)) return;
+      if (!selected.intersects(pointer)) return;
+
+      suppressDragEndRef.current = node.id();
+      node.stopDrag();
+      selected.startDrag();
+    },
+    [selectedLayerId],
+  );
+
   return (
     <div ref={shellRef} className="stage-shell">
       <Stage
@@ -317,9 +348,53 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 scaleY={axisScale(layer, 'y')}
                 rotation={layer.rotation}
                 draggable
+                /*
+                  Alpha-accurate hit area.
+
+                  Konva's default hit for an image is its whole rectangle, so a
+                  cutout's transparent background swallows every click meant for
+                  the picture underneath — the "移动错图层" bug. Drawing the
+                  image into the hit canvas and then compositing the hit colour
+                  `source-in` keeps only the opaque pixels, so transparent areas
+                  fall through to the layer below.
+
+                  Konva only resolves a shape when the hit pixel is fully opaque
+                  (alpha 255), which the composite produces exactly on the solid
+                  pixels.
+                */
+                hitFunc={(context, shape) => {
+                  context.save();
+                  context.beginPath();
+                  context.rect(0, 0, layer.sourceWidth, layer.sourceHeight);
+                  context.closePath();
+                  context.clip();
+                  context.drawImage(
+                    image,
+                    0,
+                    0,
+                    image.width,
+                    image.height,
+                    0,
+                    0,
+                    layer.sourceWidth,
+                    layer.sourceHeight,
+                  );
+                  context.setAttr('globalCompositeOperation', 'source-in');
+                  context.fillStrokeShape(shape);
+                  context.restore();
+                }}
                 onClick={() => onSelect(layer.id)}
                 onTap={() => onSelect(layer.id)}
-                onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
+                onDragStart={handoffDragToSelection}
+                onDragEnd={(event) => {
+                  // A drag this layer merely grabbed on behalf of the selection
+                  // must not move it or commit a history step.
+                  if (suppressDragEndRef.current === layer.id) {
+                    suppressDragEndRef.current = null;
+                    return;
+                  }
+                  onDragEnd(layer.id, event.target.x(), event.target.y());
+                }}
                 onTransformEnd={(event) => {
                   const node = event.target as Konva.Image;
                   const signedX = node.scaleX();
