@@ -74,6 +74,27 @@ export function addLayer(doc: EditorDocument, layer: EditorLayer): EditorDocumen
   return { layers: [...doc.layers, layer] };
 }
 
+/**
+ * Insert a layer directly BELOW another layer (by id) in the z-order.
+ *
+ * Needed so the auto-added brand logo goes under the product-code text layer —
+ * the code is meant to stay the topmost auto layer, but a plain ADD_LAYER would
+ * push the logo above it.
+ *
+ * When `belowLayerId` is absent, this falls back to a plain append.
+ */
+export function insertLayerBelow(
+  doc: EditorDocument,
+  belowLayerId: string | null,
+  layer: EditorLayer,
+): EditorDocument {
+  if (!belowLayerId) return addLayer(doc, layer);
+  const index = doc.layers.findIndex((entry) => entry.id === belowLayerId);
+  if (index < 0) return addLayer(doc, layer);
+  const layers = [...doc.layers.slice(0, index), layer, ...doc.layers.slice(index)];
+  return { layers };
+}
+
 export function deleteLayer(doc: EditorDocument, layerId: string): EditorDocument {
   const layers = doc.layers.filter((layer) => layer.id !== layerId);
   return layers.length === doc.layers.length ? doc : { layers };
@@ -168,6 +189,7 @@ export function findLayer(doc: EditorDocument, layerId: string | null): EditorLa
 
 export type EditorAction =
   | { type: 'ADD_LAYER'; layer: EditorLayer }
+  | { type: 'ADD_LAYER_BELOW'; layer: EditorLayer; belowLayerId: string | null }
   | { type: 'DELETE_LAYER'; layerId: string }
   | { type: 'UPDATE_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'COMMIT_LAYER'; layerId: string; patch: LayerPatch }
@@ -184,6 +206,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
   switch (action.type) {
     case 'ADD_LAYER':
       return { ...state, history: pushHistory(state.history, addLayer(state.history.present, action.layer)), selectedLayerId: action.layer.id };
+
+    case 'ADD_LAYER_BELOW':
+      return {
+        ...state,
+        history: pushHistory(
+          state.history,
+          insertLayerBelow(state.history.present, action.belowLayerId, action.layer),
+        ),
+        selectedLayerId: action.layer.id,
+      };
 
     case 'DELETE_LAYER': {
       const next = deleteLayer(state.history.present, action.layerId);

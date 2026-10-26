@@ -8,6 +8,7 @@ import {
   createLayerFromMaterial,
   deleteLayer,
   editorReducer,
+  insertLayerBelow,
   moveLayer,
   type EditorAction,
   type EditorState,
@@ -83,6 +84,26 @@ describe('layer operations', () => {
     expect(moveLayer(doc, 'layer-1', 'up')).toBe(doc);
     expect(moveLayer(doc, 'layer-0', 'down')).toBe(doc);
     expect(moveLayer(doc, 'missing', 'up')).toBe(doc);
+  });
+
+  it('inserts a layer directly below the named layer', () => {
+    const doc = makeDocument(2);
+    const next = insertLayerBelow(doc, 'layer-1', makeLayer('logo'));
+    expect(next.layers.map((layer) => layer.id)).toEqual(['layer-0', 'logo', 'layer-1']);
+  });
+
+  it('falls back to the top when the anchor id is unknown or absent', () => {
+    const doc = makeDocument(2);
+    expect(insertLayerBelow(doc, 'missing', makeLayer('logo')).layers.map((layer) => layer.id)).toEqual([
+      'layer-0',
+      'layer-1',
+      'logo',
+    ]);
+    expect(insertLayerBelow(doc, null, makeLayer('logo')).layers.map((layer) => layer.id)).toEqual([
+      'layer-0',
+      'layer-1',
+      'logo',
+    ]);
   });
 });
 

@@ -357,6 +357,24 @@ export function App(): JSX.Element {
         codeLayerIdRef.current = codeLayer.id;
         // Pushed last = top of the z-order, so nothing lands above the code.
         layers.push(codeLayer);
+      } else if (productCode !== undefined && alreadyThere) {
+        /*
+          Restored from a saved document. Move the code back to the top: builds
+          before the brand-logo feature could have saved it below a logo, and
+          "编号置顶" is meant to hold every time the editor opens, not only on
+          the first visit.
+        */
+        const index = layers.findIndex(
+          (layer) => layer.kind === 'text' && layer.text.trim() === productCode,
+        );
+        const codeLayer = index >= 0 ? layers[index] : undefined;
+        if (index >= 0 && index !== layers.length - 1 && codeLayer) {
+          layers.splice(index, 1);
+          layers.push(codeLayer);
+          codeLayerIdRef.current = codeLayer.id;
+        } else if (codeLayer) {
+          codeLayerIdRef.current = codeLayer.id;
+        }
       }
 
       dispatch({ type: 'LOAD_DOCUMENT', document: { layers } });
@@ -364,6 +382,19 @@ export function App(): JSX.Element {
 
     void hydrate();
   }, [loading, fatalError, initialDocument, session, sessionId]);
+
+  /**
+   * The product-code text layer's id, or null when this session has no code.
+   *
+   * Brand logos are inserted directly below it (`ADD_LAYER_BELOW`) so the code
+   * stays the topmost auto-added layer. Returns null — meaning "append" — when
+   * the code was never extracted or the user has deleted it.
+   */
+  const findCodeLayerId = useCallback((): string | null => {
+    const code = session?.productCode;
+    if (!code) return null;
+    return document.layers.find((layer) => layer.kind === 'text' && layer.text.trim() === code)?.id ?? null;
+  }, [document, session]);
 
   // ---- brand auto-detect
   //
@@ -389,8 +420,10 @@ export function App(): JSX.Element {
       (layer) => layer.kind === 'brand' && layer.materialId === material.id,
     );
     if (alreadyOnCanvas) return;
-    dispatch({ type: 'ADD_LAYER', layer: createLayerFromMaterial(material) });
-  }, [brands, brandMaterials, session, document]);
+    // The logo lands BELOW the product-code text, so the code keeps the top
+    // slot it was given at hydrate time.
+    dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: createLayerFromMaterial(material) });
+  }, [brands, brandMaterials, session, document, findCodeLayerId]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
   useEffect(() => {
@@ -441,9 +474,12 @@ export function App(): JSX.Element {
       }
       if (!brandId) return;
       const material = brandMaterials.find((entry) => entry.id === `material-brand-${brandId}`);
-      if (material) handleAddMaterial(material);
+      if (!material) return;
+      // Manual pick keeps the same invariant as auto-detect: the logo goes
+      // under the product-code text.
+      dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: createLayerFromMaterial(material) });
     },
-    [brandMaterials, document, handleAddMaterial],
+    [brandMaterials, document, findCodeLayerId],
   );
 
   /** Text layers enter through the very same ADD_LAYER path as pictures. */
