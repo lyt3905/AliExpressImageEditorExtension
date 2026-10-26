@@ -13,6 +13,14 @@ const MIN_LAYER_SIDE = 8;
 
 export interface EditorStageHandle {
   getStage(): Konva.Stage | null;
+  /**
+   * Visual scale of the preview (`stageSize / 800`).
+   *
+   * Do NOT feed this into the export as `1 / scale`: that double rounding loses a
+   * ulp for a third of the preview sizes and silently produces 799x799 PNGs. The
+   * exporter derives its ratio from the stage's own pixel width instead — see
+   * `services/exporter.ts`.
+   */
   getPreviewScale(): number;
   setChromeVisible(visible: boolean): void;
   /**

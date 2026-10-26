@@ -1,12 +1,25 @@
 /**
  * Export helpers for the 800x800 canvas.
  *
- * The Konva Stage is rendered at a preview size (`stageWidth = 800 * previewScale`)
- * and a root layer carries `previewScale`, so the export compensates with
- * `pixelRatio = 1 / previewScale`. The result is verified to be exactly 800x800.
+ * ## Why the size is not simply "pixelRatio = 1 / previewScale"
  *
- * A dedicated white background layer is switched on for the export, whatever the
- * user happens to be previewing.
+ * Konva assigns the backing store with `canvas.width = width * pixelRatio` and does
+ * **no rounding**; the HTML canvas element then truncates the fraction. So the
+ * product has to land exactly on 800, not 799.9999.
+ *
+ * The original formula was `pixelRatio = 1 / previewScale`, where
+ * `previewScale = stageWidth / 800` was computed earlier and then inverted. That
+ * double rounding drops one ulp for **35 of the 201** even preview sizes in the
+ * 240–640 range: `254 * (1 / (254 / 800))` is `799.9999999999999`, and the canvas
+ * silently comes out 799x799. Deriving the ratio straight from the stage width
+ * (`800 / stageWidth`) brings that down to 8 sizes, and the remaining ones are
+ * absorbed by `normaliseToCanvasSize` below.
+ *
+ * This is why the failure looked intermittent and window-dependent: the preview size
+ * follows the window, and the failing set is scattered through it. It also means
+ * "export" and "fill back to the page" shared the bug — both go through here.
+ *
+ * The exported PNG is always a white background and always exactly 800x800.
  */
 
 import type Konva from 'konva';
@@ -21,13 +34,22 @@ export interface ExportHooks {
 }
 
 export interface ExportOptions {
-  /** Visual scale currently applied to the stage content. */
-  previewScale?: number;
+  /** Stage pixel size. Defaults to the live stage's own size. */
   width?: number;
   height?: number;
+  /** Override the derived ratio (tests only). */
   pixelRatio?: number;
   hooks?: ExportHooks;
 }
+
+/**
+ * How far off the produced canvas may be before this is treated as a real bug.
+ *
+ * One pixel is float truncation; more than that means the stage and the ratio
+ * disagree (wrong width passed, or a stage that was never laid out), and quietly
+ * rescaling that would export a wrong composition instead of failing loudly.
+ */
+const SIZE_TOLERANCE_PX = 1;
 
 /** `aliexpress-composite-20260927-114500.png` */
 export function buildExportFileName(date: Date = new Date()): string {
@@ -36,6 +58,40 @@ export function buildExportFileName(date: Date = new Date()): string {
     `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
     `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
   return `aliexpress-composite-${stamp}.png`;
+}
+
+/**
+ * Guarantee an exactly `expected` x `expected` canvas.
+ *
+ * Does nothing when the render already landed on the target size — the common case,
+ * and a 1:1 path with no resampling. An off-by-one gets redrawn into a fresh canvas:
+ * the source content was rendered at the right resolution, the canvas simply lost a
+ * pixel to truncation, so stretching 799 -> 800 restores the intended geometry
+ * instead of shipping a 799px "main image" that the page fill then rejects.
+ */
+export function normaliseToCanvasSize(
+  rendered: HTMLCanvasElement,
+  expected: number = CANVAS_SIZE,
+): HTMLCanvasElement {
+  if (rendered.width === expected && rendered.height === expected) return rendered;
+
+  const offBy = Math.max(Math.abs(rendered.width - expected), Math.abs(rendered.height - expected));
+  if (offBy > SIZE_TOLERANCE_PX) {
+    throw new AppError(
+      ErrorCode.UNKNOWN,
+      `导出尺寸异常：${rendered.width}x${rendered.height}（期望 ${expected}x${expected}）`,
+    );
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = expected;
+  canvas.height = expected;
+  const context = canvas.getContext('2d');
+  if (!context) throw new AppError(ErrorCode.UNKNOWN, '无法创建导出画布');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(rendered, 0, 0, expected, expected);
+  return canvas;
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
@@ -50,21 +106,21 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
 
 /**
  * Render the composition into an 800x800 white-background PNG.
- * Always exports white background, always pixelRatio-normalised to 1:1.
+ *
+ * Always exports white background, always normalised to exactly 800x800.
  */
 export async function exportStageToPng(stage: Konva.Stage, options: ExportOptions = {}): Promise<Blob> {
   const width = options.width ?? stage.width();
   const height = options.height ?? stage.height();
-  const previewScale = options.previewScale && options.previewScale > 0 ? options.previewScale : 1;
-  const pixelRatio = options.pixelRatio ?? 1 / previewScale;
+  // One division, not a scale that gets inverted again: see the file header.
+  const pixelRatio = options.pixelRatio ?? (width > 0 ? CANVAS_SIZE / width : 1);
 
   const hooks = options.hooks ?? {};
   hooks.before?.();
   try {
-    const canvas = stage.toCanvas({ x: 0, y: 0, width, height, pixelRatio });
-    if (canvas.width !== CANVAS_SIZE || canvas.height !== CANVAS_SIZE) {
-      throw new AppError(ErrorCode.UNKNOWN, `导出尺寸异常：${canvas.width}x${canvas.height}（期望 800x800）`);
-    }
+    const rendered = stage.toCanvas({ x: 0, y: 0, width, height, pixelRatio });
+    const canvas = normaliseToCanvasSize(rendered, CANVAS_SIZE);
+
     const blob = await canvasToBlob(canvas);
     if (!blob || blob.size === 0) throw new AppError(ErrorCode.UNKNOWN, '导出结果为空');
     return blob;

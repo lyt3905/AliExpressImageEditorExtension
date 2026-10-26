@@ -205,13 +205,43 @@ fetchImageBlob    → GET asset.url → Blob（校验 PNG 魔数）
 导出（`src/services/exporter.ts`）：
 
 1. `handle.setChromeVisible(false)`：隐藏 Transformer，并把名为 `export-background` 的白色矩形设为可见。
-2. `stage.toCanvas({ x:0, y:0, width:stageSize, height:stageSize, pixelRatio: 1 / previewScale })`
-   → 视觉层缩放被 `pixelRatio` 精确抵消，得到 **恰好 800×800** 的画布（导出前断言校验）。
-3. `canvas.toBlob('image/png')` → data URL → `DOWNLOAD_COMPOSITE` → SW `chrome.downloads.download`。
-4. `finally` 中恢复 UI（Transformer 可见、白底矩形隐藏）。
-5. SW 路径失败时回退到页面内 `URL.createObjectURL` 下载；**任何情况下都不清空画布**。
+2. `stage.toCanvas({ x:0, y:0, width:stageSize, height:stageSize, pixelRatio: 800 / stageSize })`
+   → 视觉层缩放被 `pixelRatio` 抵消，得到 **恰好 800×800** 的画布。
+3. `normaliseToCanvasSize()`：尺寸不是 800 时按下面的容差规则处理（不是简单 assert）。
+4. `canvas.toBlob('image/png')` → data URL → `DOWNLOAD_COMPOSITE` → SW `chrome.downloads.download`。
+5. `finally` 中恢复 UI（Transformer 可见、白底矩形隐藏）。
+6. SW 路径失败时回退到页面内 `URL.createObjectURL` 下载；**任何情况下都不清空画布**。
 
 文件名：`aliexpress-composite-YYYYMMDD-HHmmss.png`。
+
+#### 799×799：导出尺寸取决于窗口大小（真实踩坑）
+
+Konva 的 `Canvas.setWidth` 是 `canvas.width = width * pixelRatio`，**没有取整**；而 HTML canvas
+给 `width` 赋值会**截断**小数。所以乘积必须正好落在 800，落到 799.9999 就变成 799。
+
+旧公式是 `pixelRatio = 1 / previewScale`，而 `previewScale = stageSize / 800` 是更早算出来的——
+先除再取倒数，两次舍入会丢 1 ulp：
+
+| stageSize | `1/(S/800)` 的乘积 | 结果 |
+| --- | --- | --- |
+| 254 | 799.9999999999999 | **799** |
+| 398 | 799.9999999999999 | **799** |
+| 638 | 800.0000000000001 | 800 |
+| 640 | 800（精确） | 800 |
+
+240–640 之间的 201 个偶数预览尺寸里，**35 个**会中招。这正是它表现得"时好时坏"的原因：
+预览尺寸跟着窗口走，坏的那批零散分布；点一次失败、点一次成功，往往只是因为状态条多了一行文字
+把画布区挤小了几像素，落到了另一个尺寸上。而且**导出和回填走同一条路径**，所以"下载"其实
+也会偶发失败，只是回填会明确报错。
+
+修法两条：
+
+1. 比例**直接从 stage 宽度算**（`800 / stageSize`，一次除法），35 个里的 27 个当场修好；
+2. 剩下 8 个（322 / 334 / 386 / 388 / 390 / 398 / …）交给 `normaliseToCanvasSize`：差 1px 就
+   重画到 800×800 的干净画布上（内容本来就是按 800 的分辨率渲染的，只丢了画布的一个像素），
+   差得更多则**照旧报错**——真正的尺寸错乱不该被悄悄缩放掩盖。
+
+同一类问题的通用教训：**别把一个已经取整/舍入过的值再反算回去**。
 
 ### 水印框（锁定在最上层）
 

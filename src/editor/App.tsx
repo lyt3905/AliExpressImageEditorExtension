@@ -904,7 +904,10 @@ export function App(): JSX.Element {
     }
 
     const blob = await exportStageToPng(stage, {
-      previewScale: handle.getPreviewScale(),
+      // No `previewScale` here on purpose: the exporter derives the ratio from the
+      // stage's own pixel size. Passing the visual scale made it invert a value that
+      // was itself derived from that size, and the extra rounding produced 799x799
+      // exports for certain window sizes (see services/exporter.ts).
       hooks: {
         before: () => handle.setChromeVisible(false),
         after: () => handle.setChromeVisible(true),
