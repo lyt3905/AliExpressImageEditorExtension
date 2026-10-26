@@ -75,6 +75,123 @@ button.primary:hover:not(:disabled) {
   padding: 10px;
 }
 
+/*
+  Left column holds two stacked panels (compose + materials). The compose panel
+  keeps its natural height and the material list takes the rest, so a long
+  material list scrolls inside its own box instead of pushing the compose form
+  off screen.
+*/
+.editor__left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.editor__left > .panel {
+  min-height: 0;
+}
+
+.editor__left > .panel:last-child {
+  flex: 1;
+}
+
+.compose-panel {
+  flex: 0 0 auto;
+}
+
+.compose-panel .panel__body {
+  padding: 8px;
+}
+
+.compose-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.compose-field > span {
+  flex: 0 0 60px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.compose-select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.compose-button {
+  width: 100%;
+  margin-top: 4px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.compose-button:hover:not(:disabled) {
+  background: #1667cf;
+  border-color: #1667cf;
+}
+
+.compose-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.compose-button--secondary {
+  background: #fff;
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 400;
+}
+
+.compose-button--secondary:hover:not(:disabled) {
+  background: #fafbfc;
+  border-color: #b9bfc7;
+}
+
+.compose-note--bind {
+  margin: 4px 0 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.compose-diagnostics {
+  margin: 0;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 2px 6px;
+}
+
+.compose-diagnostics dt {
+  color: var(--text-dim);
+}
+
+.compose-diagnostics dd {
+  margin: 0;
+}
+
+.compose-warnings {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.compose-warnings li + li {
+  margin-top: 4px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);

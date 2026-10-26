@@ -382,6 +382,58 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               );
             }
 
+            if (layer.kind === 'plate') {
+              /*
+                A plain filled rectangle: no image, no hit trick. Unlike a cut-out it
+                is fully opaque, so the default rectangle hit area is exactly right —
+                and it must NOT fall through to `imageForLayer`, which would look up a
+                material that does not exist.
+              */
+              return (
+                <Rect
+                  key={layer.id}
+                  id={layer.id}
+                  x={layer.x}
+                  y={layer.y}
+                  width={layer.width}
+                  height={layer.height}
+                  // Centre-anchored like every other layer.
+                  offsetX={layer.width / 2}
+                  offsetY={layer.height / 2}
+                  fill={layer.fill}
+                  cornerRadius={layer.cornerRadius}
+                  scaleX={axisScale(layer, 'x')}
+                  scaleY={axisScale(layer, 'y')}
+                  rotation={layer.rotation}
+                  draggable
+                  onClick={() => onSelect(layer.id)}
+                  onTap={() => onSelect(layer.id)}
+                  onDragStart={handoffDragToSelection}
+                  onDragEnd={(event) => {
+                    if (suppressDragEndRef.current === layer.id) {
+                      suppressDragEndRef.current = null;
+                      return;
+                    }
+                    onDragEnd(layer.id, event.target.x(), event.target.y());
+                  }}
+                  onTransformEnd={(event) => {
+                    const node = event.target as Konva.Rect;
+                    const signedX = node.scaleX();
+                    const signedY = node.scaleY();
+                    // Same normalisation as pictures: `scale` stays the source of truth.
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    onTransformEnd(layer.id, {
+                      x: node.x(),
+                      y: node.y(),
+                      ...splitSignedScale(signedX, signedY),
+                      rotation: node.rotation(),
+                    });
+                  }}
+                />
+              );
+            }
+
             const image = imageForLayer(layer);
             if (!image) return null;
             return (

@@ -82,6 +82,33 @@ export const INSERT_MAX_SIDE = 480;
 /** Default server base URL (overridable from the Options page). */
 export const DEFAULT_SERVER_URL = 'https://39.107.244.239';
 
+// ---------------------------------------------------------------- vision
+
+/**
+ * Local OpenAI-compatible gateway used for material role binding.
+ *
+ * `127.0.0.1` on purpose: the gateway runs on the seller's own machine, so the
+ * product photos never leave it. The URL stays configurable because a shared box
+ * would need a different address, and hardcoding one would make that a code change.
+ */
+export const DEFAULT_VISION_BASE_URL = 'http://127.0.0.1:8788/v1';
+
+/** Vision model used for role binding. Verified against the gateway: multimodal + JSON mode. */
+export const DEFAULT_VISION_MODEL = 'glm-5.3';
+
+/**
+ * One binding call sends every candidate in a single request (verified: two images
+ * in one message, clean JSON back in ~4.5 s). Capped because prompt tokens grow
+ * linearly with images and a 6-photo product would cost ~3x for no better answer.
+ */
+export const VISION_MAX_CANDIDATES = 4;
+
+/** Longest side of the thumbnail sent to the vision model. */
+export const VISION_THUMBNAIL_SIZE = 512;
+
+/** Vision round-trip budget. Generous: 4.5 s observed, cold model load can be slower. */
+export const VISION_TIMEOUT_MS = 30_000;
+
 /** `max_size` parameter forwarded to the background-removal endpoint. */
 export const CUTOUT_MAX_SIZE = 1600;
 

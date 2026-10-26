@@ -31,6 +31,7 @@ const KIND_LABEL: Record<EditorLayer['kind'], string> = {
   cutout: '抠图',
   brand: '品牌Logo',
   text: '文字',
+  plate: '衬板',
 };
 
 /** Collapse newlines so a multi-line text still fits on one row. */
@@ -46,12 +47,16 @@ function layerLabel(layer: EditorLayer, stackIndex: number): string {
       flat.length > TEXT_LAYER_LABEL_MAX ? `${flat.slice(0, TEXT_LAYER_LABEL_MAX)}…` : flat;
     return `T ${clipped}`;
   }
+  if (layer.kind === 'plate') return KIND_LABEL.plate;
   // Pictures: originals stay numbered so several scans remain distinguishable.
   return layer.kind === 'original' ? `${KIND_LABEL.original} #${stackIndex + 1}` : KIND_LABEL[layer.kind];
 }
 
 function layerTitle(layer: EditorLayer): string {
   if (layer.kind === 'text') return `文字 · ${flattenText(layer.text) || '空文字'}`;
+  if (layer.kind === 'plate') {
+    return `衬板 · ${Math.round(layer.width * layer.scale)}x${Math.round(layer.height * layer.scale)}`;
+  }
   return `${KIND_LABEL[layer.kind]} · ${layer.sourceWidth}x${layer.sourceHeight}`;
 }
 

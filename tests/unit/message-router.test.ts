@@ -33,8 +33,22 @@ function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers
     downloadComposite: async (payload) => ({ downloadId: 42, filename: payload.filename }),
     replacePageImage: async () => pageFillResult(),
     closeEditorTab: async () => ({ closed: 1 }),
-    getSettings: async () => ({ serverUrl: 'https://cutout.test', username: 'admin' }),
-    saveSettings: async (payload) => ({ serverUrl: payload.serverUrl, username: payload.username }),
+    getSettings: async () => ({
+      serverUrl: 'https://cutout.test',
+      username: 'admin',
+      vision: { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
+    }),
+    saveSettings: async (payload) => ({
+      serverUrl: payload.serverUrl,
+      username: payload.username,
+      vision: payload.vision
+        ? {
+            baseUrl: payload.vision.baseUrl ?? 'http://127.0.0.1:8788/v1',
+            model: payload.vision.model ?? 'glm-5.3',
+            apiKey: payload.vision.apiKey ?? '',
+          }
+        : { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
+    }),
     getAuthState: async () => ({ loggedIn: true, user: { id: 1, username: 'admin' } }),
     login: async (payload) => ({ id: 1, username: payload.username }),
     logout: async () => ({ loggedIn: false }) as never,

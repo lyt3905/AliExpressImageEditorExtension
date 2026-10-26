@@ -159,7 +159,27 @@ export interface WatermarkLayer extends BaseLayer, ImagePayload {
   scale: number;
 }
 
-export type EditorLayer = ImageLayer | TextLayer;
+/**
+ * A filled rounded rectangle — the "衬板" a template falls back to when no package
+ * photo exists.
+ *
+ * It is a real layer (not a painted background) so it can be moved, resized,
+ * recoloured or deleted like anything else, and so UNDO works on it. It carries no
+ * material and no image, which is why it must never reach `imageForLayer`.
+ */
+export interface PlateLayer extends BaseLayer {
+  kind: 'plate';
+  /** Logical px before `scale`. */
+  width: number;
+  height: number;
+  /** CSS colour. */
+  fill: string;
+  /** Corner radius in logical px; 0 = sharp corners. */
+  cornerRadius: number;
+  scale: number;
+}
+
+export type EditorLayer = ImageLayer | TextLayer | PlateLayer;
 
 /**
  * The fields a layer edit may touch. Identity (`id`), `kind` and the image

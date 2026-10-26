@@ -12,7 +12,9 @@
     "https://*.aliexpress-media.com/*",
     "https://*.alicdn.com/*",
     "https://39.107.244.239/*",
-    "https://*.aliyuncs.com/*"
+    "https://*.aliyuncs.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
 
   "background": {

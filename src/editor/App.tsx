@@ -21,9 +21,24 @@ import {
 } from '../services/text-defaults';
 import { loadCodePlacement, saveCodePlacement, type CodePlacement } from '../services/code-placement';
 import { listBrands, loadBrandLogo, matchBrandByTitle } from '../services/brand-store';
-import { putBlob } from '../services/indexed-db';
+import { putBlob, getBlob } from '../services/indexed-db';
 import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
+import { createAlphaProbeCache } from '../services/composition/alpha-probe';
+import { bindMaterialRoles, pickSecondary } from '../services/composition/bind-materials';
+import { bindMaterialsWithVision } from '../services/composition/vision-binder';
+import { blobToThumbnailDataUrl } from '../services/image-thumbnail';
+import { loadSettings } from '../services/settings';
+import { VISION_MAX_CANDIDATES } from '../shared/constants';
+import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
+import {
+  DEFAULT_TEMPLATE_KEY,
+  listTemplateKeys,
+  parseTemplateByKey,
+} from '../services/composition/templates';
+import { measureTextWithCanvas } from '../services/text-measure';
+import { ComposePanel } from './components/ComposePanel';
+import { planToLayers } from './state/compose-emit';
 import { EditorStage, type EditorStageHandle } from './components/EditorStage';
 import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
@@ -139,6 +154,37 @@ export function App(): JSX.Element {
    * checkbox is impossible to leave in a surprising state across sessions.
    */
   const [removeFirstImage, setRemoveFirstImage] = useState(true);
+
+  // ---- 智能排版 (template composition)
+  const [templateKey, setTemplateKey] = useState<string>(DEFAULT_TEMPLATE_KEY);
+  const [heroId, setHeroId] = useState<string | null>(null);
+  const [boxId, setBoxId] = useState<string | null>(null);
+  const [composeBusy, setComposeBusy] = useState(false);
+  const [composePlan, setComposePlan] = useState<CompositionPlan | null>(null);
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [bindNote, setBindNote] = useState<string | null>(null);
+  /**
+   * Alpha scans are per-blob and expensive enough to notice: a 512px decode plus
+   * two passes over 262k pixels. Cached for the session, keyed by `blobId` (which
+   * is deterministic for cutouts), so re-generating does not re-scan.
+   */
+  const alphaProbeRef = useRef(createAlphaProbeCache());
+
+  /** Templates are listed once: the registry is static data. */
+  const templateOptions = useMemo(
+    () =>
+      listTemplateKeys().map((key) => {
+        const parsed = parseTemplateByKey(key);
+        return {
+          key,
+          id: parsed.template?.id ?? key,
+          version: parsed.template?.version ?? '?',
+          status: parsed.template?.status ?? 'draft',
+        };
+      }),
+    [],
+  );
 
   /**
    * Show a notice, then let it clear itself.
@@ -486,6 +532,191 @@ export function App(): JSX.Element {
   const handleAddText = useCallback(() => {
     dispatch({ type: 'ADD_LAYER', layer: createTextLayer(textStyleRef.current) });
   }, []);
+
+  // ---- 智能排版
+  //
+  // The pipeline is deliberately all-or-nothing: probe every material, solve the
+  // layout, and only then touch the document. A failure halfway through must not
+  // leave the canvas half-replaced.
+  const cutouts = useMemo(
+    () => materials.filter((material) => material.kind === 'cutout'),
+    [materials],
+  );
+
+  const bindCandidates = useMemo(
+    () =>
+      cutouts.map((material) => ({
+        materialId: material.id,
+        label: material.label,
+        width: material.width,
+        height: material.height,
+      })),
+    [cutouts],
+  );
+
+  /**
+   * Guess hero/box once, and re-guess only when the current choice disappeared.
+   *
+   * Overwriting a valid choice on every material update would fight the user: a
+   * cutout finishing in the background would silently reset the panel's selects.
+   */
+  useEffect(() => {
+    if (cutouts.length === 0) {
+      if (heroId !== null) {
+        setHeroId(null);
+        setBoxId(null);
+      }
+      return;
+    }
+    const ids = new Set(cutouts.map((material) => material.id));
+    if (heroId && ids.has(heroId)) return;
+    const bound = bindMaterialRoles(bindCandidates);
+    setHeroId(bound.heroId);
+    setBoxId(bound.boxId);
+  }, [bindCandidates, cutouts, heroId]);
+
+  const profileFor = useCallback(async (material: EditorMaterial) => {
+    const blob = await getBlob(material.blobId);
+    if (!blob) {
+      throw new AppError(
+        ErrorCode.DOWNLOAD_EMPTY,
+        `素材「${material.label}」的图片数据已丢失，请重新抠图后再试`,
+      );
+    }
+    return alphaProbeRef.current.probe(material.blobId, blob);
+  }, []);
+
+  const handleCompose = useCallback(async () => {
+    if (!heroId) return;
+
+    const parsed = parseTemplateByKey(templateKey);
+    if (!parsed.template) {
+      setComposeError(
+        `模板校验失败：${parsed.issues.map((issue) => `${issue.path || '<root>'} ${issue.message}`).join('；')}`,
+      );
+      return;
+    }
+
+    const heroMaterial = cutouts.find((material) => material.id === heroId);
+    if (!heroMaterial) {
+      setComposeError('找不到主体素材');
+      return;
+    }
+    const boxMaterial = boxId ? cutouts.find((material) => material.id === boxId) ?? null : null;
+
+    setComposeBusy(true);
+    setComposeError(null);
+    try {
+      const heroProfile = await profileFor(heroMaterial);
+      const boxProfile = boxMaterial ? await profileFor(boxMaterial) : null;
+      // Only look for a stand-in photo when there is no package material: the
+      // fallback ladder lives in the template, so the panel does not decide it.
+      const secondaryCandidate = boxMaterial ? null : pickSecondary(bindCandidates, [heroId, boxId]);
+      const secondaryMaterial = secondaryCandidate
+        ? cutouts.find((material) => material.id === secondaryCandidate.materialId) ?? null
+        : null;
+      const secondaryProfile = secondaryMaterial ? await profileFor(secondaryMaterial) : null;
+
+      const plan = buildCompositionPlan({
+        template: parsed.template,
+        hero: {
+          materialId: heroMaterial.id,
+          blobId: heroMaterial.blobId,
+          kind: 'cutout',
+          profile: heroProfile,
+          label: heroMaterial.label,
+        },
+        box:
+          boxMaterial && boxProfile
+            ? {
+                materialId: boxMaterial.id,
+                blobId: boxMaterial.blobId,
+                kind: 'cutout',
+                profile: boxProfile,
+                label: boxMaterial.label,
+              }
+            : null,
+        secondary:
+          secondaryMaterial && secondaryProfile
+            ? {
+                materialId: secondaryMaterial.id,
+                blobId: secondaryMaterial.blobId,
+                kind: 'cutout',
+                profile: secondaryProfile,
+                label: secondaryMaterial.label,
+              }
+            : null,
+        modelCode: session?.productCode ?? null,
+        measure: measureTextWithCanvas(),
+        seed: session?.productCode ?? sessionId ?? '',
+      });
+
+      // One dispatch = one history entry, so a single Ctrl+Z restores the canvas.
+      dispatch({ type: 'APPLY_PLAN', layers: planToLayers(plan) });
+      setComposePlan(plan);
+
+      const firstWarning = plan.warnings[0];
+      showNotice(
+        firstWarning
+          ? { kind: 'error', text: `已排版，但有让步：${firstWarning.message}` }
+          : { kind: 'ok', text: '已按模板排版（Ctrl+Z 可整体撤销）' },
+      );
+    } catch (error) {
+      const message = messageOf(error);
+      setComposeError(message);
+      showNotice({ kind: 'error', text: `排版失败：${message}` });
+    } finally {
+      setComposeBusy(false);
+    }
+  }, [bindCandidates, boxId, cutouts, heroId, profileFor, session, sessionId, showNotice, templateKey]);
+
+  /**
+   * Ask the vision model which material is the hero and which is the packaging.
+   *
+   * Explicit button rather than something that fires on load: a wrong automatic
+   * pick is worse than no pick, because the generated layout looks deliberate. The
+   * label heuristic stays in place underneath, so an unreachable gateway costs a
+   * click, not the feature.
+   */
+  const handleVisionBind = useCallback(async () => {
+    if (cutouts.length === 0) return;
+    setVisionBusy(true);
+    setBindNote(null);
+    try {
+      const settings = await loadSettings();
+      const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
+      for (const material of cutouts.slice(0, VISION_MAX_CANDIDATES)) {
+        const blob = await getBlob(material.blobId);
+        if (!blob) continue;
+        candidates.push({
+          materialId: material.id,
+          label: material.label,
+          dataUrl: await blobToThumbnailDataUrl(blob),
+        });
+      }
+      if (candidates.length === 0) {
+        setBindNote('素材图片数据读取失败，无法送 AI 识别');
+        return;
+      }
+
+      const binding = await bindMaterialsWithVision({ config: settings.vision, candidates });
+      if (!binding) {
+        setBindNote('AI 没有给出可用结论，已保留标签匹配结果');
+        return;
+      }
+      setHeroId(binding.heroId);
+      setBoxId(binding.boxId);
+      setBindNote(
+        `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
+          binding.boxId ? '' : ' · 未识别到包装盒'
+        }`,
+      );
+    } catch (error) {
+      setBindNote(`AI 识别不可用：${messageOf(error)}。已保留标签匹配结果`);
+    } finally {
+      setVisionBusy(false);
+    }
+  }, [cutouts]);
 
   /**
    * Local uploads (picker or clipboard) are persisted into the session record
@@ -894,12 +1125,37 @@ export function App(): JSX.Element {
       ) : null}
 
       <div className="editor__body">
-        <MaterialPanel
-          materials={materials}
-          statusByImageId={statusByImageId}
-          onAdd={handleAddMaterial}
-          onRetry={retryCutout}
-        />
+        <div className="editor__left">
+          <ComposePanel
+            templates={templateOptions}
+            templateKey={templateKey}
+            onTemplateChange={setTemplateKey}
+            cutouts={cutouts}
+            heroId={heroId}
+            boxId={boxId}
+            onHeroChange={(materialId) => {
+              setHeroId(materialId);
+              // One material cannot be both hero and box: the plan would draw the
+              // same picture twice at two very different scales.
+              if (boxId === materialId) setBoxId(null);
+            }}
+            onBoxChange={setBoxId}
+            busy={composeBusy}
+            plan={composePlan}
+            error={composeError}
+            onGenerate={() => void handleCompose()}
+            onVisionBind={() => void handleVisionBind()}
+            visionBusy={visionBusy}
+            bindNote={bindNote}
+          />
+
+          <MaterialPanel
+            materials={materials}
+            statusByImageId={statusByImageId}
+            onAdd={handleAddMaterial}
+            onRetry={retryCutout}
+          />
+        </div>
 
         <div className={`canvas-panel${state.showWhiteBackground ? ' canvas-panel--white' : ''}`}>
           <EditorStage

@@ -9,7 +9,15 @@ import { ErrorCode, toAppError } from '../shared/errors';
 import { errorResponse, okResponse, type ExtensionMessage, type MessageResponse } from '../shared/messages';
 import type { ExportInput, PageFillInput, PageFillResult, SessionInput } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
-import type { ExtensionSettings } from '../services/settings';
+import type { ExtensionSettings, VisionSettings } from '../services/settings';
+
+/** Settings payload from the Options page. `vision` is a partial patch, merged in `saveSettings`. */
+export type SaveSettingsPayload = {
+  serverUrl: string;
+  username: string;
+  password?: string;
+  vision?: Partial<VisionSettings>;
+};
 
 export interface MessageHandlers {
   createEditorSession(payload: SessionInput): Promise<{ sessionId: string }>;
@@ -17,7 +25,7 @@ export interface MessageHandlers {
   replacePageImage(payload: PageFillInput): Promise<PageFillResult>;
   closeEditorTab(payload: { sessionId: string }): Promise<{ closed: number }>;
   getSettings(): Promise<ExtensionSettings>;
-  saveSettings(payload: { serverUrl: string; username: string; password?: string }): Promise<ExtensionSettings>;
+  saveSettings(payload: SaveSettingsPayload): Promise<ExtensionSettings>;
   getAuthState(): Promise<{ loggedIn: boolean; user: AuthUser | null }>;
   login(payload: { serverUrl: string; username: string; password: string }): Promise<AuthUser>;
   logout(): Promise<{ loggedIn: false }>;
@@ -49,7 +57,7 @@ function buildRoutes(handlers: MessageHandlers): Record<string, Handler> {
       return handlers.closeEditorTab(payload);
     },
     GET_SETTINGS: () => handlers.getSettings(),
-    SAVE_SETTINGS: (message) => handlers.saveSettings((message as { payload: { serverUrl: string; username: string; password?: string } }).payload),
+    SAVE_SETTINGS: (message) => handlers.saveSettings((message as { payload: SaveSettingsPayload }).payload),
     GET_AUTH_STATE: () => handlers.getAuthState(),
     LOGIN: (message) => handlers.login((message as { payload: { serverUrl: string; username: string; password: string } }).payload),
     LOGOUT: () => handlers.logout(),

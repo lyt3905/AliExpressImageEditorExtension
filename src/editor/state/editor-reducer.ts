@@ -22,6 +22,7 @@ import type {
   EditorMaterial,
   ImageLayer,
   LayerPatch,
+  PlateLayer,
   TextLayer,
 } from '../../shared/types';
 import {
@@ -190,6 +191,14 @@ export function findLayer(doc: EditorDocument, layerId: string | null): EditorLa
 export type EditorAction =
   | { type: 'ADD_LAYER'; layer: EditorLayer }
   | { type: 'ADD_LAYER_BELOW'; layer: EditorLayer; belowLayerId: string | null }
+  /**
+   * Replace the whole document with layers produced by a composition plan.
+   *
+   * One history entry for the entire layout: a generated 主图 is one action from
+   * the user's point of view, so one undo has to take it away again. The layers
+   * passed in are already in paint order (bottom first).
+   */
+  | { type: 'APPLY_PLAN'; layers: EditorLayer[] }
   | { type: 'DELETE_LAYER'; layerId: string }
   | { type: 'UPDATE_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'COMMIT_LAYER'; layerId: string; patch: LayerPatch }
@@ -216,6 +225,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ),
         selectedLayerId: action.layer.id,
       };
+
+    case 'APPLY_PLAN': {
+      if (action.layers.length === 0) return state;
+      const document: EditorDocument = { layers: action.layers };
+      return {
+        ...state,
+        history: pushHistory(state.history, document),
+        selectedLayerId: null,
+      };
+    }
 
     case 'DELETE_LAYER': {
       const next = deleteLayer(state.history.present, action.layerId);
@@ -406,11 +425,69 @@ export function restoreTextLayer(raw: Record<string, unknown>): TextLayer | null
   };
 }
 
+// ---------------------------------------------------------------- plate layers
+
+/** Default fill for a restored plate whose stored colour is unusable. */
+const DEFAULT_PLATE_FILL = '#F5F5F5';
+
+export interface PlateSpec {
+  width: number;
+  height: number;
+  fill: string;
+  cornerRadius: number;
+  x?: number;
+  y?: number;
+  scale?: number;
+  rotation?: number;
+}
+
+/**
+ * A filled rounded rectangle — the package-backdrop fallback.
+ *
+ * Built and restored through the same shape, like every other layer kind, so a
+ * saved document and a freshly composed plan produce identical objects.
+ */
+export function createPlateLayer(spec: PlateSpec): PlateLayer {
+  return {
+    id: createLayerId(),
+    kind: 'plate',
+    x: spec.x ?? CANVAS_SIZE / 2,
+    y: spec.y ?? CANVAS_SIZE / 2,
+    width: Math.max(1, spec.width),
+    height: Math.max(1, spec.height),
+    fill: spec.fill,
+    cornerRadius: Math.max(0, spec.cornerRadius),
+    scale: spec.scale ?? 1,
+    rotation: spec.rotation ?? 0,
+    flipX: false,
+    flipY: false,
+  };
+}
+
+export function restorePlateLayer(raw: Record<string, unknown>): PlateLayer | null {
+  if (typeof raw.id !== 'string' || !raw.id) return null;
+  return {
+    id: raw.id,
+    kind: 'plate',
+    x: finiteNumber(raw.x, CANVAS_SIZE / 2),
+    y: finiteNumber(raw.y, CANVAS_SIZE / 2),
+    // A zero size would be unselectable and unremovable on the canvas.
+    width: positiveNumber(raw.width, 120),
+    height: positiveNumber(raw.height, 120),
+    fill: pickColor(raw.fill, DEFAULT_PLATE_FILL),
+    cornerRadius: Math.max(0, finiteNumber(raw.cornerRadius, 0)),
+    scale: positiveNumber(raw.scale, 1),
+    rotation: finiteNumber(raw.rotation, 0),
+    flipX: raw.flipX === true,
+    flipY: raw.flipY === true,
+  };
+}
+
 /**
  * Validate one layer read back from `chrome.storage.local`.
  *
- * Text layers are rebuilt field by field; picture layers keep their stored shape
- * (the caller filters those by material availability afterwards).
+ * Text and plate layers are rebuilt field by field; picture layers keep their
+ * stored shape (the caller filters those by material availability afterwards).
  */
 export function restoreStoredLayer(raw: unknown): EditorLayer | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -418,6 +495,7 @@ export function restoreStoredLayer(raw: unknown): EditorLayer | null {
   if (typeof candidate.id !== 'string' || !candidate.id) return null;
 
   if (candidate.kind === 'text') return restoreTextLayer(candidate);
+  if (candidate.kind === 'plate') return restorePlateLayer(candidate);
 
   if (candidate.kind !== 'original' && candidate.kind !== 'cutout' && candidate.kind !== 'brand') return null;
   if (typeof candidate.materialId !== 'string') return null;
@@ -425,10 +503,10 @@ export function restoreStoredLayer(raw: unknown): EditorLayer | null {
 }
 
 /**
- * Drop picture layers whose material is gone, keeping every text layer.
+ * Drop picture layers whose material is gone, keeping text, plate and brand layers.
  *
- * Text layers carry no `materialId`, so a naive material check would erase all
- * of them on every editor reload. Brand logo layers are kept too: their blobs
+ * Text and plate layers carry no `materialId`, so a naive material check would
+ * erase all of them on every editor reload. Brand logo layers are kept too: their blobs
  * live in the shared IndexedDB store and their materials are rebuilt by the
  * editor from the brand registry, independent of the session's image list.
  */
@@ -437,6 +515,10 @@ export function keepLayerWithMaterials(
   materialIds: ReadonlySet<string>,
 ): EditorLayer[] {
   return layers.filter(
-    (layer) => layer.kind === 'text' || layer.kind === 'brand' || materialIds.has(layer.materialId),
+    (layer) =>
+      layer.kind === 'text' ||
+      layer.kind === 'plate' ||
+      layer.kind === 'brand' ||
+      materialIds.has(layer.materialId),
   );
 }

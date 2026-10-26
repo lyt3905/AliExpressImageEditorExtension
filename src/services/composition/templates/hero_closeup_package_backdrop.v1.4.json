@@ -1,0 +1,98 @@
+{
+  "id": "hero_closeup_package_backdrop",
+  "version": "1.4",
+  "status": "draft",
+  "canvas": {
+    "width": 800,
+    "height": 800,
+    "background": "#FFFFFF",
+    "safe_margin": 16,
+    "reserved_zones": [
+      {
+        "id": "store_footer",
+        "box": [0, 712, 800, 800],
+        "avoid_for": ["hero", "box"]
+      }
+    ]
+  },
+  "text_zones": [
+    {
+      "id": "model_top_left",
+      "role": "model_code",
+      "box": [40, 65, 380, 180],
+      "font_style": "black_bold_serif",
+      "align": "left",
+      "max_lines": 1
+    }
+  ],
+  "slots": [
+    {
+      "id": "hero_closeup",
+      "role": "hero",
+      "required": true,
+      "max_items": 1,
+      "z_index": 10,
+      "closeup": {
+        "viewport": [16, 185, 784, 712],
+        "zoom": 2.2,
+        "anchor": "top_center",
+        "fit": "height",
+        "center_x": 300,
+        "clip_to_viewport": false
+      }
+    },
+    {
+      "id": "package_backdrop",
+      "role": "box",
+      "required": true,
+      "max_items": 1,
+      "z_index": 5,
+      "variants": [
+        {
+          "center": [575, 280],
+          "max_size": [380, 510]
+        },
+        {
+          "center": [580, 275],
+          "max_size": [370, 500]
+        },
+        {
+          "center": [570, 285],
+          "max_size": [390, 520]
+        },
+        {
+          "center": [580, 285],
+          "max_size": [375, 510]
+        }
+      ],
+      "fallbacks": [
+        { "kind": "secondary_view" },
+        { "kind": "plate", "fill": "#F5F5F5", "corner_radius": 24, "carries": "model_code" },
+        { "kind": "drop" }
+      ]
+    }
+  ],
+  "rules": {
+    "hero_dominance": {
+      "min_canvas_occupancy": 0.34,
+      "target_canvas_occupancy": [0.36, 0.46]
+    },
+    "collision": {
+      "prevent_alpha_overlap": false,
+      "min_gap_px": 0
+    },
+    "shadow": {
+      "enabled": false,
+      "opacity": 40,
+      "blur": 5,
+      "offset": [4, 6]
+    },
+    "package_readability": {
+      "required": true
+    },
+    "text": {
+      "keep_clear_of_hero": true,
+      "prefer_black_on_white": true
+    }
+  }
+}

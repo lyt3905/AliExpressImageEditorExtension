@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_SERVER_URL, MAX_BRAND_LOGO_BYTES, MAX_WATERMARK_BYTES } from '../shared/constants';
+import { DEFAULT_SERVER_URL, DEFAULT_VISION_BASE_URL, DEFAULT_VISION_MODEL, MAX_BRAND_LOGO_BYTES, MAX_WATERMARK_BYTES } from '../shared/constants';
 import { messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type { BrandMeta, WatermarkMeta } from '../shared/types';
@@ -39,6 +39,10 @@ export function OptionsApp(): JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // Vision gateway config: drives the "AI 识别素材角色" button in the editor.
+  const [visionBaseUrl, setVisionBaseUrl] = useState(DEFAULT_VISION_BASE_URL);
+  const [visionModel, setVisionModel] = useState(DEFAULT_VISION_MODEL);
+  const [visionApiKey, setVisionApiKey] = useState('');
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -102,6 +106,11 @@ export function OptionsApp(): JSX.Element {
       if (response?.ok && response.data) {
         setServerUrl(response.data.serverUrl);
         setUsername(response.data.username);
+        if (response.data.vision) {
+          setVisionBaseUrl(response.data.vision.baseUrl);
+          setVisionModel(response.data.vision.model);
+          setVisionApiKey(response.data.vision.apiKey);
+        }
       }
       const loggedIn = await refreshAuthState();
       setStatus(loggedIn ? '已登录' : '未登录（账号会保存在浏览器会话中，用于自动重新登录）');
@@ -226,7 +235,12 @@ export function OptionsApp(): JSX.Element {
       const response = await sendToBackground<ExtensionSettings>({
         type: 'SAVE_SETTINGS',
         requestId: createRequestId('save'),
-        payload: { serverUrl, username, ...(password ? { password } : {}) },
+        payload: {
+          serverUrl,
+          username,
+          ...(password ? { password } : {}),
+          vision: { baseUrl: visionBaseUrl, model: visionModel, apiKey: visionApiKey },
+        },
       });
       if (response?.ok) {
         setStatus('设置已保存');
@@ -238,7 +252,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [password, serverUrl, username]);
+  }, [password, serverUrl, username, visionApiKey, visionBaseUrl, visionModel]);
 
   // ---- watermark management
 
@@ -402,6 +416,47 @@ export function OptionsApp(): JSX.Element {
           onChange={(event) => setPassword(event.target.value)}
           placeholder="仅用于登录与本次浏览器会话内的自动重登"
         />
+      </div>
+
+      <div className="field">
+        <label htmlFor="vision-base-url">视觉接口地址</label>
+        <input
+          id="vision-base-url"
+          value={visionBaseUrl}
+          spellCheck={false}
+          onChange={(event) => setVisionBaseUrl(event.target.value)}
+          placeholder={DEFAULT_VISION_BASE_URL}
+        />
+        <small>
+          兼容 OpenAI 协议的本地网关（默认 {DEFAULT_VISION_BASE_URL}）。素材会以 512px 缩略图发给它，
+          用于「AI 识别素材角色」；不可用时自动回退到标签匹配。
+        </small>
+      </div>
+
+      <div className="field">
+        <label htmlFor="vision-model">视觉模型</label>
+        <input
+          id="vision-model"
+          value={visionModel}
+          spellCheck={false}
+          onChange={(event) => setVisionModel(event.target.value)}
+          placeholder={DEFAULT_VISION_MODEL}
+        />
+        <small>需要支持多图输入与 JSON 输出，默认 {DEFAULT_VISION_MODEL}。</small>
+      </div>
+
+      <div className="field">
+        <label htmlFor="vision-api-key">视觉接口 Key</label>
+        <input
+          id="vision-api-key"
+          type="password"
+          value={visionApiKey}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => setVisionApiKey(event.target.value)}
+          placeholder="留空则不发送 Authorization 头"
+        />
+        <small>保存在本地扩展存储中（不写入代码仓库），日志里不会出现。</small>
       </div>
 
       <div className="row">

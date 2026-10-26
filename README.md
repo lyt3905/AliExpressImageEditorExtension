@@ -417,6 +417,62 @@ npm run check:dist
 
 ---
 
+## AI 作图：模板排版（图生图拼版）
+
+把**抠好的产品图**当素材，按一份版式模板（「左侧超大特写 + 右上包装盒 + 左上型号 + 底部留白」）
+自动缩放、定位、叠放，拼成一张 800×800 白底主图。
+
+> 服务端**没有生图接口**，所以这里没有"凭空生成"：版式由模板声明，几何由确定性求解器算，
+> 像素仍由 Konva 渲染。AI（视觉模型）只做两件事——判断谁是主体 / 谁是包装盒，以及给结果打分。
+
+### 怎么用
+
+1. 编辑器左栏顶部「智能排版」
+2. 「主体素材 / 包装盒」会自动预选（标签启发式），可手动改
+3. 想让它更准：点「AI 识别素材角色」（需要选项页配置视觉接口，见下）
+4. 点「生成主图」→ 画布被替换，**Ctrl+Z 一次整体撤销**
+
+生成结果会列出来：`主体 zoom 2.2 → 1.82，可见占比 46.0%` / `包装盒 变体 #1，可见 72.4%` / `兜底 none` /
+`编号 62px`。有让步时逐条列出原因（红色），不做无声妥协。
+
+### 视觉接口配置（选项页）
+
+| 项 | 默认值 |
+| --- | --- |
+| 视觉接口地址 | `http://127.0.0.1:8788/v1`（本地 OpenAI 兼容网关） |
+| 视觉模型 | `glm-5.3` |
+| 视觉接口 Key | 空（留空则不发 `Authorization`） |
+
+素材会以 **512px 白底缩略图**发给该网关，一次请求最多 4 张。网关不可用时自动回退到标签匹配，
+功能不中断。Key 存在扩展本地存储，不进代码仓库、不写日志。
+
+### 版式模板
+
+`src/services/composition/templates/hero_closeup_package_backdrop.v1.4.json`
+
+- `canvas`：800×800、白底、安全边距 16、底部 `store_footer` 保留区
+- `text_zones`：型号文字区（左对齐、单行、黑体粗）
+- `slots`：`hero_closeup`（取景框 + zoom 2.2 + 顶边锚定 + `center_x: 300`）、`package_backdrop`（4 个 variant）
+- `rules`：`hero_dominance`（可见占比 0.34 / 0.36–0.46）、`package_readability`、`collision`、`text`
+
+**`box` 是 `[左, 上, 右, 下]`**，不是 `[x, y, 宽, 高]`——而 `max_size` 是 `[宽, 高]`。两组单位并存，
+加载时归一化，写错会被校验层拦下并提示可能写成了哪种。
+
+模板里出现的 `zoom` 是**上限**而不是起点：素材实心偏宽时求解器只会往下调（靠裁切凑占用率是反的），
+并且每次让步都会记 warning。设计细节见 [`docs/architecture.md`](docs/architecture.md) §10。
+
+### 没有包装盒时
+
+模板的 `fallbacks` 是数据，顺序即优先级：
+
+1. 换另一张素材填同一个位置（版式不动，只换内容）
+2. 一块 `#F5F5F5` 圆角衬板，型号写在上面（衬板是可编辑图层：能拖、能缩、能改色、能删）
+3. 留空
+
+写型号时如果走了衬板，左上角的文字区本次跳过——一张主图印两遍型号看起来就是事故。
+
+---
+
 ## 服务端接口（**只调用已有接口，服务端未做任何修改**）
 
 服务地址：`https://39.107.244.239`（可在选项页修改默认值）
@@ -518,16 +574,18 @@ AliExpressImageEditorExtension/
 ├─ src/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager / page-filler
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
-│  ├─ editor/                    # index.html / App / components / state（reducer + history + transform + use-watermark + use-paste-images）/ styles
-│  ├─ options/                   # 设置页（登录 + 水印框管理）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images
+│  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
+│  ├─ options/                   # 设置页（登录 + 视觉接口 + 水印框 + 品牌）
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images / text-measure / image-thumbnail / vision-client
+│  │  └─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
+│  │     └─ templates/           # 版式模板 JSON + 注册表（id@version）
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 23 文件 / 389 个单元测试（不联网）
-│  ├─ live/                      # 线上契约测试，默认 skipped
+│  ├─ unit/                      # 33 文件 / 555 个单元测试（不联网）
+│  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
-   ├─ architecture.md
+   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）
    └─ manual-test.md
 ```
 
@@ -556,9 +614,14 @@ AliExpressImageEditorExtension/
   "https://*.aliexpress-media.com/*",    // 商品图 CDN
   "https://*.alicdn.com/*",              // 商品图 CDN
   "https://39.107.244.239/*",            // 自建服务端（登录 / 上传 / 抠图）
-  "https://*.aliyuncs.com/*"             // 抠图结果可能落在 OSS
+  "https://*.aliyuncs.com/*",            // 抠图结果可能落在 OSS
+  "http://127.0.0.1/*",                  // 本机视觉网关（AI 识别素材角色）
+  "http://localhost/*"                   // 同上，另一种写法
 ]
 ```
+
+视觉网关只监听本机，所以这两条**只覆盖 localhost**，不引入任何公网域名。地址仍可在选项页改配
+（端口不写进权限：match pattern 不区分端口）。
 
 `aliexpress.us` 等地区站点**未**申请：扫描器只认 `aliexpress.com` 卖家后台，授予了也进不来，
 属于死授权（早期版本误加，已移除）。若将来要支持其他地区站点，必须同时改
@@ -594,6 +657,16 @@ AliExpressImageEditorExtension/
     单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
 11. 镜像 / 旋转**只作用于当前选中的那一个图层**：不支持框选或多选后一起变换，也没有「整张画布转 90°」。
     角度归一化到 `[0, 360)`，所以左右各转 90° 转满一圈不会累积成 360°。
+12. AI 作图**只认模板里声明的版式**（当前一份 `hero_closeup_package_backdrop@1.4`，`status` 仍是 draft），
+    不做自由构图，更不是"输入一句话就出图"。几何全部由确定性求解器算，同一商品同一素材必然是同一张。
+13. 视觉绑定**只送前 4 张素材**（512px 白底缩略图）。6 图商品若包装图恰好排在第 5/6 张，模型看不到它，
+    会判 `package_found: false` 然后走兜底链 —— 这时需要你在面板里手动指定包装盒。两轮确认尚未实现。
+14. 衬板（plate）是纯色圆角矩形，没有纹理 / 渐变 / 阴影；模板的 `rules.shadow` **只解析不渲染**
+    （图片图层没有阴影字段，模板若把 `enabled` 设为 true 会得到一条 warning）。
+15. `clip_to_viewport: true` **未实现**（需要 Konva clip 组）。模板里出现这个值会**明确报错**，
+    不静默忽略 —— 静默跳过的结果就是版式和模板不一致却查不出原因。
+16. 排版是**替换画布**语义：点「生成主图」会替换当前所有图层（含手动加的），可用一次 Ctrl+Z 整体撤销
+    （它只压一条历史）。生成后编号文字由模板接管（serif + 粗体 + 模板位置），不再沿用"编号置顶记忆"的位置。
 
 ---
 
@@ -602,8 +675,8 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（23 文件 / 389 测试；`tests/live` 默认 SKIPPED，不联网） |
-| `npm run test:live` | **PASS**（2 用例：单张契约链路 1.8s；**并发 6 实测 6/6 成功、墙钟 5.6s**） |
+| `npm run test` | **PASS**（35 文件 / 559 测试，其中 555 通过、4 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |
 | 服务端接口实测 | **PASS**（登录 / 上传 / 抠图 / 取结果链路已真实调用并返回有效 PNG，magic `89504e47`） |
@@ -612,5 +685,7 @@ AliExpressImageEditorExtension/
 | 本地上传 / 粘贴抠图 | **仅自动化验证**（校验 / 落盘 / id 生成 / 素材合并有单测；真实剪贴板与文件选择器未在 Chrome 中手点过，步骤见 manual-test 5.46–5.52） |
 | 回填到商品页 | **仅自动化验证**（34 个单测覆盖：frame 打分与选择、重试时 `openPanel: false`、5MB 上限前置拦截、标签页丢失 / 会话过期 / 页面非商品页、降级警告通道；**桥本身**用真实卖家后台 fixture 驱动了完整六阶段流程与「确认上传」，并覆盖「图片位全满 → 报错」与「面板已被手动打开 → 复用继续」两条分支。但**没有**在真实 Chrome + 登录态的商品页上跑过，步骤见 manual-test 第 6.5 节） |
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
+| AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
+| 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

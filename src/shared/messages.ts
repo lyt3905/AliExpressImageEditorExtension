@@ -73,7 +73,16 @@ export interface GetSettingsMessage {
 export interface SaveSettingsMessage {
   type: 'SAVE_SETTINGS';
   requestId: string;
-  payload: { serverUrl: string; username: string; password?: string };
+  /**
+   * `vision` is a partial patch: the Options page sends all three fields, but the
+   * editor may save only what it changed, and `saveSettings` merges field by field.
+   */
+  payload: {
+    serverUrl: string;
+    username: string;
+    password?: string;
+    vision?: { baseUrl?: string; model?: string; apiKey?: string };
+  };
 }
 
 export interface GetAuthStateMessage {
