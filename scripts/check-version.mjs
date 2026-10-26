@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isChromeVersion } from './version-math.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -32,12 +33,9 @@ const lock = readJson('package-lock.json');
 
 const problems = [];
 
-// Chrome's rule, not ours: 0-65535 per part, 1-4 parts, no leading zeros.
-const CHROME_VERSION = /^(0|[1-9]\d{0,3})(\.(0|[1-9]\d{0,3})){0,3}$/;
-
 if (typeof manifest.version !== 'string' || !manifest.version) {
   problems.push('public/manifest.json 缺少 version');
-} else if (!CHROME_VERSION.test(manifest.version)) {
+} else if (!isChromeVersion(manifest.version)) {
   problems.push(`manifest.json version 不符合 Chrome 格式：${manifest.version}`);
 }
 if (pkg.version !== manifest.version) {

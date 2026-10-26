@@ -49,6 +49,48 @@ jobs:
           node scripts/check-version.mjs
           echo "version=$(node scripts/check-version.mjs --plain)" >> "$GITHUB_OUTPUT"
 
+      # The repo rule (AGENTS.md §1): a change under src/ must move the version in the
+      # same commit. Consistency alone does not catch "bumped nothing at all", which is
+      # how three changes ended up sharing one version number.
+      - name: 版本号必须随内容更新
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_MANIFEST: ${{ runner.temp }}/base-manifest.json
+        run: |
+          set -uo pipefail
+
+          base=""
+          if [ "$EVENT" = "pull_request" ] && [ -n "${BASE_REF:-}" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF" && base=FETCH_HEAD
+          elif [ "$EVENT" = "push" ] && [ -n "${BEFORE_SHA:-}" ] \
+               && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin "$BEFORE_SHA" && base="$BEFORE_SHA"
+          fi
+
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "[version-guard] 没有可比较的基准（新分支 / 强制推送），跳过"
+            exit 0
+          fi
+
+          if git diff --quiet "$base" HEAD -- src; then
+            echo "[version-guard] src/ 无改动，不要求升版本号"
+            exit 0
+          fi
+
+          git show "$base:public/manifest.json" > "$BASE_MANIFEST"
+          previous="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.env.BASE_MANIFEST,"utf8")).version)')"
+          current="$(node scripts/check-version.mjs --plain)"
+          echo "[version-guard] 基准 $previous -> 当前 $current"
+
+          if [ "$previous" = "$current" ]; then
+            echo "::error::src/ 有改动但版本号仍是 $current。按 AGENTS.md：npm run version:bump patch"
+            exit 1
+          fi
+          echo "[version-guard] OK"
+
       - name: Build
         run: npm run build
 

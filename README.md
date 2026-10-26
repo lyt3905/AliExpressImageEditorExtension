@@ -137,13 +137,17 @@ aliexpress-image-editor-v<version>.zip
 
 ### 发版：打 tag 才会创建 Release
 
+**每次改 `src/` 都要在同一个提交里升版本号**（仓库约定见 [AGENTS.md](AGENTS.md) §1，CI 会拦）：
+
 ```bash
-npm version <new> --no-git-tag-version   # 改 package.json + package-lock.json
-#   再把 public/manifest.json 的 version 改成同一个数（Chrome 只认它）
-npm run check:version                    # 三处一致才继续
-git commit -am "chore: 版本 <new>"
+npm run version:bump minor               # 或 patch / major / 10.2.3 —— 一次改三处
+npm run check:version                    # 三处一致 + Chrome 格式校验
+git commit -am "chore: 版本 <new>"       # 和内容改动放同一个提交
 git tag v<new> && git push origin v<new>
 ```
+
+`version:bump` 同时写 `public/manifest.json`、`package.json`、`package-lock.json` 并回读校验——
+手改三处是版本漂移的唯一来源，而漂移在构建期完全看不出来。
 
 tag 与 manifest 版本不一致时 release job 会**拒绝发布**——否则会出现"标题 v0.9.0、内容还是 0.8.0"的
 release，而下载的人只有装进浏览器才会发现。artifact 保留 30 天。
