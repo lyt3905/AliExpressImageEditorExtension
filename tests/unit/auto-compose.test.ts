@@ -8,7 +8,8 @@ function input(overrides: Partial<AutoComposeInput> = {}): AutoComposeInput {
     cutoutCount: 3,
     active: 0,
     waiting: 0,
-    deadlineReached: false,
+    graceElapsed: false,
+    giveUpElapsed: false,
     alreadyRan: false,
     ...overrides,
   };
@@ -35,18 +36,45 @@ describe('autoComposeStep — waiting for the right moment', () => {
   });
 });
 
-describe('autoComposeStep — never waiting forever', () => {
-  it('composes with whatever survived once the grace period is over', () => {
-    expect(autoComposeStep(input({ active: 1, deadlineReached: true }))).toEqual({
-      phase: 'run',
-      reason: 'deadline',
+describe('autoComposeStep — the two limits are not the same limit', () => {
+  it('keeps waiting for the FIRST cut-out after the grace period', () => {
+    // Regression: the grace period used to double as the give-up point. Six photos at
+    // 5–20 s each outlive 30 s, so the run latched as "already ran" while the count was
+    // still zero — the panel then showed 「素材就绪，准备排版…」 forever and the image
+    // only appeared after a manual click.
+    expect(autoComposeStep(input({ cutoutCount: 0, graceElapsed: true }))).toEqual({
+      phase: 'wait',
+      reason: 'no-material-yet',
     });
   });
 
-  it('gives up when nothing was cut out in time, instead of waiting silently', () => {
-    expect(autoComposeStep(input({ cutoutCount: 0, deadlineReached: true }))).toEqual({
+  it('runs once material arrives, even long after the grace period', () => {
+    expect(autoComposeStep(input({ graceElapsed: true, giveUpElapsed: false }))).toEqual({
+      phase: 'run',
+      reason: 'queue-settled',
+    });
+  });
+
+  it('composes with partial material once the grace period is over', () => {
+    expect(autoComposeStep(input({ active: 1, graceElapsed: true }))).toEqual({
+      phase: 'run',
+      reason: 'grace',
+    });
+  });
+
+  it('gives up only at the much later limit, and only when there is still nothing', () => {
+    expect(autoComposeStep(input({ cutoutCount: 0, graceElapsed: true, giveUpElapsed: true }))).toEqual({
       phase: 'skip',
       reason: 'no-cutout',
+    });
+    // With material present the give-up limit must not matter at all.
+    expect(autoComposeStep(input({ giveUpElapsed: true }))).toEqual({
+      phase: 'run',
+      reason: 'queue-settled',
+    });
+    expect(autoComposeStep(input({ giveUpElapsed: true, active: 1 }))).toEqual({
+      phase: 'run',
+      reason: 'grace',
     });
   });
 });
@@ -62,17 +90,16 @@ describe('autoComposeStep — never clobbering work', () => {
   });
 
   it('checks the canvas before the material, so an empty queue cannot still trigger a run', () => {
-    expect(autoComposeStep(input({ existingLayerCount: 1, cutoutCount: 0, deadlineReached: true }))).toEqual({
-      phase: 'skip',
-      reason: 'canvas-not-empty',
-    });
+    expect(
+      autoComposeStep(input({ existingLayerCount: 1, cutoutCount: 0, giveUpElapsed: true })),
+    ).toEqual({ phase: 'skip', reason: 'canvas-not-empty' });
   });
 
   it('runs at most once per editor session', () => {
     expect(autoComposeStep(input({ alreadyRan: true }))).toEqual({ phase: 'skip', reason: 'already-ran' });
-    // Even mid-queue and past the deadline: one attempt is the contract.
+    // Even mid-queue and past both limits: one attempt is the contract.
     expect(
-      autoComposeStep(input({ alreadyRan: true, active: 4, deadlineReached: true })),
+      autoComposeStep(input({ alreadyRan: true, active: 4, graceElapsed: true, giveUpElapsed: true })),
     ).toEqual({ phase: 'skip', reason: 'already-ran' });
   });
 });

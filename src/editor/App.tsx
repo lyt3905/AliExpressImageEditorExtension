@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   AUTO_CLOSE_FALLBACK_MS,
+  AUTO_COMPOSE_GIVE_UP_MS,
   AUTO_COMPOSE_GRACE_MS,
   CANVAS_SIZE,
   FILL_AUTO_CLOSE_MS,
@@ -770,14 +771,19 @@ export function App(): JSX.Element {
   // cut-out queue to settle, never wait forever, never overwrite a restored canvas.
   const autoComposeRef = useRef<'idle' | 'running' | 'done'>('idle');
   const [autoGraceElapsed, setAutoGraceElapsed] = useState(false);
+  const [autoGiveUpElapsed, setAutoGiveUpElapsed] = useState(false);
   /** Latest layer count, readable inside async work without stale closures. */
   const layerCountRef = useRef(0);
   layerCountRef.current = document.layers.length;
 
   useEffect(() => {
     if (loading || fatalError) return;
-    const timer = window.setTimeout(() => setAutoGraceElapsed(true), AUTO_COMPOSE_GRACE_MS);
-    return () => window.clearTimeout(timer);
+    const grace = window.setTimeout(() => setAutoGraceElapsed(true), AUTO_COMPOSE_GRACE_MS);
+    const giveUp = window.setTimeout(() => setAutoGiveUpElapsed(true), AUTO_COMPOSE_GIVE_UP_MS);
+    return () => {
+      window.clearTimeout(grace);
+      window.clearTimeout(giveUp);
+    };
   }, [loading, fatalError]);
 
   const runAutoCompose = useCallback(async () => {
@@ -853,23 +859,46 @@ export function App(): JSX.Element {
       cutoutCount: cutouts.length,
       active: progress.active,
       waiting: progress.waiting,
-      deadlineReached: autoGraceElapsed,
+      graceElapsed: autoGraceElapsed,
+      giveUpElapsed: autoGiveUpElapsed,
       alreadyRan: false,
     });
 
+    /*
+      Logged once per decision, not once per render: when the automated run does not
+      happen, this is the only place that says WHY. The panel can show the visible
+      symptom ("素材就绪" that never turns into an image) but not the reason.
+    */
     if (step.phase === 'wait') return;
+
     if (step.phase === 'skip') {
       autoComposeRef.current = 'done';
+      // Stop the progress line too: leaving 「素材就绪，准备排版…」 up while nothing is
+      // going to happen is the exact symptom that made this look like a frozen UI.
+      setAutoPhase('done');
+      console.info('[AIEE] 自动排版跳过：', step.reason, {
+        layers: document.layers.length,
+        cutouts: cutouts.length,
+        active: progress.active,
+        waiting: progress.waiting,
+      });
       if (step.reason === 'canvas-not-empty') setBindNote('已恢复上次的画布，未自动覆盖');
       if (step.reason === 'no-cutout') {
+        setBindNote('等了 150 秒仍没有可用的抠图素材，已停止自动排版（可手动点「生成主图」）');
         showNotice({ kind: 'error', text: '没有可用的抠图素材，已跳过自动排版' });
       }
       return;
     }
 
+    console.info('[AIEE] 自动排版开始：', step.reason, {
+      cutouts: cutouts.length,
+      active: progress.active,
+      waiting: progress.waiting,
+    });
     autoComposeRef.current = 'running';
     void runAutoCompose();
   }, [
+    autoGiveUpElapsed,
     autoGraceElapsed,
     composeBusy,
     cutouts.length,

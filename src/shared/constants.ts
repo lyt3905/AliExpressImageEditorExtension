@@ -77,14 +77,24 @@ export const FILL_AUTO_CLOSE_MS = 10_000;
 export const AUTO_CLOSE_FALLBACK_MS = 300;
 
 /**
- * Grace period before the editor composes a layout on its own, counted from load.
+ * Grace period before the editor stops waiting for the cut-out queue to finish.
  *
- * The auto-compose run waits for the cut-out queue to settle so the package photo is
- * included rather than missed, but it must never wait forever: cut-outs take ~5–20 s
- * each at concurrency 6, and a stuck one would mean "no 主图 at all". Past this
- * deadline the editor composes with whatever survived.
+ * Past this, the automatic compose runs with whatever material exists so a stuck
+ * cut-out cannot mean "no 主图 today". It is **not** a give-up point: a product with
+ * six photos legitimately takes longer than this to cut out.
  */
 export const AUTO_COMPOSE_GRACE_MS = 30_000;
+
+/**
+ * When to stop waiting for the FIRST cut-out and report that there is nothing to do.
+ *
+ * Much longer than the grace period on purpose. The first version reused the grace
+ * period for this, so a slow batch (six photos at 5–20 s each) hit the 30 s mark while
+ * the cut-out count was still zero, latched the auto run as "already ran", and left
+ * the panel showing 「素材就绪，准备排版…」 forever — the image only appeared after a
+ * manual click.
+ */
+export const AUTO_COMPOSE_GIVE_UP_MS = 150_000;
 
 /** Max side (logical px) a layer is scaled to when it first enters the canvas. */
 export const INSERT_MAX_SIDE = 480;

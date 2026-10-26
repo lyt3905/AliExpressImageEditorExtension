@@ -29,8 +29,19 @@ export interface AutoComposeInput {
   /** Cut-out queue: in-flight and queued items. */
   active: number;
   waiting: number;
-  /** True once the grace period after load expired. */
-  deadlineReached: boolean;
+  /**
+   * Past the grace period: stop waiting for the queue to finish and compose with
+   * whatever material exists.
+   *
+   * Deliberately NOT "give up" — a product with six photos legitimately takes longer
+   * than the grace period to cut out, and the first version gave up at that point
+   * when the count was still zero. The run then latched as "already ran", the panel
+   * sat at 「素材就绪，准备排版…」 forever, and the only way to get an image was to
+   * press the button by hand.
+   */
+  graceElapsed: boolean;
+  /** Past the much longer give-up limit with still nothing to compose. */
+  giveUpElapsed: boolean;
   /** True when a previous run (auto or manual) already produced something. */
   alreadyRan: boolean;
 }
@@ -38,12 +49,21 @@ export interface AutoComposeInput {
 export type AutoComposeStep =
   /** Still gathering material; do nothing yet. */
   | { phase: 'wait'; reason: 'not-hydrated' | 'no-material-yet' | 'queue-busy' }
-  /** Nothing to compose with; report once instead of waiting forever. */
+  /** Nothing to compose with, or not ours to touch; report once instead of waiting. */
   | { phase: 'skip'; reason: 'no-cutout' | 'already-ran' | 'canvas-not-empty' }
-  | { phase: 'run'; reason: 'queue-settled' | 'deadline' };
+  | { phase: 'run'; reason: 'queue-settled' | 'grace' };
 
 export function autoComposeStep(input: AutoComposeInput): AutoComposeStep {
-  const { hydrated, existingLayerCount, cutoutCount, active, waiting, deadlineReached, alreadyRan } = input;
+  const {
+    hydrated,
+    existingLayerCount,
+    cutoutCount,
+    active,
+    waiting,
+    graceElapsed,
+    giveUpElapsed,
+    alreadyRan,
+  } = input;
 
   if (alreadyRan) return { phase: 'skip', reason: 'already-ran' };
   if (!hydrated) return { phase: 'wait', reason: 'not-hydrated' };
@@ -52,14 +72,17 @@ export function autoComposeStep(input: AutoComposeInput): AutoComposeStep {
   if (existingLayerCount > 0) return { phase: 'skip', reason: 'canvas-not-empty' };
 
   if (cutoutCount === 0) {
-    // An empty queue plus no deadline means the cut-outs have not started arriving
-    // yet; past the deadline it means they failed, and silence would be confusing.
-    return deadlineReached ? { phase: 'skip', reason: 'no-cutout' } : { phase: 'wait', reason: 'no-material-yet' };
+    // No material at all is a WAIT, not a deadline decision: cut-outs take 5–20 s
+    // each and a slow batch can easily outlive the grace period. Only the much later
+    // give-up limit turns this into "nothing to do".
+    return giveUpElapsed ? { phase: 'skip', reason: 'no-cutout' } : { phase: 'wait', reason: 'no-material-yet' };
   }
 
   if (active > 0 || waiting > 0) {
-    // Partial material is worse than late material — but only up to the deadline.
-    return deadlineReached ? { phase: 'run', reason: 'deadline' } : { phase: 'wait', reason: 'queue-busy' };
+    // Partial material is worse than late material — but only up to the grace period.
+    // `giveUpElapsed` implies `graceElapsed` in practice (150 s > 30 s); treating it
+    // that way here keeps the function honest if a caller ever passes only one.
+    return graceElapsed || giveUpElapsed ? { phase: 'run', reason: 'grace' } : { phase: 'wait', reason: 'queue-busy' };
   }
 
   return { phase: 'run', reason: 'queue-settled' };
