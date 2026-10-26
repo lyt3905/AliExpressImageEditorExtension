@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AliExpress 图片编辑器（主图抠图 + 800×800 合成）",
-  "version": "0.7.3",
+  "version": "10.0.0",
   "description": "扫描 AliExpress 商品编辑页主图，本地保存，自动抠图，在 800×800 画布上编辑并导出白底 PNG。",
   "minimum_chrome_version": "114",
 
