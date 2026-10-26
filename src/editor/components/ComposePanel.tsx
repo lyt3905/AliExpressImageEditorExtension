@@ -135,7 +135,9 @@ export function ComposePanel({
           >
             {busy ? '正在排版…' : '生成主图'}
           </button>
-          <p className="compose-note">生成会替换当前画布内容，可用 Ctrl+Z 整体撤销。</p>
+          <p className="compose-note">
+            打开编辑器会自动生成一次；手动重新生成会替换当前画布（Ctrl+Z 可整体撤销）。
+          </p>
         </section>
 
         {error ? <div className="notice notice--error">{error}</div> : null}

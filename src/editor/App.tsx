@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { AUTO_CLOSE_FALLBACK_MS, CANVAS_SIZE, FILL_AUTO_CLOSE_MS, PAGE_FILL_MAX_BYTES, STORAGE_KEYS } from '../shared/constants';
+import {
+  AUTO_CLOSE_FALLBACK_MS,
+  AUTO_COMPOSE_GRACE_MS,
+  CANVAS_SIZE,
+  FILL_AUTO_CLOSE_MS,
+  PAGE_FILL_MAX_BYTES,
+  STORAGE_KEYS,
+} from '../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type {
@@ -26,7 +33,11 @@ import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
 import { createAlphaProbeCache } from '../services/composition/alpha-probe';
 import { bindMaterialRoles, pickSecondary } from '../services/composition/bind-materials';
-import { bindMaterialsWithVision, selectVisionCandidates } from '../services/composition/vision-binder';
+import {
+  bindMaterialsWithVision,
+  selectVisionCandidates,
+  type VisionBinding,
+} from '../services/composition/vision-binder';
 import { blobToThumbnailDataUrl } from '../services/image-thumbnail';
 import { loadSettings } from '../services/settings';
 import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
@@ -43,6 +54,7 @@ import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
 import { Toolbar } from './components/Toolbar';
 import { autoCloseStep } from './state/auto-close';
+import { autoComposeStep } from './state/auto-compose';
 import {
   createEditorState,
   createLayerFromMaterial,
@@ -585,38 +597,49 @@ export function App(): JSX.Element {
     return alphaProbeRef.current.probe(material.blobId, blob);
   }, []);
 
-  const handleCompose = useCallback(async () => {
-    if (!heroId) return;
+  /**
+   * Build a plan for one (hero, box) pair — probes, fallbacks and solving included.
+   *
+   * Shared by the manual button and the automatic run, so both obey exactly the same
+   * rules; the only difference is where the material ids come from.
+   */
+  const composeFor = useCallback(
+    async (heroMaterialId: string | null, boxMaterialId: string | null): Promise<CompositionPlan | null> => {
+      if (!heroMaterialId) {
+        setComposeError('未选择主体素材');
+        return null;
+      }
 
-    const parsed = parseTemplateByKey(templateKey);
-    if (!parsed.template) {
-      setComposeError(
-        `模板校验失败：${parsed.issues.map((issue) => `${issue.path || '<root>'} ${issue.message}`).join('；')}`,
-      );
-      return;
-    }
+      const parsed = parseTemplateByKey(templateKey);
+      if (!parsed.template) {
+        setComposeError(
+          `模板校验失败：${parsed.issues.map((issue) => `${issue.path || '<root>'} ${issue.message}`).join('；')}`,
+        );
+        return null;
+      }
 
-    const heroMaterial = cutouts.find((material) => material.id === heroId);
-    if (!heroMaterial) {
-      setComposeError('找不到主体素材');
-      return;
-    }
-    const boxMaterial = boxId ? cutouts.find((material) => material.id === boxId) ?? null : null;
+      const heroMaterial = cutouts.find((material) => material.id === heroMaterialId);
+      if (!heroMaterial) {
+        setComposeError('找不到主体素材');
+        return null;
+      }
+      const boxMaterial = boxMaterialId
+        ? cutouts.find((material) => material.id === boxMaterialId) ?? null
+        : null;
 
-    setComposeBusy(true);
-    setComposeError(null);
-    try {
       const heroProfile = await profileFor(heroMaterial);
       const boxProfile = boxMaterial ? await profileFor(boxMaterial) : null;
       // Only look for a stand-in photo when there is no package material: the
       // fallback ladder lives in the template, so the panel does not decide it.
-      const secondaryCandidate = boxMaterial ? null : pickSecondary(bindCandidates, [heroId, boxId]);
+      const secondaryCandidate = boxMaterial
+        ? null
+        : pickSecondary(bindCandidates, [heroMaterialId, boxMaterialId]);
       const secondaryMaterial = secondaryCandidate
         ? cutouts.find((material) => material.id === secondaryCandidate.materialId) ?? null
         : null;
       const secondaryProfile = secondaryMaterial ? await profileFor(secondaryMaterial) : null;
 
-      const plan = buildCompositionPlan({
+      return buildCompositionPlan({
         template: parsed.template,
         hero: {
           materialId: heroMaterial.id,
@@ -649,10 +672,23 @@ export function App(): JSX.Element {
         measure: measureTextWithCanvas(),
         seed: session?.productCode ?? sessionId ?? '',
       });
+    },
+    [bindCandidates, cutouts, profileFor, session, sessionId, templateKey],
+  );
 
-      // One dispatch = one history entry, so a single Ctrl+Z restores the canvas.
-      dispatch({ type: 'APPLY_PLAN', layers: planToLayers(plan) });
-      setComposePlan(plan);
+  /** One dispatch = one history entry, so a single Ctrl+Z restores the canvas. */
+  const applyComposedPlan = useCallback((plan: CompositionPlan) => {
+    dispatch({ type: 'APPLY_PLAN', layers: planToLayers(plan) });
+    setComposePlan(plan);
+  }, []);
+
+  const handleCompose = useCallback(async () => {
+    setComposeBusy(true);
+    setComposeError(null);
+    try {
+      const plan = await composeFor(heroId, boxId);
+      if (!plan) return;
+      applyComposedPlan(plan);
 
       const firstWarning = plan.warnings[0];
       showNotice(
@@ -667,40 +703,41 @@ export function App(): JSX.Element {
     } finally {
       setComposeBusy(false);
     }
-  }, [bindCandidates, boxId, cutouts, heroId, profileFor, session, sessionId, showNotice, templateKey]);
+  }, [applyComposedPlan, boxId, composeFor, heroId, showNotice]);
 
   /**
-   * Ask the vision model which material is the hero and which is the packaging.
+   * Ask the model which material is the hero and which is the packaging.
    *
-   * Explicit button rather than something that fires on load: a wrong automatic
-   * pick is worse than no pick, because the generated layout looks deliberate. The
-   * label heuristic stays in place underneath, so an unreachable gateway costs a
-   * click, not the feature.
+   * Throws on transport/auth problems and returns null when the answer names no
+   * usable hero — the caller decides whether to fall back to labels (manual button:
+   * keep them; automatic run: use them and carry on).
    */
+  const bindVisionRoles = useCallback(async (): Promise<VisionBinding | null> => {
+    if (cutouts.length === 0) return null;
+    const settings = await loadSettings();
+    const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
+    // Selection happens BEFORE decoding: picking the six worth sending is cheap
+    // (labels only), and thumbnailing a dropped material would be wasted work.
+    for (const material of selectVisionCandidates(cutouts)) {
+      const blob = await getBlob(material.blobId);
+      if (!blob) continue;
+      candidates.push({
+        materialId: material.id,
+        label: material.label,
+        dataUrl: await blobToThumbnailDataUrl(blob),
+      });
+    }
+    if (candidates.length === 0) return null;
+    return bindMaterialsWithVision({ config: settings.vision, candidates });
+  }, [cutouts]);
+
+  /** Manual trigger: bind, then leave the result in the panel for review. */
   const handleVisionBind = useCallback(async () => {
     if (cutouts.length === 0) return;
     setVisionBusy(true);
     setBindNote(null);
     try {
-      const settings = await loadSettings();
-      const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
-      // Selection happens BEFORE decoding: picking the six worth sending is cheap
-      // (labels only), and thumbnailing a dropped material would be wasted work.
-      for (const material of selectVisionCandidates(cutouts)) {
-        const blob = await getBlob(material.blobId);
-        if (!blob) continue;
-        candidates.push({
-          materialId: material.id,
-          label: material.label,
-          dataUrl: await blobToThumbnailDataUrl(blob),
-        });
-      }
-      if (candidates.length === 0) {
-        setBindNote('素材图片数据读取失败，无法送 AI 识别');
-        return;
-      }
-
-      const binding = await bindMaterialsWithVision({ config: settings.vision, candidates });
+      const binding = await bindVisionRoles();
       if (!binding) {
         setBindNote('AI 没有给出可用结论，已保留标签匹配结果');
         return;
@@ -717,7 +754,120 @@ export function App(): JSX.Element {
     } finally {
       setVisionBusy(false);
     }
-  }, [cutouts]);
+  }, [bindVisionRoles, cutouts.length]);
+
+  // ---- 自动排版：打开编辑器就出图，不用点
+  //
+  // The decision itself lives in `auto-compose.ts` (pure, tested): wait for the
+  // cut-out queue to settle, never wait forever, never overwrite a restored canvas.
+  const autoComposeRef = useRef<'idle' | 'running' | 'done'>('idle');
+  const [autoGraceElapsed, setAutoGraceElapsed] = useState(false);
+  /** Latest layer count, readable inside async work without stale closures. */
+  const layerCountRef = useRef(0);
+  layerCountRef.current = document.layers.length;
+
+  useEffect(() => {
+    if (loading || fatalError) return;
+    const timer = window.setTimeout(() => setAutoGraceElapsed(true), AUTO_COMPOSE_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [loading, fatalError]);
+
+  const runAutoCompose = useCallback(async () => {
+    setComposeBusy(true);
+    setComposeError(null);
+
+    // Labels first: if the model is unreachable we still have a usable pair, and the
+    // auto-bind effect may not have committed its state yet in this tick.
+    const heuristic = bindMaterialRoles(bindCandidates);
+    let hero = heroId ?? heuristic.heroId;
+    let box = heroId ? boxId : heuristic.boxId;
+
+    try {
+      setVisionBusy(true);
+      try {
+        const binding = await bindVisionRoles();
+        if (binding) {
+          hero = binding.heroId;
+          box = binding.boxId;
+          setHeroId(hero);
+          setBoxId(box);
+          setBindNote(
+            `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
+              binding.boxId ? '' : ' · 未识别到包装盒'
+            }`,
+          );
+        }
+      } catch (error) {
+        setBindNote(`AI 识别不可用：${messageOf(error)}。已用标签匹配自动排版`);
+      } finally {
+        setVisionBusy(false);
+      }
+
+      // The seller may have started editing while the model was thinking.
+      if (layerCountRef.current > 0) {
+        setBindNote('画布已被改动，已取消自动排版');
+        return;
+      }
+
+      const plan = await composeFor(hero, box);
+      if (!plan) return;
+      if (layerCountRef.current > 0) {
+        setBindNote('画布已被改动，已取消自动排版');
+        return;
+      }
+
+      applyComposedPlan(plan);
+      const firstWarning = plan.warnings[0];
+      showNotice(
+        firstWarning
+          ? { kind: 'error', text: `已自动排版，但有让步：${firstWarning.message}` }
+          : { kind: 'ok', text: '已自动生成主图（Ctrl+Z 可整体撤销）' },
+      );
+    } catch (error) {
+      const message = messageOf(error);
+      setComposeError(message);
+      showNotice({ kind: 'error', text: `自动排版失败：${message}` });
+    } finally {
+      autoComposeRef.current = 'done';
+      setComposeBusy(false);
+    }
+  }, [applyComposedPlan, bindCandidates, bindVisionRoles, boxId, composeFor, heroId, showNotice]);
+
+  useEffect(() => {
+    if (autoComposeRef.current !== 'idle' || composeBusy) return;
+
+    const step = autoComposeStep({
+      hydrated: hydratedRef.current,
+      existingLayerCount: document.layers.length,
+      cutoutCount: cutouts.length,
+      active: progress.active,
+      waiting: progress.waiting,
+      deadlineReached: autoGraceElapsed,
+      alreadyRan: false,
+    });
+
+    if (step.phase === 'wait') return;
+    if (step.phase === 'skip') {
+      autoComposeRef.current = 'done';
+      if (step.reason === 'canvas-not-empty') setBindNote('已恢复上次的画布，未自动覆盖');
+      if (step.reason === 'no-cutout') {
+        showNotice({ kind: 'error', text: '没有可用的抠图素材，已跳过自动排版' });
+      }
+      return;
+    }
+
+    autoComposeRef.current = 'running';
+    void runAutoCompose();
+  }, [
+    autoGraceElapsed,
+    composeBusy,
+    cutouts.length,
+    document,
+    progress.active,
+    progress.waiting,
+    runAutoCompose,
+    showNotice,
+  ]);
 
   /**
    * Local uploads (picker or clipboard) are persisted into the session record

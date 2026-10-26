@@ -76,6 +76,16 @@ export const FILL_AUTO_CLOSE_MS = 10_000;
  */
 export const AUTO_CLOSE_FALLBACK_MS = 300;
 
+/**
+ * Grace period before the editor composes a layout on its own, counted from load.
+ *
+ * The auto-compose run waits for the cut-out queue to settle so the package photo is
+ * included rather than missed, but it must never wait forever: cut-outs take ~5–20 s
+ * each at concurrency 6, and a stuck one would mean "no 主图 at all". Past this
+ * deadline the editor composes with whatever survived.
+ */
+export const AUTO_COMPOSE_GRACE_MS = 30_000;
+
 /** Max side (logical px) a layer is scaled to when it first enters the canvas. */
 export const INSERT_MAX_SIDE = 480;
 
