@@ -502,6 +502,18 @@
       return { ok: true, removed: null, skipped: true };
     }
 
+    /*
+      有空位就不删。删除会让后面的图前移，紧接着的上传定位反而更容易找错位置——真机上
+      出现过「5 张图的产品删掉第 1 张后，回填报找不到可点击的上传入口」。空位本来就够用，
+      这一步没有任何收益，所以直接跳过，并如实记一条日志。
+    */
+    if (before.total > 0 && before.filled < before.total) {
+      recorder.ok('FIND_DELETE_BUTTON',
+        '图片区还有空位（已占用 ' + before.filled + '/' + before.total + '），本次不删除第 1 张',
+        { slotCount: before.total, filledSlotCount: before.filled });
+      return { ok: true, removed: null, skipped: true, freeSlot: true };
+    }
+
     var label = slotLabelOf(target);
     var url = imageUrlOf(target);
     var hovered = hoverSlot(target, win);

@@ -17,10 +17,6 @@ const PAGE_MARKERS: readonly string[] = [
   '[class*="image-upload"]',
 ];
 
-/** "商品编号：1000001234567890" / "Product ID: 1000001234567890" and friends. */
-const PRODUCT_CODE_TEXT = /(?:商品编号|商品ID|Product\s*ID)\s*[:：]?\s*(\d{6,20})/i;
-/** URL query keys that carry the product id on the seller console. */
-const PRODUCT_URL_KEYS: readonly string[] = ['productId', 'product_id', 'offerId', 'offer_id'];
 /**
  * Title-input selector: the publish/edit form's 标题 box.
  * `<input placeholder="请输入标题" field="title" name="title" ...>`
@@ -29,10 +25,13 @@ const TITLE_INPUT_SELECTOR = 'input[name="title"][type="text"], input[field="tit
 /**
  * A code like `xxx-xxx` (e.g. `MTS-TF-SS86-0001`) embedded in the title.
  *
- * At least one hyphen is required — a plain word is not a code. Only letters
- * and digits may form the segments, so hyphenated English words in the title
- * (e.g. `micro-scale`) can still sneak in; that is accepted because the seller
- * sees the extracted text on the canvas and can delete it.
+ * At least one hyphen is required — a plain word is not a code. Only letters and
+ * digits may form the segments.
+ *
+ * A second rule was added after seeing it fail on real titles: **the match must
+ * contain at least one digit**. Without it, ordinary hyphenated English in a listing
+ * (`micro-scale`, `pre-order`, `high-quality`) was taken for the product code and
+ * printed onto the 主图. A code without any digit is far rarer than those words.
  */
 const TITLE_CODE = /([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)/;
 
@@ -89,66 +88,33 @@ export class AliExpressPageAdapter implements PageImageAdapter {
   }
 
   /**
-   * Extract the product code from the product edit page.
+   * Extract the product code that gets printed onto the main image.
    *
-   * Order of preference:
-   *   1. a `xxx-xxx` style code inside the 标题 input's value (e.g.
-   *      `MTS-TF-SS86-0001` inside the title text) — the seller's own code;
-   *   2. the URL's `productId` / `offerId` query parameter;
-   *   3. page text of the form 「商品编号：123…」 / "Product ID: 123…".
-   *
-   * Returns `null` when nothing looks like a product code.
+   * **Only a `xxx-xxx` shaped code inside the 标题 input counts.** There is no
+   * numeric fallback on purpose: the URL's `productId` is the Alibaba offer id (a
+   * 16-digit number), and stamping that onto a 主图 reads as a mistake to buyers.
+   * When the title carries no such code the result is `null`, and the canvas simply
+   * gets no code layer — an empty slot is better than a wrong number.
    */
   extractProductCode(): string | null {
-    // The title input box: its value is the product title as the seller typed
-    // it, which is where the SKU-style code lives. Checked FIRST — the URL's
-    // numeric productId is always present, so any other order would never
-    // reach the title code at all.
     try {
       const input = this.doc.querySelector<HTMLInputElement>(TITLE_INPUT_SELECTOR);
       const title = input?.value?.trim();
-      if (title) {
-        const match = TITLE_CODE.exec(title);
-        if (match?.[1]) return match[1];
-      }
-    } catch {
-      /* fall through */
-    }
+      if (!title) return null;
 
-    try {
-      const { search } = this.doc.location ?? window.location;
-      const params = new URLSearchParams(search);
-      for (const key of PRODUCT_URL_KEYS) {
-        const value = params.get(key);
-        if (value && /^\d{6,20}$/.test(value)) return value;
+      // Every match is considered, not just the first: a title like
+      // "Pre-order MTS-TF-0001" starts with a hyphenated WORD, and stopping at the
+      // first match would drop the real code behind it.
+      const pattern = new RegExp(TITLE_CODE.source, 'g');
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(title)) !== null) {
+        const candidate = match[1];
+        // `micro-scale` / `pre-order` / `high-quality` are words, not codes.
+        if (candidate && /[0-9]/.test(candidate)) return candidate;
       }
+      return null;
     } catch {
-      /* fall through to DOM extraction */
+      return null;
     }
-
-    try {
-      const body = this.doc.body;
-      if (body) {
-        // Visible text only: hidden nodes often carry unrelated numeric ids.
-        const walker = this.doc.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-          acceptNode(node) {
-            const parent = (node as CharacterData).parentElement;
-            if (!parent) return NodeFilter.FILTER_REJECT;
-            const style = window.getComputedStyle(parent);
-            return style && style.visibility !== 'hidden' && style.display !== 'none'
-              ? NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_REJECT;
-          },
-        });
-        let node: Node | null;
-        while ((node = walker.nextNode()) !== null) {
-          const match = PRODUCT_CODE_TEXT.exec((node as CharacterData).data || '');
-          if (match?.[1]) return match[1];
-        }
-      }
-    } catch {
-      /* best-effort; a missing code is never fatal */
-    }
-    return null;
   }
 }

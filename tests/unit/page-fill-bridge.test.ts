@@ -418,6 +418,19 @@ function installShiftForwardOnDelete(): { deletes: number } {
   document.querySelector('[data-index="0"] .image-upload-remove')?.addEventListener('click', () => {
     state.deletes += 1;
     document.querySelector('[data-index="0"]')?.remove();
+    // The real console shifts the later images forward AND renders a fresh empty
+    // slot at the end — the total stays six. Without the new slot the area would
+    // come back with nothing free, which is a page state that does not exist (and
+    // would make the follow-up upload fail for the wrong reason).
+    const area = document.querySelector('.imageUploadWrap');
+    if (area) {
+      const slot = document.createElement('div');
+      slot.className = 'sell-o-image-item';
+      slot.setAttribute('data-index', '5');
+      slot.innerHTML =
+        '<div class="image-upload-btn"><div class="upload-content"><span>上传图片</span></div></div>';
+      area.appendChild(slot);
+    }
   });
   return state;
 }
@@ -436,6 +449,24 @@ function installEmptyInPlaceOnDelete(): { deletes: number } {
       '<div class="image-upload-btn"><div class="upload-text-wrap"><span>上传图片</span></div></div>';
   });
   return state;
+}
+
+/**
+ * Fill the fixture's one empty slot, making the image area 6/6.
+ *
+ * Deletion only runs when every slot is taken — freeing a slot that is already free
+ * is exactly what broke on a 5-image product (deleting shifted the later images
+ * forward and the follow-up upload could not find its entry). Tests that exercise
+ * the delete path therefore have to start from a full area.
+ */
+function fillAllSlots(): void {
+  for (const slot of Array.from(document.querySelectorAll('.imageUploadWrap .sell-o-image-item'))) {
+    if (slot.classList.contains('has-url')) continue;
+    slot.classList.add('has-url');
+    const image = document.createElement('img');
+    image.src = 'https://ae01.alicdn.com/kf/filled-slot.jpg';
+    slot.appendChild(image);
+  }
 }
 
 describe('page-fill bridge — slot choice', () => {
@@ -840,7 +871,33 @@ describe('page-fill bridge — remove first image', () => {
     vi.useRealTimers();
   });
 
+  it('does not delete anything when the area still has a free slot', async () => {
+    // The 5-image case, and the reason this rule exists: with slot 5 already empty
+    // there is nothing to free, and deleting the first image shifted the rest
+    // forward — after which the follow-up fill could not find its upload entry.
+    const panel = installFakeUploadPanel();
+    const deletes = installShiftForwardOnDelete();
+
+    const result = await page.bridge.runFill(fillRequest({ removeFirstImage: true }));
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('success');
+    expect(deletes.deletes).toBe(0);
+    expect(result.stages.some((stage) => stage.stage === 'DELETE_IMAGE')).toBe(false);
+    expect(result.message).not.toContain('已删除');
+
+    // Says WHY it did nothing, instead of leaving "回填前删第 1 张" looking ignored.
+    const surveyStage = result.stages.find((stage) => stage.stage === 'FIND_DELETE_BUTTON');
+    expect(surveyStage?.message).toContain('还有空位');
+    expect(surveyStage?.diagnostics).toMatchObject({ slotCount: 6, filledSlotCount: 5 });
+
+    // And the fill itself still works, into the slot that was already free.
+    expect(panel.injected).toHaveLength(1);
+    expect(panel.clickedSlots).toEqual(['5']);
+  });
+
   it('deletes the first image before opening the panel, and says which one it deleted', async () => {
+    fillAllSlots();
     const panel = installFakeUploadPanel();
     const deletes = installShiftForwardOnDelete();
 
@@ -867,6 +924,7 @@ describe('page-fill bridge — remove first image', () => {
     // AliExpress shifts the later images forward, so after deleting slot 0 the
     // only empty slot is the last one. The point of the delete is to HAVE a free
     // slot, not to control where the new image ends up.
+    fillAllSlots();
     const panel = installFakeUploadPanel();
     installShiftForwardOnDelete();
 
@@ -877,18 +935,20 @@ describe('page-fill bridge — remove first image', () => {
     expect(panel.clickedSlots).toEqual(['5']);
   });
 
-  it('appends into the LAST empty slot even when the page frees slot 0 in place', async () => {
-    // The opposite page behaviour: slot 0 itself becomes empty again. The flow
-    // still appends at the END — the last empty slot — because the panel binds to
-    // the slot it was opened from, and landing in the main position would silently
-    // make the new image the main image. The gap at slot 0 stays for the seller.
+  it('uses an in-place freed slot when it is the only one left', async () => {
+    // The console's other plausible behaviour: slot 0 itself becomes empty and stays
+    // put. With the area full before the delete, position 0 is then the ONLY free
+    // slot — so the fill uses it. Refusing would leave the seller unable to fill at
+    // all. (The real console shifts forward and re-renders a trailing slot; that path
+    // is covered above.)
+    fillAllSlots();
     const panel = installFakeUploadPanel();
     installEmptyInPlaceOnDelete();
 
     const result = await page.bridge.runFill(fillRequest({ removeFirstImage: true }));
 
     expect(result.status).toBe('success');
-    expect(panel.clickedSlots).toEqual(['5']);
+    expect(panel.clickedSlots).toEqual(['0']);
   });
 
   it('leaves every image alone unless the delete was explicitly asked for', async () => {
@@ -905,6 +965,7 @@ describe('page-fill bridge — remove first image', () => {
   });
 
   it('refuses to click anything else when the delete icon is missing', async () => {
+    fillAllSlots();
     const panel = installFakeUploadPanel();
     document.querySelector('[data-index="0"] .image-upload-remove')?.remove();
 
@@ -922,6 +983,7 @@ describe('page-fill bridge — remove first image', () => {
   it('stops instead of guessing when the image does not actually disappear', async () => {
     // A confirmation dialog would leave the image sitting there. Clicking "OK" in
     // a dialog we have never seen is exactly the guess this flow refuses to make.
+    fillAllSlots();
     const panel = installFakeUploadPanel();
     document.querySelector('[data-index="0"] .image-upload-remove')?.addEventListener('click', () => {
       /* the page is waiting for a confirm dialog and does nothing */
@@ -950,6 +1012,7 @@ describe('page-fill bridge — remove first image', () => {
   });
 
   it('finds the delete icon by its SVG path when the class name has changed', async () => {
+    fillAllSlots();
     installFakeUploadPanel();
     const icon = document.querySelector('[data-index="0"] .image-upload-remove') as Element;
     const deletes = installShiftForwardOnDelete();

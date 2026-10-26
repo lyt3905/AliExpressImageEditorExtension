@@ -147,6 +147,20 @@ button.primary:hover:not(:disabled) {
   color: var(--text-dim);
 }
 
+/*
+  Live status of the automatic run. Accent-coloured so it reads as "something is
+  happening", but small and not bold: it is a progress line, not a result.
+*/
+.compose-status {
+  margin: 0 0 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--accent);
+  background: #eef4fe;
+  border: 1px solid #d6e4fb;
+  border-radius: 6px;
+}
+
 .compose-button--secondary {
   background: #fff;
   border-color: var(--border);

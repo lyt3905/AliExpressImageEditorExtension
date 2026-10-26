@@ -192,7 +192,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
       */}
       <label
         className="toolbar__check"
-        title="商品页 6 个图片位都占满时，得先腾出空位。勾选后回填会先删掉第 1 张（原主图）——删掉的图只能手动补回；本流程不会点商品页的保存 / 发布"
+        title="只有商品页 6 个图片位全满时才需要腾位置：勾选后，6 张全满会先删掉第 1 张；还有空位（比如只有 5 张）则不动任何旧图。删掉的图只能手动补回；本流程不会点商品页的保存 / 发布"
       >
         <input
           type="checkbox"
@@ -202,7 +202,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           disabled={exporting}
           onChange={(event) => onToggleRemoveFirstImage(event.target.checked)}
         />
-        回填前删第 1 张
+        图片位满时删第 1 张
       </label>
       <button
         type="button"
@@ -210,7 +210,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
         disabled={exporting || (layerCount === 0 && !watermarkEnabled)}
         title={
           removeFirstImage
-            ? '把这张 800×800 白底 PNG 上传到商品页图片区；上传前先删掉第 1 张旧图腾出空位（不会点商品页的保存 / 发布）'
+            ? '把这张 800×800 白底 PNG 上传到商品页图片区；图片位已满时先删掉第 1 张腾位置，还有空位就不删（不会点商品页的保存 / 发布）'
             : '把这张 800×800 白底 PNG 作为一张新图上传到商品页图片区，不删除已有图片（不会点商品页的保存 / 发布）'
         }
       >

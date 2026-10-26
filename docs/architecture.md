@@ -82,6 +82,19 @@ interface MessageResponse<T> { requestId: string; ok: boolean; data?: T; error?:
 真正的排查线索是这行日志（早期版本把五种情况合并成一句「请先在 AliExpress 商品编辑页点击插件图标」，
 既误导用户，也丢掉了唯一的线索）。全部分支由 `tests/unit/page-gate.test.ts` 覆盖。
 
+### 3.1 商品编号：只认标题里的 `xx-xx`，认不到就留空
+
+这串编号会被印在**主图**上，所以规则宁可空着也不能错：
+
+- **唯一来源是「标题」输入框里的 `xx-xx` 形状文本**（`MTS-TF-SS86-0001`），且必须**含至少一个数字**。
+- 没有数字的连字符词（`micro-scale` / `pre-order` / `high-quality`）是词，不是编号 —— 加这条之前，
+  真机上出现过把这些词印到主图里的情况。
+- 标题里第一个匹配不一定是编号（`Pre-order MTS-TF-0001`），所以**逐个匹配、取第一个含数字的**。
+- **URL 的 `productId` 不再作为兜底**：那是阿里的 16 位 offer id，印在主图上是看得见的错误。
+  页面文本里「商品编号：123…」同样不再采信，理由相同。
+
+结果为空时：画布不加编号图层、预览与导出照常，只是少一行字。
+
 ## 4. 下载与存储
 
 `src/background/download-manager.ts`
@@ -394,10 +407,10 @@ type EditorLayer = ImageLayer | TextLayer;
    （真机点错入口会弹出视频上传窗口）；槽位不在 `.imageUploadWrap` 内的入口跳过
    （页面别处如 SKU 模块也有 `.sell-o-image-item`，光看「祖先链上有槽位」信不过）。
    被排除的入口会记进 `skippedEntries` 诊断 —— 否则真机上「明明有入口却不点」没法从日志看出原因。
-2. **可选删图**（`removeFirstImage`）：6 个图片位常是满的，没有空位就无处可放。所以
+2. **可选删图**（`removeFirstImage`）：没有空位就无处可放，所以
    `payload.removeFirstImage` 为真时，先删掉第 1 张（原主图）腾出空位 —— **这是全流程唯一一处
    改动商品页数据的动作**，因此默认由调用方显式开启（编辑器勾选框默认勾选、可关），且只有第一次
-   尝试才带这个标志。详见下面单独一节。
+   尝试才带这个标志。**但只有图片区真的满了才会删**，见下一节。
 3. **跨 frame 重试**：上传面板可能不在持有商品表单的那个 frame 里。此时桥回报
    `UPLOAD_PANEL_NOT_FOUND`，由 SW 换 frame 再执行一次，且第二次必须是 `openPanel: false` ——
    面板已经开着，再点一次上传按钮会把它关掉。
@@ -405,6 +418,24 @@ type EditorLayer = ImageLayer | TextLayer;
 ### 删掉第 1 张旧图（`removeFirstImage`）
 
 三个阶段：`FIND_DELETE_BUTTON` → `DELETE_IMAGE` → `WAIT_IMAGE_REMOVED`。
+
+#### 只有满位才删（真实踩坑：5 张图的产品被误删）
+
+第一版只要勾选就删。真机上遇到「主图只有 5 张」的商品时：本来就有空位，删除纯属损失——
+删掉第 1 张后后面的图前移，图片区重排，紧接着的上传定位**反而找不到可点的入口**，回填直接失败。
+
+所以 `removeFirstImage` 在 `FIND_DELETE_BUTTON` 阶段先 `surveySlots(doc)`：
+
+| `filled` vs `total` | 行为 |
+| --- | --- |
+| `filled === total`（6/6） | 继续删 |
+| `filled < total` | **跳过删除**，记一条 `recorder.ok`：「图片区还有空位（已占用 5/6），本次不删除第 1 张」，带上 `slotCount` / `filledSlotCount` 诊断 |
+
+跳过的判据放在「找不到已占用槽位」之后、真正取第 1 张之前：先回答「有没有可删的」，再回答
+「需不需要删」，两条消息各自说清是哪一种情况。`tests/unit/page-fill-bridge.test.ts` 用真实
+bridge 驱动 DOM，两条分支都覆盖；原来那些「删除后上传到末尾」的用例改成从 6/6 的满位状态开始，
+并让 `installShiftForwardOnDelete` 模拟真机行为（前移后**在末尾补一个新的空槽位**）——
+少了这一步，删除后图片区会变成「无空位」这种真机上不存在的状态。
 
 **顺序刻意的：删图在 `OPEN_PANEL` 之前。** 删除图标就在商品页的槽位上（不需要面板），而删除会让
 图片区重排、空槽位的上传按钮跟着换位置 —— 先删再选槽位才选得准。单测直接断言

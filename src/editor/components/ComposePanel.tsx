@@ -27,6 +27,8 @@ export interface ComposePanelProps {
   visionBusy: boolean;
   /** Outcome of the last vision attempt, or null. */
   bindNote: string | null;
+  /** What the automatic run is doing right now ("等待抠图完成：3/6…"), or null. */
+  status: string | null;
 }
 
 function percent(value: number): string {
@@ -49,6 +51,7 @@ export function ComposePanel({
   onVisionBind,
   visionBusy,
   bindNote,
+  status,
 }: ComposePanelProps): JSX.Element {
   const ready = cutouts.length > 0 && Boolean(heroId);
   const active = templates.find((template) => template.key === templateKey);
@@ -60,6 +63,17 @@ export function ComposePanel({
         <span className="toolbar__hint">{active ? `v${active.version}` : ''}</span>
       </div>
       <div className="panel__body">
+        {/*
+          The automatic run spends most of its time waiting for cut-outs, so this line
+          is the answer to "程序现在在做什么". `role="status"` makes it announce the
+          counters as they change, which is the only progress feedback in the panel.
+        */}
+        {status ? (
+          <p className="compose-status" role="status" aria-live="polite">
+            {status}
+          </p>
+        ) : null}
+
         <section className="panel__group">
           <label className="compose-field">
             <span>版式模板</span>

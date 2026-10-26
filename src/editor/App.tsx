@@ -176,6 +176,14 @@ export function App(): JSX.Element {
   const [visionBusy, setVisionBusy] = useState(false);
   const [bindNote, setBindNote] = useState<string | null>(null);
   /**
+   * What the automatic run is doing right now, for the panel's status line.
+   *
+   * The run spends most of its time waiting for cut-outs, and "正在排版…" only for a
+   * second. Without this the panel looked idle for 10+ seconds and the seller had no
+   * way to tell whether anything was happening.
+   */
+  const [autoPhase, setAutoPhase] = useState<'waiting' | 'binding' | 'composing' | 'done'>('waiting');
+  /**
    * Alpha scans are per-blob and expensive enough to notice: a 512px decode plus
    * two passes over 262k pixels. Cached for the session, keyed by `blobId` (which
    * is deterministic for cutouts), so re-generating does not re-scan.
@@ -783,6 +791,7 @@ export function App(): JSX.Element {
     let box = heroId ? boxId : heuristic.boxId;
 
     try {
+      setAutoPhase('binding');
       setVisionBusy(true);
       try {
         const binding = await bindVisionRoles();
@@ -816,6 +825,7 @@ export function App(): JSX.Element {
         return;
       }
 
+      setAutoPhase('composing');
       applyComposedPlan(plan);
       const firstWarning = plan.warnings[0];
       showNotice(
@@ -829,6 +839,7 @@ export function App(): JSX.Element {
       showNotice({ kind: 'error', text: `自动排版失败：${message}` });
     } finally {
       autoComposeRef.current = 'done';
+      setAutoPhase('done');
       setComposeBusy(false);
     }
   }, [applyComposedPlan, bindCandidates, bindVisionRoles, boxId, composeFor, heroId, showNotice]);
@@ -868,6 +879,30 @@ export function App(): JSX.Element {
     runAutoCompose,
     showNotice,
   ]);
+
+  /**
+   * One line that answers "程序现在在做什么？".
+   *
+   * The automatic run is dominated by waiting, so the useful information is the
+   * cut-out counters, not a static "正在排版". Kept as plain text (no spinner icon)
+   * because a live region announcing "3/6" repeatedly is exactly what a screen
+   * reader user needs to hear.
+   */
+  const composeStatus = useMemo((): string | null => {
+    if (autoPhase === 'binding') return 'AI 正在识别素材角色…';
+    if (autoPhase === 'composing') return '正在按模板排版…';
+    if (autoPhase === 'done') return null;
+
+    const settled = progress.success + progress.failed;
+    if (cutouts.length === 0) {
+      if (progress.total === 0) return '正在读取商品图…';
+      return `等待抠图完成：${settled}/${progress.total}（进行中 ${progress.active}，排队 ${progress.waiting}）`;
+    }
+    if (progress.active > 0 || progress.waiting > 0) {
+      return `等待剩余抠图：${settled}/${progress.total}（进行中 ${progress.active}，排队 ${progress.waiting}）`;
+    }
+    return '素材就绪，准备排版…';
+  }, [autoPhase, cutouts.length, progress]);
 
   /**
    * Local uploads (picker or clipboard) are persisted into the session record
@@ -1301,6 +1336,7 @@ export function App(): JSX.Element {
             onVisionBind={() => void handleVisionBind()}
             visionBusy={visionBusy}
             bindNote={bindNote}
+            status={composeStatus}
           />
 
           <MaterialPanel
