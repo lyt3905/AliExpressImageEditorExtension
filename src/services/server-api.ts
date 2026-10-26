@@ -81,13 +81,58 @@ export async function fetchWithTimeout(
   }
 }
 
-async function readEnvelope(response: Response): Promise<ServerEnvelope<unknown> | null> {
+async function readEnvelope(response: Response, timeoutMs: number): Promise<ServerEnvelope<unknown> | null> {
   try {
-    const text = await response.text();
+    const text = await readBodyText(response, timeoutMs);
     if (!text) return null;
     return JSON.parse(text) as ServerEnvelope<unknown>;
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) throw error;
     return null;
+  }
+}
+
+/**
+ * Read a response body with a deadline.
+ *
+ * `fetchWithTimeout` only covers the wait for RESPONSE HEADERS. A server that
+ * sends headers and then stalls mid-body would leave the awaiting code hanging
+ * forever — which surfaced as "抠图一直处理中" when the background-removal
+ * endpoint stopped answering. Racing the body read against a timer turns that
+ * into a timeout error the UI can show and retry.
+ */
+export async function readBodyText(response: Response, timeoutMs: number): Promise<string> {
+  return raceWithDeadline(() => response.text(), timeoutMs, '读取响应内容');
+}
+
+export async function readBodyBlob(response: Response, timeoutMs: number): Promise<Blob> {
+  return raceWithDeadline(() => response.blob(), timeoutMs, '下载响应内容');
+}
+
+async function raceWithDeadline<T>(
+  run: () => Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new AppError(
+                ErrorCode.CUTOUT_TIMEOUT,
+                `${label}超时（${Math.round(timeoutMs / 1000)} 秒），服务端可能无响应`,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -170,7 +215,7 @@ export class ServerApi {
       },
       LOGIN_TIMEOUT_MS,
     );
-    const envelope = await readEnvelope(response);
+    const envelope = await readEnvelope(response, LOGIN_TIMEOUT_MS);
     if (response.status === 401) {
       throw new AppError(ErrorCode.NOT_LOGGED_IN, envelopeMessage(envelope) || '用户名或密码不正确');
     }
@@ -194,7 +239,7 @@ export class ServerApi {
   async currentUser(): Promise<AuthUser | null> {
     const response = await this.json(SERVER_ROUTES.me, { method: 'GET' }, LOGIN_TIMEOUT_MS);
     if (response.status === 401) return null;
-    const envelope = await readEnvelope(response);
+    const envelope = await readEnvelope(response, LOGIN_TIMEOUT_MS);
     if (!response.ok || envelope?.success === false) return null;
     return (envelope?.data as AuthUser | undefined) ?? null;
   }
@@ -214,7 +259,7 @@ export class ServerApi {
       CUTOUT_UPLOAD_TIMEOUT_MS,
     );
 
-    const envelope = await readEnvelope(response);
+    const envelope = await readEnvelope(response, CUTOUT_UPLOAD_TIMEOUT_MS);
     if (response.status === 401) {
       throw new AppError(ErrorCode.NOT_LOGGED_IN, '未登录或登录已过期');
     }
@@ -243,7 +288,7 @@ export class ServerApi {
       CUTOUT_PROCESS_TIMEOUT_MS,
     );
 
-    const envelope = await readEnvelope(response);
+    const envelope = await readEnvelope(response, CUTOUT_PROCESS_TIMEOUT_MS);
     if (response.status === 401) {
       throw new AppError(ErrorCode.NOT_LOGGED_IN, '未登录或登录已过期');
     }
@@ -274,7 +319,9 @@ export class ServerApi {
     if (!response.ok) {
       throw new AppError(ErrorCode.CUTOUT_FAILED, `下载抠图结果失败（HTTP ${response.status}）`);
     }
-    const blob = await response.blob();
+    // Body reads carry their own deadline: a server that stalls mid-body would
+    // otherwise hang this forever (see `readBodyText`).
+    const blob = await readBodyBlob(response, CUTOUT_RESULT_TIMEOUT_MS);
     if (!blob || blob.size === 0) {
       throw new AppError(ErrorCode.DOWNLOAD_EMPTY, '抠图结果为空文件');
     }

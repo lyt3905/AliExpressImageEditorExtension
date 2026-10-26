@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '../../src/shared/errors';
-import { ServerApi, readRemoveBackgroundPayload } from '../../src/services/server-api';
+import { ServerApi, readBodyText, readRemoveBackgroundPayload } from '../../src/services/server-api';
 import type { FetchLike } from '../../src/services/server-api';
 
 const BASE = 'https://cutout.test';
@@ -48,8 +48,7 @@ const LIVE_SUCCESS_BODY = {
 /** The exact error body the live service returns (captured from the real endpoint). */
 const LIVE_ERROR_BODY = { error: 'internal_error', message: 'HTTP Error 404: Not Found' };
 
-describe('readRemoveBackgroundPayload', () => {
-  it('reads the flat {job, asset} body used by the live endpoint', () => {
+describe('readRemoveBackgroundPayload', () => {  it('reads the flat {job, asset} body used by the live endpoint', () => {
     const payload = readRemoveBackgroundPayload(LIVE_SUCCESS_BODY);
     expect(payload.job?.status).toBe('completed');
     expect(payload.asset?.url).toBe(LIVE_SUCCESS_BODY.asset.url);
@@ -144,5 +143,32 @@ describe('ServerApi.removeBackground', () => {
     expect(seen!.url).toBe(`${BASE}/api/public/toy-image/v1/background/remove`);
     expect(seen!.method).toBe('POST');
     expect(JSON.parse(String(seen!.body))).toEqual({ input_url: 'https://oss.test/in.png', max_size: 1600 });
+  });
+});
+
+/**
+ * Response bodies need their own deadline.
+ *
+ * `fetchWithTimeout` only covers the wait for headers, so a server that sends
+ * headers and then stalls mid-body used to hang the cutout forever — reported
+ * as "抠图一直处理中". These cases pin the deadline that turns it into a
+ * retryable timeout instead.
+ */
+describe('readBodyText', () => {
+  it('rejects with a timeout when the body never finishes', async () => {
+    const stalled = new Response(
+      new ReadableStream({
+        start() {
+          /* never enqueue, never close */
+        },
+      }),
+    );
+    await expect(readBodyText(stalled, 30)).rejects.toMatchObject({
+      code: ErrorCode.CUTOUT_TIMEOUT,
+    });
+  });
+
+  it('resolves normally when the body arrives in time', async () => {
+    await expect(readBodyText(json({ ok: true }), 1000)).resolves.toBe('{"ok":true}');
   });
 });

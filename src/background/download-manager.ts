@@ -23,6 +23,36 @@ export interface DownloadedImage {
 
 export type SettledResult<T> = { ok: true; value: T } | { ok: false; error: AppError };
 
+/**
+ * Read a response body with a deadline.
+ *
+ * `AbortController` covers the request only until the response HEADERS arrive;
+ * a body that stalls afterwards would hang here forever. Racing the read
+ * against a timer turns that into an ordinary download failure.
+ */
+async function readBodyWithDeadline(response: Response, timeoutMs: number): Promise<Blob> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      response.blob(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new AppError(
+                ErrorCode.DOWNLOAD_FAILED,
+                `图片下载超时（读取内容超过 ${Math.round(timeoutMs / 1000)} 秒）`,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export interface DownloadOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -62,7 +92,12 @@ export async function downloadImageBlob(url: string, options: DownloadOptions = 
   }
 
   const declared = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  const blob = await response.blob();
+  /*
+    The body read carries its own deadline: the AbortController above only
+    covered the wait for headers, so a stalled body would hang the whole scan
+    flow with no error to report.
+  */
+  const blob = await readBodyWithDeadline(response, timeoutMs);
   if (!blob || blob.size === 0) {
     throw new AppError(ErrorCode.DOWNLOAD_EMPTY, '图片内容为空');
   }

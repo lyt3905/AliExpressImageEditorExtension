@@ -39,6 +39,14 @@ export interface EditorStageProps {
   /** Locked watermark frame drawn above every user layer (null = none). */
   watermark: WatermarkLayer | null;
   watermarkImage: HTMLImageElement | undefined;
+  /**
+   * Layer drawn ABOVE the watermark frame (the auto-added product code).
+   *
+   * The watermark is a locked frame the seller wants on the composition, but
+   * the product code must stay readable on top of it, so this one layer is
+   * painted after the watermark instead of with the rest of the stack.
+   */
+  foregroundLayerId?: string | null;
   selectedLayerId: string | null;
   onSelect: (layerId: string | null) => void;
   onDragEnd: (layerId: string, x: number, y: number) => void;
@@ -52,6 +60,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     imageForLayer,
     watermark,
     watermarkImage,
+    foregroundLayerId,
     selectedLayerId,
     onSelect,
     onDragEnd,
@@ -208,6 +217,19 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     [selectedLayerId],
   );
 
+  /**
+   * Paint order, front to back: the whole user stack, then the locked
+   * watermark, then the foreground layer (product code) so it stays on top of
+   * the watermark while still being selectable and draggable.
+   */
+  type DrawItem = EditorLayer | { watermark: true };
+  const watermarkItem: DrawItem = { watermark: true };
+  const drawItems: DrawItem[] = [
+    ...layers.filter((layer) => layer.id !== foregroundLayerId),
+    ...(watermark && watermarkImage ? [watermarkItem] : []),
+    ...layers.filter((layer) => layer.id === foregroundLayerId),
+  ];
+
   return (
     <div ref={shellRef} className="stage-shell">
       <Stage
@@ -230,7 +252,34 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
             visible={false}
           />
 
-          {layers.map((layer) => {
+          {drawItems.map((item) => {
+            /*
+              The watermark frame is a draw-order sentinel rather than a layer
+              document entry: it is locked (never clickable, never in the undo
+              stack) but must sit ABOVE the pictures and BELOW the product code.
+            */
+            if ('watermark' in item) {
+              const frame = watermark;
+              if (!frame || !watermarkImage) return null;
+              return (
+                <KonvaImage
+                  key={frame.id}
+                  id={frame.id}
+                  name={WATERMARK_LAYER_ID}
+                  image={watermarkImage}
+                  x={frame.x}
+                  y={frame.y}
+                  offsetX={frame.sourceWidth / 2}
+                  offsetY={frame.sourceHeight / 2}
+                  scaleX={frame.scale}
+                  scaleY={frame.scale}
+                  rotation={frame.rotation}
+                  listening={false}
+                />
+              );
+            }
+
+            const layer = item;
             if (layer.kind === 'text') {
               /*
                 Outline and shadow are drawn in the node's own coordinate space,
@@ -414,29 +463,6 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               />
             );
           })}
-
-          {/*
-            Locked watermark frame: drawn last so it always sits on top of every
-            user layer, and `listening={false}` makes it impossible to click,
-            drag or transform. It is not part of the layer document, so UNDO /
-            REDO / CLEAR cannot remove it either.
-          */}
-          {watermark && watermarkImage ? (
-            <KonvaImage
-              key={watermark.id}
-              id={watermark.id}
-              name={WATERMARK_LAYER_ID}
-              image={watermarkImage}
-              x={watermark.x}
-              y={watermark.y}
-              offsetX={watermark.sourceWidth / 2}
-              offsetY={watermark.sourceHeight / 2}
-              scaleX={watermark.scale}
-              scaleY={watermark.scale}
-              rotation={watermark.rotation}
-              listening={false}
-            />
-          ) : null}
 
           <Transformer
             ref={transformerRef}

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CUTOUT_CONCURRENCY } from '../../shared/constants';
+import { CUTOUT_CONCURRENCY, CUTOUT_TOTAL_TIMEOUT_MS } from '../../shared/constants';
 import { AppError, ErrorCode, messageOf } from '../../shared/errors';
 import type {
   CutoutStatus,
@@ -28,6 +28,23 @@ import { appendUploadedImages, type UploadOutcome } from '../../services/upload-
 import { emptyDocument, keepLayerWithMaterials, restoreStoredLayer } from './editor-reducer';
 
 const IN_FLIGHT: ReadonlySet<CutoutStatus> = new Set<CutoutStatus>(['queued', 'uploading', 'processing']);
+
+/**
+ * Reject `promise` if it has not settled within `ms`.
+ *
+ * Defence in depth behind the per-stage fetch timeouts: whatever goes wrong in
+ * the chain, a cutout task must always reach a terminal state, otherwise the
+ * image sits on 「处理中」 forever and the only fix is reloading the editor.
+ */
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new AppError(ErrorCode.CUTOUT_TIMEOUT, message)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 export interface MaterialStatusEntry {
   status: CutoutStatus;
@@ -176,7 +193,13 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
         updateImage(imageId, { cutoutStatus: 'processing' });
 
         const client = await getClient();
-        const result = await client.cutout(original);
+        // Watchdog: the per-stage timeouts should fire first, but a hung
+        // promise used to leave the card stuck on 「处理中」 with no retry.
+        const result = await withDeadline(
+          client.cutout(original),
+          CUTOUT_TOTAL_TIMEOUT_MS,
+          '抠图超时：服务端长时间无响应，请稍后点「重试」',
+        );
 
         const cutoutBlobId = `${image.blobId}-cutout`;
         await putBlob(cutoutBlobId, result.blob);

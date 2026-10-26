@@ -1,7 +1,7 @@
 {
   "name": "aliexpress-image-editor-extension",
   "private": true,
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Chrome MV3 extension: scan AliExpress product main images, download locally, auto cutout, edit on an 800x800 canvas, export white-background PNG.",
   "type": "module",
   "scripts": {

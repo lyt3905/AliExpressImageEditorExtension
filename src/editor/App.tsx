@@ -907,6 +907,8 @@ export function App(): JSX.Element {
             imageForLayer={imageForLayer}
             watermark={watermark.layer}
             watermarkImage={watermark.image}
+            // The product code is painted above the watermark frame.
+            foregroundLayerId={findCodeLayerId()}
             selectedLayerId={state.selectedLayerId}
             onSelect={handleSelect}
             onDragEnd={handleDragEnd}

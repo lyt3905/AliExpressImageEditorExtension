@@ -20,6 +20,14 @@ export const IMAGE_DOWNLOAD_TIMEOUT_MS = 20_000;
 export const CUTOUT_UPLOAD_TIMEOUT_MS = 60_000;
 export const CUTOUT_PROCESS_TIMEOUT_MS = 180_000;
 export const CUTOUT_RESULT_TIMEOUT_MS = 60_000;
+/**
+ * Hard ceiling for ONE image's whole cutout (upload + process + download).
+ *
+ * The per-stage timeouts above should always fire first; this watchdog exists
+ * because a hung promise anywhere in the chain used to leave the card saying
+ * 「处理中」 forever with no way to retry. Sum of the stages plus a margin.
+ */
+export const CUTOUT_TOTAL_TIMEOUT_MS = 240_000;
 export const LOGIN_TIMEOUT_MS = 15_000;
 
 /**
