@@ -1,15 +1,29 @@
 name: Build
 
+# Every branch gets typechecked + tested + built (so a bad merge is caught before
+# it lands on main). Tags additionally publish a downloadable extension package.
 on:
   push:
     branches: ['**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# A superseded run on the same ref has nothing to say; cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 校验并打包
+    runs-on: ubuntu-latest
+    outputs:
+      # Version comes from the manifest, because that is the number Chrome reads.
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,17 +43,93 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Version consistency (manifest / package / lock)
+        id: version
+        run: |
+          node scripts/check-version.mjs
+          echo "version=$(node scripts/check-version.mjs --plain)" >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: npm run build
 
-      - name: Zip extension
+      - name: Verify dist completeness
+        run: npm run check:dist
+
+      - name: Package extension
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd dist
-          zip -r ../dist.zip .
+          # -X drops extra attributes; a reproducible-ish zip with manifest.json at
+          # the ROOT, which is what "load unpacked" / a packed .crx requires.
+          zip -r -X "../aliexpress-image-editor-v${VERSION}.zip" .
 
-      - name: Upload build artifact
+      - name: Verify the package is loadable
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          PKG="aliexpress-image-editor-v${VERSION}.zip"
+          unzip -l "$PKG" | awk '{print $4}' > "$RUNNER_TEMP/entries.txt"
+          # Chrome loads a zip only if manifest.json sits at the ARCHIVE ROOT; a
+          # nested folder is the classic "打包成功但加载不了" failure, and it never
+          # shows up in the build log.
+          for required in manifest.json service-worker.js content-script.js options/index.html editor/index.html; do
+            if ! grep -qx "$required" "$RUNNER_TEMP/entries.txt"; then
+              echo "::error::zip 根部缺少 $required（解压后在子目录里就加载不了）"
+              exit 1
+            fi
+          done
+          if ! grep -qx 'vendor/aeiir/bridge.js' "$RUNNER_TEMP/entries.txt"; then
+            echo "::error::zip 缺少回填注入脚本 vendor/aeiir/bridge.js"
+            exit 1
+          fi
+          echo "[package] OK：$(wc -l < "$RUNNER_TEMP/entries.txt") 个条目，manifest.json 在根部"
+
+      - name: Upload extension package
         uses: actions/upload-artifact@v4
         with:
-          name: extension-dist-${{ github.sha }}
-          path: dist.zip
-          retention-days: 14
+          name: aliexpress-image-editor-v${{ steps.version.outputs.version }}
+          path: aliexpress-image-editor-v${{ steps.version.outputs.version }}.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: aliexpress-image-editor-v${{ needs.verify.outputs.version }}
+          path: release
+
+      - name: Check tag matches the manifest version
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+          MANIFEST_VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          # Pushing v0.9.0 while the manifest still says 0.8.0 would publish a
+          # release whose contents disagree with its own title. Refuse instead.
+          if [ "v${MANIFEST_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::tag ${TAG_VERSION} 与 manifest 版本 v${MANIFEST_VERSION} 不一致"
+            exit 1
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" release/*.zip \
+            --verify-tag \
+            --title "v${VERSION}" \
+            --notes "可直接加载的扩展包（Chrome 114+）。
+
+          安装：解压 \`aliexpress-image-editor-v${VERSION}.zip\`，打开 \`chrome://extensions\` → 开发者模式 → 加载已解压的扩展程序 → 选择解压出的目录。
+
+          本版本要点：模板驱动的智能排版（左侧特写 + 右上包装盒 + 左上型号 + 底部留白），
+          没有包装盒时按兜底链换成另一张素材 / 衬板 / 留空；素材角色可用本地视觉模型（glm-5.3）自动识别。"

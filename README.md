@@ -116,6 +116,38 @@ AIEE_LIVE=1 AIEE_USERNAME=admin AIEE_PASSWORD=<密码> npm run test:live
 
 > 修改 `src/` 后必须重新 `npm run build`，再到 `chrome://extensions` 点击本扩展的 **刷新（⟳）** 按钮才会生效。
 
+## 已构建版本（GitHub Actions）
+
+推送到任意分支都会跑 [`.github/workflows/build.yml`](.github/workflows/build.yml)：
+`typecheck` → 单测 → **版本一致性** → 构建 → `check:dist` → 打包 → **校验包可加载**，然后上传 artifact：
+
+```text
+aliexpress-image-editor-v<version>.zip
+```
+
+- `<version>` 取自 `public/manifest.json`——Chrome 真正读取的那个数，而不是文件名或 tag。
+- 它会与 `package.json` / `package-lock.json` 交叉校验，三处不一致时 CI **直接失败**；
+  本地可用 `npm run check:version` 先跑一遍。
+- 「校验包可加载」检查 `manifest.json` 是否在 **zip 根部**，以及 `service-worker.js` /
+  `content-script.js` / 回填注入脚本是否齐备 —— 这几种缺失在构建日志里都看不出来，只会在
+  `chrome://extensions` 里报一句「清单文件丢失」。
+
+安装：解压 zip，用 `chrome://extensions` →「加载已解压的扩展程序」选**解压出的目录**
+（Chrome 不接受直接把 zip 拖进去）。
+
+### 发版：打 tag 才会创建 Release
+
+```bash
+npm version <new> --no-git-tag-version   # 改 package.json + package-lock.json
+#   再把 public/manifest.json 的 version 改成同一个数（Chrome 只认它）
+npm run check:version                    # 三处一致才继续
+git commit -am "chore: 版本 <new>"
+git tag v<new> && git push origin v<new>
+```
+
+tag 与 manifest 版本不一致时 release job 会**拒绝发布**——否则会出现"标题 v0.9.0、内容还是 0.8.0"的
+release，而下载的人只有装进浏览器才会发现。artifact 保留 30 天。
+
 ### 排错：Chrome 报「无法为脚本加载 JavaScript 'content-script.js'」
 
 这个报错有两种原因，**先看文件在不在**：
