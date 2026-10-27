@@ -1,6 +1,6 @@
 # 品牌目录（Brand catalog）
 
-这个目录是**扩展在线读取的公开数据**，改完推到 `main` 就生效，不需要重新打包插件。
+这个目录是**扩展在线读取的公开数据**，改完推上去就生效，不需要重新打包插件。
 
 ```
 catalog/
@@ -10,8 +10,13 @@ catalog/
 
 扩展侧的两个地址（按顺序尝试，前一个失败自动换下一个）：
 
-- `https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/main/catalog/`
-- `https://cdn.jsdelivr.net/gh/lyt3905/AliExpressImageEditorExtension@main/catalog/`
+- `https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/feat/ai-image-generation/catalog/`
+- `https://cdn.jsdelivr.net/gh/lyt3905/AliExpressImageEditorExtension@feat/ai-image-generation/catalog/`
+
+> **分支名写死在 `src/shared/constants.ts` 的 `BRAND_CATALOG_REF` 里。**
+> 现在指向功能分支 `feat/ai-image-generation`（功能还没发版）；合并到 `main` 之后**必须改回 `main`**，
+> 否则删分支的那一刻，所有已装插件的同步就全挂了。jsDelivr 不认带 `/` 的分支名，那个镜像会 404 直接换下一个——
+> 宁可没有镜像，也不能让镜像返回旧数据。
 
 ## 加一个品牌
 
@@ -30,6 +35,28 @@ catalog/
 
 3. 跑 `npm run catalog:bump`（版本 +1，顺手算好 `sha256`、规范化 JSON），然后提交。
 4. 如果你只是想改某个 Logo 的图：换掉文件、跑 `npm run catalog:write`，`rev` 会自动跟着 `sha256` 变，装了插件的机器下次同步就会重下这一张。
+
+## 现在的品牌清单
+
+| `id` | 显示名 | 匹配词 |
+| --- | --- | --- |
+| `animaster` | 大漫匠 | 大漫匠、AniMester |
+| `ms-toys` | 魔方 | 魔方、MS-TOYS、MS TOYS、Magic Square |
+| `x-transbots` | X社 | X社、X-TRANSBOTS、XTRANSBOTS |
+| `dr-wu` | 吴医生 | 吴医生、Dr.Wu、DrWu、Dr Wu |
+| `lucky-cat-toys` | 招财猫玩具 | 招财猫玩具、激光猫、Lucky Cat Toys |
+| `fans-toys` | FansToys | FansToys、Fans Toys |
+| `bandai` | 万代 | 万代、BANDAI |
+| `threezero` | 三零 | 三零、threezero、three zero |
+| `galaxy-toys` | 银河玩具社 | 银河玩具社、银河社、Galaxy Toys |
+| `shfiguarts` | SHF | SHF、S.H.Figuarts、SHFiguarts |
+| `hasbro` | 孩之宝 | 孩之宝、Hasbro |
+| `dlx` | DLX | DLX、DLX Collectible Figure |
+| `official-mosaic` | 官方马赛克 | （只做灯片，不参与标题匹配） |
+
+**匹配是"标题里出现该词"的子串判断（不分大小写）**，所以别往里放太短的词：
+`MS` 单独一条会把 `items`、`customs` 这类标题全命中，所以魔方只留了 `MS-TOYS` / `MS TOYS`。
+两个字的词已经够用（`万代`、`三零`），一个字母或两个字母的缩写尽量带上连字符或点。
 
 ## 字段
 

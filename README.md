@@ -688,6 +688,8 @@ AliExpressImageEditorExtension/
 - 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
   目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
 - 本地优先：手工上传的同名品牌、你在选项页改过名称/别名的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
+- 读的是**功能分支**（`BRAND_CATALOG_REF = 'feat/ai-image-generation'`，功能还没发版）。合并到 `main`
+  之后必须把该常量改回 `main`，否则删分支会连带断掉所有已装插件的同步。
 
 ---
 

@@ -209,17 +209,31 @@ export const BRAND_LOGO_MIME_TYPES = WATERMARK_MIME_TYPES;
 // ------------------------------------------------------------- brand catalog
 
 /**
+ * Which git ref the catalog is read from.
+ *
+ * Deliberately a branch, not a tag: a logo re-upload should be live after one
+ * `git push`, not after a release. It points at the feature branch while brand
+ * sync is still unreleased — **before merging, flip this back to `main`**,
+ * otherwise deleting the branch silently breaks sync for every installed copy.
+ */
+const BRAND_CATALOG_REF = 'feat/ai-image-generation';
+
+/**
  * Where `brands.json` + `logos/` live. Tried in order, first one that answers
  * wins, and the winner is remembered so the next sync starts there.
  *
  * Two URLs because `raw.githubusercontent.com` is unreliable from mainland
- * China: the jsDelivr mirror is fetched over a CDN instead. Both point at the
- * same `main` branch, so a catalog edit is live after one commit — no release,
- * no version bump (that rule only covers `src/`).
+ * China: the jsDelivr mirror is fetched over a CDN instead. Both resolve to the
+ * same ref, so a catalog edit is live after one commit — no release, no version
+ * bump (that rule only covers `src/`).
+ *
+ * jsDelivr refuses refs containing `/`, so its URL asks for the branch name
+ * verbatim and is allowed to 404 — a mirror that answers with *stale* data would
+ * be worse than no mirror at all.
  */
 export const BRAND_CATALOG_URLS = [
-  'https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/main/catalog/',
-  'https://cdn.jsdelivr.net/gh/lyt3905/AliExpressImageEditorExtension@main/catalog/',
+  `https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/${BRAND_CATALOG_REF}/catalog/`,
+  `https://cdn.jsdelivr.net/gh/lyt3905/AliExpressImageEditorExtension@${BRAND_CATALOG_REF}/catalog/`,
 ] as const;
 
 /** File name of the catalog manifest inside a catalog directory. */
