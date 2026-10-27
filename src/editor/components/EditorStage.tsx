@@ -3,6 +3,7 @@ import Konva from 'konva';
 import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer } from 'react-konva';
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
+import { createAlphaHitScratch, paintAlphaHit } from '../state/alpha-hit';
 import { estimateTextHeight } from '../state/editor-reducer';
 import { axisScale, splitSignedScale } from '../state/transform';
 
@@ -10,6 +11,9 @@ import { axisScale, splitSignedScale } from '../state/transform';
 export const MAX_PREVIEW_SIZE = 640;
 const MIN_PREVIEW_SIZE = 240;
 const MIN_LAYER_SIDE = 8;
+
+/** Shared offscreen canvas for alpha-accurate hit masks — see `state/alpha-hit.ts`. */
+const alphaHitScratch = createAlphaHitScratch();
 
 export interface EditorStageHandle {
   getStage(): Konva.Stage | null;
@@ -467,39 +471,27 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 rotation={layer.rotation}
                 draggable
                 /*
-                  Alpha-accurate hit area.
+                  Alpha-accurate hit area — the picture is only clickable where it
+                  is actually opaque, so a cut-out's transparent background falls
+                  through to the layer below instead of swallowing the click.
 
-                  Konva's default hit for an image is its whole rectangle, so a
-                  cutout's transparent background swallows every click meant for
-                  the picture underneath — the "移动错图层" bug. Drawing the
-                  image into the hit canvas and then compositing the hit colour
-                  `source-in` keeps only the opaque pixels, so transparent areas
-                  fall through to the layer below.
-
-                  Konva only resolves a shape when the hit pixel is fully opaque
-                  (alpha 255), which the composite produces exactly on the solid
-                  pixels.
+                  The mask is built on a separate canvas and then painted with
+                  `source-over`: compositing `source-in` directly into the shared
+                  hit canvas would erase the hit pixels the layers underneath
+                  registered in this bounding box, which made them unclickable
+                  under a transparent area. Details: `state/alpha-hit.ts`.
                 */
                 hitFunc={(context, shape) => {
-                  context.save();
-                  context.beginPath();
-                  context.rect(0, 0, layer.sourceWidth, layer.sourceHeight);
-                  context.closePath();
-                  context.clip();
-                  context.drawImage(
+                  paintAlphaHit(
+                    context,
+                    {
+                      sourceWidth: layer.sourceWidth,
+                      sourceHeight: layer.sourceHeight,
+                      colorKey: shape.colorKey,
+                    },
                     image,
-                    0,
-                    0,
-                    image.width,
-                    image.height,
-                    0,
-                    0,
-                    layer.sourceWidth,
-                    layer.sourceHeight,
+                    alphaHitScratch(layer.sourceWidth, layer.sourceHeight),
                   );
-                  context.setAttr('globalCompositeOperation', 'source-in');
-                  context.fillStrokeShape(shape);
-                  context.restore();
                 }}
                 onClick={() => onSelect(layer.id)}
                 onTap={() => onSelect(layer.id)}
