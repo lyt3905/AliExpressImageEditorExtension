@@ -10,6 +10,12 @@ import {
   gesture the seller actually makes on a composed canvas, and every row that
   answers `selection` moves a layer the pointer is NOT on — so the list of
   `selection` rows has to stay short and explainable.
+
+  The default row is the important one: the hero the planner selects after
+  composing (`selectionIsExplicit: false`) must not take over. Only a layer the
+  user picked by hand gets drag priority — that is what makes a picture whose box
+  is covered by another picture movable at all (a cut-out is mostly transparent
+  margin, and its box therefore sits on top of whatever is behind it).
 */
 
 function owner(overrides: Partial<DragOwnerInput> = {}): string {
@@ -19,6 +25,7 @@ function owner(overrides: Partial<DragOwnerInput> = {}): string {
     selectedId: 'hero',
     pointerInsideSelection: true,
     forceSelection: false,
+    selectionIsExplicit: false,
     ...overrides,
   });
 }
@@ -32,14 +39,28 @@ describe('decideDragOwner', () => {
     expect(owner({ pressedId: 'hero', selectedId: 'hero' })).toBe('pressed');
   });
 
-  it('moves an overlapping picture even though the hero is selected', () => {
+  it('moves an overlapping picture even though the hero is auto-selected', () => {
     // The regression that made the canvas feel broken: the hero used to slide
     // whenever a packaging box or a label on top of it was grabbed.
     expect(owner()).toBe('pressed');
   });
 
-  it('moves a label that sits on top of the selected picture', () => {
+  it('moves a label that sits on top of the auto-selected picture', () => {
     expect(owner({ pressedId: 'product-code' })).toBe('pressed');
+  });
+
+  it('hands the gesture to a layer the user selected by hand', () => {
+    // The occlusion case: the user picked this layer in the panel (or on the
+    // canvas), its box is covered by the picture on top, so the press lands on
+    // the other one. "I picked this one" wins.
+    expect(owner({ selectionIsExplicit: true })).toBe('selection');
+    expect(owner({ selectionIsExplicit: true, pressedId: 'product-code' })).toBe('selection');
+  });
+
+  it('still moves the pressed layer when the hand-picked selection is elsewhere', () => {
+    // Priority is bounded by the selection's own box: a press on the far side of
+    // the canvas must not teleport something else.
+    expect(owner({ selectionIsExplicit: true, pointerInsideSelection: false })).toBe('pressed');
   });
 
   it('moves the pressed layer when the pointer is outside the selection box', () => {
@@ -63,11 +84,19 @@ describe('decideDragOwner', () => {
   it('never hands a press on the empty stage anywhere', () => {
     expect(owner({ pressedId: null })).toBe('pressed');
     expect(owner({ pressedId: null, forceSelection: true })).toBe('pressed');
+    expect(owner({ pressedId: null, selectionIsExplicit: true })).toBe('pressed');
   });
 
   it('keeps the selected layer when it is the backdrop being pressed', () => {
     expect(owner({ pressedId: 'plate', selectedId: 'plate', pressedIsBackdrop: true })).toBe(
       'pressed',
+    );
+  });
+
+  it('does not need Alt to move a hand-picked layer', () => {
+    // Same gesture with and without Alt: the explicit selection already said it.
+    expect(owner({ selectionIsExplicit: true })).toBe(
+      owner({ selectionIsExplicit: true, forceSelection: true }),
     );
   });
 });

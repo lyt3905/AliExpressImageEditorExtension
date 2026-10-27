@@ -60,6 +60,11 @@ export interface EditorStageProps {
    */
   foregroundLayerId?: string | null;
   selectedLayerId: string | null;
+  /**
+   * Whether that selection was made by the user (`true`) or by an automatic step
+   * such as the planner selecting the hero (`false`) — see `state/drag-owner.ts`.
+   */
+  selectionIsExplicit: boolean;
   onSelect: (layerId: string | null) => void;
   onDragEnd: (layerId: string, x: number, y: number) => void;
   onTransformEnd: (layerId: string, patch: LayerPatch) => void;
@@ -74,6 +79,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     watermarkImage,
     foregroundLayerId,
     selectedLayerId,
+    selectionIsExplicit,
     onSelect,
     onDragEnd,
     onTransformEnd,
@@ -244,6 +250,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
           pointer && selected && pointInsideBox(selected.getClientRect(), pointer),
         ),
         forceSelection: Boolean((event.evt as MouseEvent | undefined)?.altKey),
+        selectionIsExplicit,
       });
 
       if (owner === 'selection' && selected instanceof Konva.Shape) {
@@ -255,7 +262,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
 
       onSelect(layerId);
     },
-    [onSelect, selectedLayerId],
+    [onSelect, selectedLayerId, selectionIsExplicit],
   );
 
   /**

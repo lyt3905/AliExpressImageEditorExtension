@@ -185,6 +185,15 @@ export function App(): JSX.Element {
    */
   const [autoPhase, setAutoPhase] = useState<'waiting' | 'binding' | 'composing' | 'done'>('waiting');
   /**
+   * Whether the current selection was made by the user, and therefore gets drag
+   * priority on the canvas (see `state/drag-owner.ts`).
+   *
+   * A selection the app makes by itself — the hero the planner picks after
+   * composing — must not claim gestures: its box covers most of the canvas, so
+   * every drag would move it and the layer under the finger would stay put.
+   */
+  const [selectionIsExplicit, setSelectionIsExplicit] = useState(false);
+  /**
    * Alpha scans are per-blob and expensive enough to notice: a 512px decode plus
    * two passes over 262k pixels. Cached for the session, keyed by `blobId` (which
    * is deterministic for cutouts), so re-generating does not re-scan.
@@ -705,16 +714,20 @@ export function App(): JSX.Element {
   const applyComposedPlan = useCallback((plan: CompositionPlan) => {
     const layers = planToLayers(plan);
     /*
-      Select the hero on the way in. The composed canvas is opaque-looking but its top
-      picture is mostly transparent margin at this zoom, so with nothing selected the
-      first drag grabs whatever is underneath — usually the backdrop plate, which moves
-      behind the product and reads as "拖不动". With the hero selected, the stage's
-      existing hand-off sends any drag that starts inside it to the hero itself.
+      Select the hero on the way in, so the transformer lands on the subject instead
+      of on nothing or on the backdrop plate — with nothing selected, the first drag
+      grabs whatever is underneath and reads as "拖不动".
+
+      This selection is marked as automatic: it must NOT give the hero drag priority.
+      Right after composing, the hero's box covers most of the canvas, so a priority
+      selection would take over the first gesture no matter what the user pressed
+      (that is the 10.3.4 complaint). Priority is earned by selecting by hand.
     */
     const hero = [...layers]
       .reverse()
       .find((layer) => layer.kind !== 'text' && layer.kind !== 'plate');
     dispatch({ type: 'APPLY_PLAN', layers, selectLayerId: hero?.id ?? null });
+    setSelectionIsExplicit(false);
     setComposePlan(plan);
   }, []);
 
@@ -1039,6 +1052,8 @@ export function App(): JSX.Element {
 
   const handleSelect = useCallback((layerId: string | null) => {
     dispatch({ type: 'SELECT_LAYER', layerId });
+    // Picking a layer by hand is what earns it drag priority; deselecting drops it.
+    setSelectionIsExplicit(layerId !== null);
   }, []);
 
   const handleDragEnd = useCallback((layerId: string, x: number, y: number) => {
@@ -1418,6 +1433,7 @@ export function App(): JSX.Element {
             // The product code is painted above the watermark frame.
             foregroundLayerId={findCodeLayerId()}
             selectedLayerId={state.selectedLayerId}
+            selectionIsExplicit={selectionIsExplicit}
             onSelect={handleSelect}
             onDragEnd={handleDragEnd}
             onTransformEnd={handleCommitLayer}
