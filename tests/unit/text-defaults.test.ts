@@ -4,7 +4,9 @@ import {
   MAX_FONT_SIZE,
   MAX_SHADOW_BLUR,
   MAX_STROKE_WIDTH,
+  MAX_TEXT_WIDTH,
   MIN_FONT_SIZE,
+  MIN_TEXT_WIDTH,
   STORAGE_KEYS,
   TEXT_LAYER_DEFAULTS,
   TEXT_STYLE_KEYS,
@@ -46,6 +48,7 @@ function installChromeStub(): Map<string, unknown> {
 
 /** A style that differs from the factory defaults in every remembered field. */
 const CUSTOM_STYLE: TextStyleDefaults = {
+  width: 620,
   fontSize: 72,
   fontFamily: 'SimHei',
   fill: '#ff0000',
@@ -72,9 +75,15 @@ describe('DEFAULT_TEXT_STYLE', () => {
   });
 
   it('does not carry the copy, the position or the transform', () => {
-    for (const key of ['text', 'x', 'y', 'width', 'scale', 'rotation']) {
+    for (const key of ['text', 'x', 'y', 'scale', 'rotation']) {
       expect(DEFAULT_TEXT_STYLE).not.toHaveProperty(key);
     }
+  });
+
+  it('remembers the wrap width', () => {
+    // 10.5.4: the box width is how a label is shaped, so it belongs to the style.
+    // A seller who drags 400 → 620 must not have to drag it out again next time.
+    expect(DEFAULT_TEXT_STYLE.width).toBe(TEXT_LAYER_DEFAULTS.width);
   });
 });
 
@@ -84,7 +93,12 @@ describe('pickTextStyle', () => {
     expect(pickTextStyle({ text: '新的文案' })).toBeNull();
     expect(pickTextStyle({ x: 10, y: 20 })).toBeNull();
     expect(pickTextStyle({ scale: 1.5, rotation: 30 })).toBeNull();
-    expect(pickTextStyle({ width: 320 })).toBeNull();
+  });
+
+  it('treats a wrap-width change as a style edit', () => {
+    // A transformer drag on a text layer commits `width` and nothing else, so
+    // this is the path that has to write the preference.
+    expect(pickTextStyle({ width: 320 })).toEqual({ width: 320 });
   });
 
   it('keeps only the style fields of a mixed patch', () => {
@@ -134,6 +148,14 @@ describe('sanitizeTextStyle', () => {
     expect(sanitizeTextStyle({ shadowBlur: 999 }).shadowBlur).toBe(MAX_SHADOW_BLUR);
     expect(sanitizeTextStyle({ shadowOpacity: 5 }).shadowOpacity).toBe(1);
     expect(sanitizeTextStyle({ shadowOpacity: -1 }).shadowOpacity).toBe(0);
+  });
+
+  it('keeps the remembered wrap width inside the box limits, in whole px', () => {
+    expect(sanitizeTextStyle({ width: 5000 }).width).toBe(MAX_TEXT_WIDTH);
+    expect(sanitizeTextStyle({ width: 1 }).width).toBe(MIN_TEXT_WIDTH);
+    expect(sanitizeTextStyle({ width: 437.6 }).width).toBe(438);
+    expect(sanitizeTextStyle({ width: Number.NaN }).width).toBe(TEXT_LAYER_DEFAULTS.width);
+    expect(sanitizeTextStyle({ width: '620' }).width).toBe(TEXT_LAYER_DEFAULTS.width);
   });
 
   it('drops values of the wrong type', () => {
@@ -246,6 +268,12 @@ describe('createTextLayer with a remembered style', () => {
   it('applies the remembered style', () => {
     const layer = createTextLayer(CUSTOM_STYLE);
     for (const key of TEXT_STYLE_KEYS) expect(layer[key]).toBe(CUSTOM_STYLE[key]);
+  });
+
+  it('comes out the width you dragged last time', () => {
+    // The whole point of remembering the box: no re-stretching on every label.
+    expect(createTextLayer(CUSTOM_STYLE).width).toBe(CUSTOM_STYLE.width);
+    expect(createTextLayer().width).toBe(TEXT_LAYER_DEFAULTS.width);
   });
 
   it('always starts from a fresh copy, position and transform', () => {

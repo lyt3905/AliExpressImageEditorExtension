@@ -1012,9 +1012,9 @@ export function App(): JSX.Element {
    * Committed once per finished edit — a blur, a discrete click, or the canvas
    * transformer's release — so a single change produces exactly one undo step.
    *
-   * Every committed edit funnels through here, which is what lets a text resize
-   * reach the style memory with no special case at either call site: the
-   * transformer bakes the drag into `fontSize` (see `bakeTextScale`), and
+   * Every committed edit funnels through here, which is what lets a text-layer
+   * edit reach the style memory with no special case at either call site: the
+   * transformer commits `width` when a side handle is dragged, and
    * `pickTextStyle` then picks that up like any other style edit. A patch that
    * carries no style at all — a move, a picture's resize — returns null and is
    * simply not remembered.

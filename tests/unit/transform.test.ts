@@ -1,22 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import {
-  MAX_FONT_SIZE,
-  ROTATE_SNAP_DEG,
-  ROTATE_STEP_DEG,
-  TEXT_LAYER_DEFAULTS,
-} from '../../src/shared/constants';
-import { pickTextStyle } from '../../src/shared/text-style';
-import type { ImageLayer, TextLayer } from '../../src/shared/types';
+import { ROTATE_SNAP_DEG, ROTATE_STEP_DEG } from '../../src/shared/constants';
+import type { ImageLayer } from '../../src/shared/types';
 import {
   createEditorState,
-  createTextLayer,
   editorReducer,
   restoreStoredLayer,
   type EditorState,
 } from '../../src/editor/state/editor-reducer';
 import {
   axisScale,
-  bakeTextScale,
   normalizeRotation,
   rotationCommit,
   shortestDelta,
@@ -238,97 +230,6 @@ describe('editorReducer + transformPatch', () => {
     expect(resized.scale).toBe(0.25);
     expect(resized.flipX).toBe(true);
     expect(resized.flipY).toBe(false);
-  });
-});
-
-describe('bakeTextScale', () => {
-  it('turns a resize into a font size, so the field shows what the canvas shows', () => {
-    expect(bakeTextScale(48, 1.5)).toEqual({ fontSize: 72, scale: 1 });
-    expect(bakeTextScale(100, 0.5)).toEqual({ fontSize: 50, scale: 1 });
-    expect(bakeTextScale(48, 1)).toEqual({ fontSize: 48, scale: 1 });
-  });
-
-  it('never moves the text on release: fontSize × scale is preserved', () => {
-    for (const fontSize of [12, 48, 120, 200]) {
-      for (const factor of [0.1, 0.5, 1, 1.7, 3, 12]) {
-        const target = fontSize * factor;
-        const baked = bakeTextScale(fontSize, factor);
-        // The only slack is the rounding of the font size the panel can show.
-        expect(Math.abs(baked.fontSize * baked.scale - target)).toBeLessThanOrEqual(0.5);
-      }
-    }
-  });
-
-  it('slides back into the panel range and keeps the overflow in scale', () => {
-    expect(bakeTextScale(200, 3)).toEqual({ fontSize: 200, scale: 3 });
-    // 48 × 10 = 480: as much as the panel can hold, the rest stays a scale.
-    expect(bakeTextScale(48, 10)).toEqual({ fontSize: 200, scale: 2.4 });
-    // 12 × 0.1 = 1.2: the smallest font we allow, shrunk the rest of the way.
-    expect(bakeTextScale(12, 0.1)).toEqual({ fontSize: 12, scale: 0.1 });
-  });
-
-  it('snaps a rounding leftover to exactly 1 instead of leaving a 0.993', () => {
-    // 47 × 1.5 = 70.5, which rounds to 71 — half a pixel, not a real scale.
-    expect(bakeTextScale(47, 1.5)).toEqual({ fontSize: 71, scale: 1 });
-  });
-
-  it('falls back to a sane size for garbage rather than poisoning the layer', () => {
-    // A missing / zero font size means the factory one, which the factor scales.
-    expect(bakeTextScale(0, 2)).toEqual({ fontSize: TEXT_LAYER_DEFAULTS.fontSize * 2, scale: 1 });
-    expect(bakeTextScale(Number.NaN, 2)).toEqual({
-      fontSize: TEXT_LAYER_DEFAULTS.fontSize * 2,
-      scale: 1,
-    });
-    // A useless factor is read as "not resized".
-    expect(bakeTextScale(48, 0)).toEqual({ fontSize: 48, scale: 1 });
-    expect(bakeTextScale(48, -2)).toEqual({ fontSize: 48, scale: 1 });
-    expect(bakeTextScale(48, Number.NaN)).toEqual({ fontSize: 48, scale: 1 });
-    expect(bakeTextScale(48, Number.POSITIVE_INFINITY)).toEqual({ fontSize: 48, scale: 1 });
-    // Overflow: an infinite product must not reach the document as a scale.
-    expect(bakeTextScale(1e308, 1e308)).toEqual({ fontSize: MAX_FONT_SIZE, scale: 1 });
-  });
-
-  it('keeps a mirrored text layer mirrored while baking its size', () => {
-    let state: EditorState = editorReducer(createEditorState(), {
-      type: 'ADD_LAYER',
-      layer: createTextLayer(),
-    });
-    const layerId = state.history.present.layers[0].id;
-
-    state = editorReducer(state, {
-      type: 'COMMIT_LAYER',
-      layerId,
-      patch: transformPatch({ rotation: 0 }, 'flip-x'),
-    });
-
-    // What the transformer reports after a handle drag on a mirrored node.
-    const node = splitSignedScale(
-      axisScale({ scale: 2, flipX: true }, 'x'),
-      axisScale({ scale: 2, flipX: true }, 'y'),
-    );
-    const baked = bakeTextScale(TEXT_LAYER_DEFAULTS.fontSize, node.scale);
-    state = editorReducer(state, {
-      type: 'COMMIT_LAYER',
-      layerId,
-      patch: {
-        scale: baked.scale,
-        fontSize: baked.fontSize,
-        flipX: node.flipX,
-        flipY: node.flipY,
-      },
-    });
-
-    const layer = state.history.present.layers[0] as TextLayer;
-    expect(layer.fontSize).toBe(TEXT_LAYER_DEFAULTS.fontSize * 2);
-    expect(layer.scale).toBe(1);
-    expect(layer.flipX).toBe(true);
-  });
-
-  it('is what makes a resize a style edit the preference store can remember', () => {
-    // The transformer's commit is an ordinary patch; the bake is what puts a
-    // style key in it, so `pickTextStyle` remembers the size like any other.
-    const baked = bakeTextScale(48, 1.5);
-    expect(pickTextStyle({ x: 0, y: 0, ...baked })).toEqual({ fontSize: 72 });
   });
 });
 

@@ -17,10 +17,12 @@ import {
   MAX_SHADOW_BLUR,
   MAX_SHADOW_OFFSET,
   MAX_STROKE_WIDTH,
+  MAX_TEXT_WIDTH,
   MIN_FONT_SIZE,
   MIN_SHADOW_BLUR,
   MIN_SHADOW_OFFSET,
   MIN_STROKE_WIDTH,
+  MIN_TEXT_WIDTH,
   TEXT_FONT_FAMILIES,
 } from '../../shared/constants';
 import type { LayerPatch, TextLayer } from '../../shared/types';
@@ -239,6 +241,21 @@ export function TextPropertiesEditor({
         <ColorField label="颜色" value={layer.fill} onCommit={(next) => patch({ fill: next })} />
       </div>
 
+      {/*
+        The wrap box, as a number. The side handles already change it, but a
+        field makes it visible (and resettable) — and it is what gets remembered
+        for the next text layer, so it should not be an invisible side effect.
+      */}
+      <div className="text-properties__row">
+        <NumberField
+          label="文本框宽度"
+          value={layer.width}
+          min={MIN_TEXT_WIDTH}
+          max={MAX_TEXT_WIDTH}
+          onCommit={(next) => patch({ width: next })}
+        />
+      </div>
+
       <div className="text-properties__row text-properties__row--buttons">
         <button
           type="button"
@@ -336,8 +353,8 @@ export function TextPropertiesEditor({
 
       <p className="text-properties__hint">
         内容 / 字号 / 颜色 / 描边 / 阴影改完后点击空白处生效；描边和阴影会跟着文字一起放大。
-        用拖拽手柄缩放文字会折算成字号，所以这里的数字会跟着你拖的大小一起变。
-        样式（字号、字体、颜色、粗细、对齐、描边、阴影）会被记住，下次添加文字直接沿用；
+        左右拖手柄改的是「换行框宽度」，字号不变——字不会跟着拉伸变形。
+        样式（文本框宽度、字号、字体、颜色、粗细、对齐、描边、阴影）会被记住，下次添加文字直接沿用；
         文字内容、位置、旋转、镜像不记，字号最多记到 200 上限。
       </p>
     </section>

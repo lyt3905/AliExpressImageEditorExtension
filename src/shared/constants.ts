@@ -273,6 +273,18 @@ export const TEXT_FONT_FAMILIES = [
 export const MIN_FONT_SIZE = 12;
 export const MAX_FONT_SIZE = 200;
 
+/**
+ * Wrap-box width limits, logical px.
+ *
+ * The lower bound is what keeps a text box grabbable: below ~32px the glyphs
+ * wrap into a column so narrow that the side handles overlap the text and the
+ * transformer starts fighting the drag. The upper bound is generous (the canvas
+ * is 800px) because a remembered width comes from a previous layer and must
+ * never be the reason a new layer is unusable.
+ */
+export const MIN_TEXT_WIDTH = 32;
+export const MAX_TEXT_WIDTH = 2000;
+
 /** Defaults for a freshly created text layer (see `createTextLayer`). */
 export const TEXT_LAYER_DEFAULTS = {
   text: '请输入文字',
@@ -310,12 +322,18 @@ export const MAX_STROKE_WIDTH = 40;
  *
  * Deliberately excludes `text` (a new layer must never inherit the previous
  * wording), `x` / `y` (otherwise layers stack on top of each other) and
- * `width` / `scale` / `rotation` (both should restart at their neutral value).
+ * `scale` / `rotation` (both should restart at their neutral value).
+ *
+ * `width` IS included: the wrap box is how a label is shaped, not where it is
+ * placed — a seller who drags a 400px box out to 620px wants the next label to
+ * come out 620px wide instead of dragging it out again every single time.
+ * `offsetX` is derived from it (`EditorStage`), so nothing else needs adjusting.
  *
  * SINGLE SOURCE OF TRUTH: `pickTextStyle` reads it and `TextStyleDefaults` is
  * derived from it, so the two can never drift apart.
  */
 export const TEXT_STYLE_KEYS = [
+  'width',
   'fontSize',
   'fontFamily',
   'fill',

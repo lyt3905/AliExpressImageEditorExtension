@@ -285,29 +285,24 @@ npm run check:dist
 
 ### 样式记忆
 
-新增的「添加文字」不再是一律 48px 黑字，而是**沿用你上次调好的样式**。
+新增的「添加文字」不再是一律 48px 黑字、400 宽的框，而是**沿用你上次调好的样式**。
 
-| 记住（12 个字段） | 不记住 |
+| 记住（13 个字段） | 不记住 |
 | --- | --- |
-| `fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`width` `rotation` `flipX` `flipY` |
+| `width`（换行框宽度）、`fontSize` `fontFamily` `fill` `fontStyle` `align` `stroke` `strokeWidth` `shadow*` | `text`（内容）、`x` `y`（位置）、`scale` `rotation` `flipX` `flipY` |
 
-不记内容是因为新图层绝不能带出上一条文案；不记位置 / 旋转 / 镜像是因为每次都应从画布中心、不旋转也不镜像重新开始。
+不记内容是因为新图层绝不能带出上一条文案；不记位置 / 旋转 / 镜像 / 缩放是因为每次都应从画布中心、不旋转也不镜像重新开始。
 
-**拖拽缩放不算白做**：用 Transformer 手柄把文字拉大 / 缩小时，松手会把缩放倍数**折算进字号**
-（`bakeTextScale`，纯函数 + 单测）。这是唯一一条会让「大小」被记住的路径，理由有两个：
-
-- 右栏「字号」此前会骗人 —— 拖到 3 倍大，框里还写着 48。折算后框里的数字就是你看到的字号。
-- 不折算的话新图层只会沿用那个 48。缩放是「变换」（不记），字号是「样式」（记），
-  而用户拖手柄时想表达的其实是后者。
-
-折算满足 `fontSize × scale` **严格不变**，所以松手瞬间文字不会跳。字号夹在 12–200，
-超出上限的部分继续留在 `scale` 里，以免把文字缩回去；记忆只能带走 200
-（800×800 画布上的 200px 字已经占了四分之一高）。落地方式见下方「只在样式补丁上写存储」那条。
+**换行框宽度算「样式」**：文字只有左右两个手柄，拖它就是改 `width`（换行框），不是拉伸字形 ——
+字会重新折行、大小不变。既然形态是"你调出来的那一个"，它就跟着样式一起记住：
+拖到 620 宽之后，下次「添加文字」直接就是 620 宽，不用再拖一遍。
+宽度夹在 32–2000（`MIN_TEXT_WIDTH` / `MAX_TEXT_WIDTH`），右栏还提供一个「文本框宽度」输入框，
+既方便看清当前值，也是把它改回默认的地方。
 
 - 字段清单是 `src/shared/constants.ts` 里的 `TEXT_STYLE_KEYS`，**单一定义**：`pickTextStyle()`（提交时抽取）、`TextStyleDefaults` 类型、`createTextLayer()` 的入参过滤都从它派生，加字段不会漏。
 - 存储在 `chrome.storage.local` 的 `aiee:text-defaults`（`src/services/text-defaults.ts`）。用 `local` 而不是 `session`（关浏览器就该还在），也不用 `sync`（120 次/分钟写配额，样式提交是高频动作）。
 - **不进 `EditorDocument`**：文档描述「这张图有什么」，偏好描述「用户习惯」，而且文档在历史栈里，塞进去会污染 undo。加载偏好不 dispatch 任何 action，所以 hydrate 仍然只产生 1 条历史记录。
-- 只在样式补丁上写存储：`pickTextStyle()` 对纯位置 / 内容 / 变换的补丁返回 `null`，移动图层和改文案不会触发写盘。文字缩放**会**触发 —— 它折算后带上了 `fontSize`，本来就算一次样式改动；也正因为如此，变换路径不需要任何特例，它和历史栈、属性面板一样都走 `handleCommitLayer`。
+- 只在样式补丁上写存储：`pickTextStyle()` 对纯位置 / 内容 / 变换的补丁返回 `null`，移动图层和改文案不会触发写盘。拖手柄改宽度**会**触发 —— 它提交的补丁里就有 `width`，本来就算一次样式改动；也正因为如此，变换路径不需要任何特例，它和历史栈、属性面板一样都走 `handleCommitLayer`。
 - 写入是**整个对象覆盖**而不是 `load → merge → set`：连续两次提交（改完字号立刻改颜色）不会交错读写，天然 last-write-wins。
 - 读取和写入都过一遍 `sanitizeTextStyle()`，手工改坏或半截写入的存储项不会把 `fontSize: 99999` 送上画布。
 - 存储不可用时静默降级为默认样式，不影响编辑器任何既有行为。
@@ -666,7 +661,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 40 文件 / 657 个单元测试（不联网）
+│  ├─ unit/                      # 40 文件 / 656 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -754,11 +749,11 @@ AliExpressImageEditorExtension/
    绝不点击已占用槽位上的入口（那会覆盖旧图）。工具栏「图片位满时删第 1 张」默认勾选，
    但**只有 6 个位置全满时才会删**；还有空位时一个都不动（5 张图的产品不会丢图）。
    删图不可撤销，本流程也不会替你保存，删掉的那张需要你手动补回。
-9. 文字图层只做基础排版：内容 / 字体（仅本机字体）/ 字号 / 颜色 / 加粗 / 左中右对齐 / 描边 / 阴影。
-   不含渐变、曲线文字、富文本、每字符不同颜色、字体上传与网络字体，也不做多层描边或内发光。
+9. 文字图层只做基础排版：内容 / 字体（仅本机字体）/ 字号 / 颜色 / 加粗 / 左中右对齐 / 描边 / 阴影 /
+   换行框宽度。不含渐变、曲线文字、富文本、每字符不同颜色、字体上传与网络字体，也不做多层描边或内发光。
    属性在失焦时才提交，所以输入过程中画布不会逐字实时刷新（描边 / 阴影同理）。
-   文字的可见大小是 `字号 × 缩放`；用手柄缩放会自动折算成字号，但字号上限 200，
-   超出上限的那部分只能留在缩放里、**不进样式记忆**（下次新建最多沿用 200）。
+   文字只有左右两个手柄，拖它改的是**换行框宽度**（会重新折行、字形不变），字号要改请用右栏输入框；
+   字号上限 200，宽度上限 2000，两者都会被记住。
 10. 本地图片只有**文件选择器**与**剪贴板粘贴**两个入口，不做拖拽上传；粘贴只取位图，
     不处理「粘贴一个图片 URL / HTML 片段」。上传后不能删除素材，也无法给素材改名。
     单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
@@ -788,7 +783,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（42 文件 / 662 测试，其中 657 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（42 文件 / 661 测试，其中 656 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（示例目录 2 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |

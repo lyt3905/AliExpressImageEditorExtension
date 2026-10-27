@@ -286,7 +286,7 @@ Konva 的 `Canvas.setWidth` 是 `canvas.width = width * pixelRatio`，**没有�
 `EditorLayer` 现在是判别联合：
 
 ```ts
-type EditorLayer = ImageLayer | TextLayer;
+type EditorLayer = ImageLayer | TextLayer | PlateLayer;
 ```
 
 - `ImageLayer`（`original` / `cutout`）持有 `materialId` / `blobId` / `sourceWidth` / `sourceHeight`；
@@ -294,8 +294,9 @@ type EditorLayer = ImageLayer | TextLayer;
   `text / width / fontSize / fontFamily / fill / fontStyle / align / stroke / strokeWidth / shadow*`。
 - `WatermarkLayer` 是**第三个独立类型**，不属于 `EditorLayer`，所以水印「不进图层文档」的结论没有被削弱。
 - `EditorStage` 按 `layer.kind` 分支渲染：文字走 `Konva.Text`，**永远不进 `imageForLayer`**（那条路径只认图片）。
-- 文字与图片共用同一个 `Transformer` 和 `COMMIT_LAYER`。图片的可见大小就是 `scale`；
-  文字的可见大小是 `fontSize × scale`，而手柄只动 `scale`，所以文字松手时要折算一次字号（见下「样式记忆」）。
+- 文字与图片共用同一个 `Transformer` 和 `COMMIT_LAYER`，但手柄的含义不同：图片四角手柄改 `scale`；
+  文字只有左右两个手柄，拖它把 `scaleX` 折回 `width`（换行框），字形大小不变。
+  所以「拖手柄」对文字来说是一次**样式**编辑，`width` 会跟着样式记忆走（见下「样式记忆」）。
 - `TextLayer` 的 `x / y` 同样是几何中心：`offsetX = width / 2`，`offsetY = 实测高度 / 2`。
   Konva.Text 的高度取决于自动换行，因此首帧用 `estimateTextHeight`（`fontSize × 行数`）估算，
   节点上屏后由 `EditorStage` 的 ref 测量并写回 state 校正。
@@ -324,7 +325,7 @@ type EditorLayer = ImageLayer | TextLayer;
 
 #### 样式记忆（偏好，不是文档状态）
 
-`TextLayer` 的 12 个样式字段会被记住，下一个新建的文字图层直接沿用。
+`TextLayer` 的 13 个样式字段会被记住，下一个新建的文字图层直接沿用。
 
 - 权威字段清单只有一处：`src/shared/constants.ts` 的 `TEXT_STYLE_KEYS`。
   `TextStyleDefaults` 类型、`DEFAULT_TEXT_STYLE`、`pickTextStyle()`、`restore`/`create` 都从它派生，
@@ -341,15 +342,16 @@ type EditorLayer = ImageLayer | TextLayer;
   偏好也从不进入 `EditorDocument`，所以 undo / redo / clear 碰不到它。
 - `createTextLayer(defaults)` 会把入参再过滤一遍 `pickTextStyle()`，
   即便调用方塞进 `text` / `x` / `scale` 也不会泄漏到新图层上。
-- **文字缩放被折算成字号**（`bakeTextScale()`，同在 `transform.ts`）。
-  `TEXT_STYLE_KEYS` 里没有 `scale`，所以用手柄把文字拉大本来是「变换」，不会被记住 ——
-  于是右栏「字号」在拖到 3 倍后仍写 48（面板与画布说法不一致），新建的文字也回到 48。
-  松手时把 `fontSize × scale` 折成新的 `fontSize`、`scale` 归 1，同时解决这两件事。
-  夹取在 12–200，装不下的部分**留在 `scale` 里**（否则超限的拖拽会把文字缩回去），
-  因此记忆只能带走 200。折算保持乘积不变，所以松手瞬间画面不跳。
-  这也是**唯一**一条「变换补丁带样式字段」的路径：`EditorStage` 把 `fontSize` 塞进
-  `transformEnd` 的补丁，`pickTextStyle()` 随之认出它是一次样式改动 ——
-  变换路径因此不需要任何特例，它和属性面板走同一个 `handleCommitLayer`（提交 + 记忆）。
+- **换行框宽度 `width` 也算样式**（10.5.4 起）。文字只有左右两个手柄，拖它改的是 `width`
+  而不是字形：`EditorStage` 在 `transformEnd` 里把 `scaleX` 折回 `width`、`scale` 归 1，
+  所以「把框拖宽」和「在右栏输入宽度」提交的是同一个字段。既然形态是用户调出来的，
+  它就跟着样式一起被记住——否则每加一条文字都要重新拖一次框（这正是 10.5.4 修的那件事）。
+  宽度夹在 `MIN_TEXT_WIDTH`(32)–`MAX_TEXT_WIDTH`(2000)，`sanitizeTextStyle()` 同时取整，
+  因为只有 `layer.width × scale` 才会产出小数。
+- **删掉了 `bakeTextScale()`**：它把文字缩放折算成字号，是「文字有角手柄」时代的解法。
+  角手柄取消后（见上，文字只留左右锚点）它没有任何调用方，留着只会让文档说谎：
+  README 一度写着「拖拽缩放会折算成字号」，而实际拖手柄根本不动字号。
+  字号现在只由右栏输入框改，`scale` 对文字来说只剩「恢复的旧文档 / 商品码摆放」那些来源。
 
 #### 镜像 / 旋转（文档存布尔标志，节点才是带符号缩放）
 

@@ -1,9 +1,9 @@
 /**
  * Text style: the part of a text layer that is worth remembering.
  *
- * A new text layer starts from the last used style (font, size, colour,
- * outline, shadow) but never from the previous copy, position or transform —
- * the authoritative field list is `TEXT_STYLE_KEYS` in constants.ts.
+ * A new text layer starts from the last used style (wrap width, font, size,
+ * colour, outline, shadow) but never from the previous copy, position or
+ * transform — the authoritative field list is `TEXT_STYLE_KEYS` in constants.ts.
  *
  * Lives in `shared/` on purpose: both `editor/state` (restore + create) and
  * `services` (the preference store) need it, and `services` must not reach
@@ -15,10 +15,12 @@ import {
   MAX_SHADOW_BLUR,
   MAX_SHADOW_OFFSET,
   MAX_STROKE_WIDTH,
+  MAX_TEXT_WIDTH,
   MIN_FONT_SIZE,
   MIN_SHADOW_BLUR,
   MIN_SHADOW_OFFSET,
   MIN_STROKE_WIDTH,
+  MIN_TEXT_WIDTH,
   TEXT_LAYER_DEFAULTS,
   TEXT_STYLE_KEYS,
 } from './constants';
@@ -90,6 +92,9 @@ export function sanitizeTextStyle(
 ): TextStyleDefaults {
   const source = (raw && typeof raw === 'object' ? raw : {}) as AnyRecord;
   return {
+    // The wrap box, in whole logical px: a fractional width only ever comes out
+    // of a transformer drag times a scale, and half a pixel of wrap is noise.
+    width: Math.round(clampNumber(source.width, fallback.width, MIN_TEXT_WIDTH, MAX_TEXT_WIDTH)),
     fontSize: clampNumber(source.fontSize, fallback.fontSize, MIN_FONT_SIZE, MAX_FONT_SIZE),
     fontFamily: pickColor(source.fontFamily, fallback.fontFamily),
     fill: pickColor(source.fill, fallback.fill),

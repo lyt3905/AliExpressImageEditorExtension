@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
 import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer } from 'react-konva';
-import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
+import {
+  CANVAS_SIZE,
+  MAX_TEXT_WIDTH,
+  MIN_TEXT_WIDTH,
+  WATERMARK_LAYER_ID,
+} from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
 import { estimateTextHeight } from '../state/editor-reducer';
@@ -156,9 +161,10 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     if (selectable) {
       /*
         Text layers get SIDE anchors only: dragging them is a wrap-width change
-        (`width`), not a font-size change. Corner handles stay for pictures; a
-        text resize still goes through `bakeTextScale` below, reachable from
-        the panel's own controls.
+        (`width`), never a font-size change — so the letters are not stretched,
+        the box just gets wider and the text re-wraps. Corner handles stay for
+        pictures. `width` is a remembered style field, so the box you drag out
+        here is the box the next text layer comes with.
       */
       const isText = selectable.getAttr('text') !== undefined && selectable instanceof Konva.Text;
       transformer.enabledAnchors(
@@ -418,8 +424,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                       fold scaleX back into `width` and keep `fontSize` alone.
                       The vertical scale is reset with the horizontal one —
                       a text layer's height follows its wrap, never a drag.
+
+                      Clamped to MIN/MAX_TEXT_WIDTH: the committed patch carries
+                      `width`, and `width` is a remembered style field, so an
+                      unbounded drag would poison every later text layer.
                     */
-                    const newWidth = Math.max(32, Math.round(layer.width * Math.abs(signedX)));
+                    const newWidth = Math.min(
+                      MAX_TEXT_WIDTH,
+                      Math.max(MIN_TEXT_WIDTH, Math.round(layer.width * Math.abs(signedX))),
+                    );
                     node.width(newWidth);
                     node.scaleX(1);
                     node.scaleY(1);
