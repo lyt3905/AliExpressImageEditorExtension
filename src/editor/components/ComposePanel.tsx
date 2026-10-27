@@ -39,10 +39,6 @@ export interface ComposePanelProps {
   onClearCache: () => void;
 }
 
-function percent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
 export function ComposePanel({
   templates,
   templateKey,
@@ -199,46 +195,14 @@ export function ComposePanel({
 
         {error ? <div className="notice notice--error">{error}</div> : null}
 
-        {plan ? (
-          <section className="panel__group">
-            <h3 className="panel__group-title">
-              <span>本次结果</span>
-              <span>{plan.templateId}</span>
-            </h3>
-            <dl className="compose-diagnostics">
-              <dt>主体</dt>
-              <dd>
-                zoom {plan.diagnostics.heroNominalZoom} → {plan.diagnostics.heroZoom}
-                {'，'}可见占比 {percent(plan.diagnostics.heroOccupancy)}
-              </dd>
-              <dt>包装盒</dt>
-              <dd>
-                {plan.diagnostics.boxVariantIndex === null
-                  ? '未放置'
-                  : `变体 #${plan.diagnostics.boxVariantIndex}，可见 ${
-                      plan.diagnostics.boxVisibleRatio === null
-                        ? '—'
-                        : percent(plan.diagnostics.boxVisibleRatio)
-                    }`}
-              </dd>
-              <dt>兜底</dt>
-              <dd>{plan.diagnostics.boxFallback}</dd>
-              <dt>编号</dt>
-              <dd>{plan.texts.length > 0 ? `${plan.texts[0].fontSize}px` : '无'}</dd>
-            </dl>
-
-            {plan.warnings.length > 0 ? (
-              <ul className="compose-warnings">
-                {plan.warnings.map((entry, index) => (
-                  <li key={`${entry.code}-${index}`} title={entry.code}>
-                    {entry.message}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="compose-note">没有让步，按模板原始数值排版。</p>
-            )}
-          </section>
+        {plan && plan.warnings.length > 0 ? (
+          <ul className="compose-warnings">
+            {plan.warnings.map((entry, index) => (
+              <li key={`${entry.code}-${index}`} title={entry.code}>
+                {entry.message}
+              </li>
+            ))}
+          </ul>
         ) : null}
       </div>
     </aside>
