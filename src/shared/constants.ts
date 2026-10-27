@@ -227,9 +227,10 @@ const BRAND_CATALOG_REF = 'feat/ai-image-generation';
  * same ref, so a catalog edit is live after one commit — no release, no version
  * bump (that rule only covers `src/`).
  *
- * jsDelivr refuses refs containing `/`, so its URL asks for the branch name
- * verbatim and is allowed to 404 — a mirror that answers with *stale* data would
- * be worse than no mirror at all.
+ * jsDelivr resolves refs containing `/` correctly (measured 2026-10-27 against
+ * this very branch: it returned the then-current `version: 2`), so the mirror
+ * stays usable with a slashed branch name. If it ever stops resolving, the
+ * client just moves to the next mirror — no config change needed.
  */
 export const BRAND_CATALOG_URLS = [
   `https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/${BRAND_CATALOG_REF}/catalog/`,

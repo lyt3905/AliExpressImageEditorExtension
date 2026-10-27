@@ -968,6 +968,7 @@ Logo 逐个下载（一个坏图不影响其它），但**注册表只写一次*
 **记住上次成功的那台**（`baseUrlUsed`）并放到下次的第一位；全失败时错误信息拼成
 `没拿到品牌目录（raw.githubusercontent.com：HTTP 502；cdn.jsdelivr.net：超时）` ——
 卖家要能区分"GitHub 被墙"和"目录 JSON 写坏了"，这两种的修法完全不同。
+两个地址都对同一个分支名解析成功（含 `/` 的 ref jsDelivr 也认，2026-10-27 实测返回当时的 `version: 2`）。
 
 只接受 `https`（本机 `127.0.0.1` / `localhost` 例外，方便本地起个静态目录调试）。
 
