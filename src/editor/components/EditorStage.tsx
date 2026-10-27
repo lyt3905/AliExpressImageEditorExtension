@@ -3,7 +3,9 @@ import Konva from 'konva';
 import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer } from 'react-konva';
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
-import { createAlphaHitScratch, paintAlphaHit } from '../state/alpha-hit';
+import { createAlphaHitMasks } from '../state/alpha-hit';
+import { createPreviewSources } from '../state/preview-source';
+import { installDragDebug, isDragDebugEnabled } from '../state/drag-debug';
 import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
 import { estimateTextHeight } from '../state/editor-reducer';
 import { axisScale, splitSignedScale } from '../state/transform';
@@ -16,8 +18,17 @@ const MIN_LAYER_SIDE = 8;
 /** Marks the planner's backdrop plate — scenery, not a subject (see `drag-owner.ts`). */
 const PLATE_NAME = 'backdrop-plate';
 
-/** Shared offscreen canvas for alpha-accurate hit masks — see `state/alpha-hit.ts`. */
-const alphaHitScratch = createAlphaHitScratch();
+/**
+ * Cached alpha hit masks — one per (picture, box, hit colour), built once instead
+ * of once per redraw. See `state/alpha-hit.ts` for the cost this removes.
+ */
+const alphaHitMasks = createAlphaHitMasks();
+
+/**
+ * Downscaled drawing sources — the per-frame cost of a picture then follows the
+ * preview size instead of the source size. See `state/preview-source.ts`.
+ */
+const previewSources = createPreviewSources();
 
 export interface EditorStageHandle {
   getStage(): Konva.Stage | null;
@@ -101,6 +112,9 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
   const previewScaleRef = useRef(previewScale);
   previewScaleRef.current = previewScale;
 
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+
   // Keep the preview square and inside the available space (window resize included).
   useEffect(() => {
     const shell = shellRef.current;
@@ -122,6 +136,41 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     const observer = new ResizeObserver(measure);
     if (parent) observer.observe(parent);
     return () => observer.disconnect();
+  }, []);
+
+  /*
+    `?debug=drag` prints what a drag actually costs: layer repaints per second, how
+    big the picture sources are, and how often the one-off caches are being rebuilt
+    (they should not be, after the first frame). Off unless the query parameter is
+    there — see `state/drag-debug.ts`.
+  */
+  useEffect(() => {
+    if (!isDragDebugEnabled()) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+    return installDragDebug(stage, () => {
+      let imageLayers = 0;
+      let largestSide = 0;
+      let largestSource = '—';
+      for (const layer of layersRef.current) {
+        if (layer.kind === 'text' || layer.kind === 'plate') continue;
+        imageLayers += 1;
+        const side = Math.max(layer.sourceWidth, layer.sourceHeight);
+        if (side > largestSide) {
+          largestSide = side;
+          largestSource = `${layer.sourceWidth}x${layer.sourceHeight}`;
+        }
+      }
+      return {
+        imageLayers,
+        largestSource,
+        maskBuilds: alphaHitMasks.builds,
+        maskMs: alphaHitMasks.buildMs,
+        previewBuilds: previewSources.builds,
+        previewMs: previewSources.buildMs,
+        previewScale: previewScaleRef.current,
+      };
+    });
   }, []);
 
   // Keep the measured text heights in sync with what is actually drawn.
@@ -351,6 +400,9 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 <KonvaText
                   key={layer.id}
                   id={layer.id}
+                  // A leaf shape with a shadow: the buffer pass Konva allocates for
+                  // "perfect" drawing buys nothing here and costs a full-size redraw.
+                  perfectDrawEnabled={false}
                   ref={(node) => {
                     if (node) textNodesRef.current.set(layer.id, node);
                     else textNodesRef.current.delete(layer.id);
@@ -459,6 +511,8 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   key={layer.id}
                   id={layer.id}
                   name={PLATE_NAME}
+                  // A leaf rectangle: a buffer canvas would only add a full-size pass.
+                  perfectDrawEnabled={false}
                   x={layer.x}
                   y={layer.y}
                   width={layer.width}
@@ -502,11 +556,32 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
 
             const image = imageForLayer(layer);
             if (!image) return null;
+            /*
+              Draw from a downscaled copy.
+
+              Konva repaints the whole layer on every `_requestDraw()`, and a drag
+              requests one per `mousemove` (`Node._setDragPosition`), so the
+              picture's source resolution was paid again on every frame: a
+              1600x1600 cut-out is 2.56 MP of resampling for a shape that covers
+              maybe 400x400 on screen. The copy is capped at 1024 px, which is
+              still more than the 800x800 export canvas can resolve.
+
+              `width`/`height` keep the node's box byte-identical to before — only
+              the pixel source changed, so positions, hit areas and export framing
+              are untouched.
+            */
+            const source = previewSources.for(image, layer.sourceWidth, layer.sourceHeight, layer.scale);
+            if (!source) return null;
             return (
               <KonvaImage
                 key={layer.id}
                 id={layer.id}
-                image={image}
+                image={source.image}
+                width={source.width}
+                height={source.height}
+                // No buffer canvas: a picture layer is a leaf, there is nothing to
+                // composite perfectly, and the buffer only costs a full-size pass.
+                perfectDrawEnabled={false}
                 x={layer.x}
                 y={layer.y}
                 offsetX={layer.sourceWidth / 2}
@@ -527,15 +602,14 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   under a transparent area. Details: `state/alpha-hit.ts`.
                 */
                 hitFunc={(context, shape) => {
-                  paintAlphaHit(
+                  alphaHitMasks.paint(
                     context,
                     {
                       sourceWidth: layer.sourceWidth,
                       sourceHeight: layer.sourceHeight,
                       colorKey: shape.colorKey,
                     },
-                    image,
-                    alphaHitScratch(layer.sourceWidth, layer.sourceHeight),
+                    source.image,
                   );
                 }}
                 onClick={() => onSelect(layer.id)}

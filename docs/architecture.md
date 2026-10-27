@@ -888,11 +888,55 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
 
 修法：掩码在**独立的离屏画布**上合成，再以 `source-over` 画回命中画布 —— 这条操作只**增加**像素。
 不变式写在 `src/editor/state/alpha-hit.ts`，并用 `tests/unit/alpha-hit.test.ts` 钉住："画一次命中，
-绝不删除已存在的命中像素"。
+绝不删除已存在的命中像素"。掩码随后又加了缓存与分辨率封顶，见 §10.8.2。
 
 顺带一个对得上的细节：`Shape.intersects()` 用的是临时的 `stage.bufferHitCanvas`，每次自己 `clear()`
 后只画自己，所以它一直是准的 —— 错的只有共享命中画布。这正好解释了当时"hand-off 判定觉得按在商品上、
 实际点击却选不中"的错位：两条路径读的不是同一块画布。
+
+### 10.8.2 拖动为什么卡：每帧重采样 + 每次重画重建掩码
+
+用户的下一句反馈是分层的：**抠图后的素材**拖不动、十分卡顿，**原图素材**却能流畅拖动。
+差别不在代码路径，而在两处成本都跟"源分辨率"成正比：
+
+1. **每帧重采样。** Konva 每次 `_requestDraw()` 都整层重画（`Layer.js` `drawScene` 先
+   `clear()` 再 `Container.drawScene`），而拖动每个 `mousemove` 都会
+   `Node._setDragPosition` → `setAbsolutePosition` → `_requestDraw`。每个图片节点再跑
+   `drawImage(image, 0, 0, width, height)`（`shapes/Image.js` `_sceneFunc`）——
+   **源分辨率被逐帧重付一次**。抠图源上限 `CUTOUT_MAX_SIZE = 1600`，1600² = 2.56 MP，排版后
+   一张画布上常 6 张 ≈ **15 MP/帧** 的 RGBA 重采样；原图通常 0.5–1 MP 且只有一张，所以"原图流畅"。
+2. **按压瞬间冻结。** 命中掩码当时按**源分辨率**、在**每次重画**里重建。而 react-konva 的
+   `applyNodeProps`（`react-konva/lib/makeUpdates.js`）只按 `props[key] !== oldProps[key]` 判变更，
+   **内联箭头函数每次渲染都是新引用** → `hitFunc` 被当成变了 → `setAttrs` → `updatePicture`
+   → 整层重画（含命中画布）。6 张 2.56 MP 的 `source-in` 合成 ≈ **60–150 ms**，正好落在起手那一帧
+   （按下会 `onSelect`，重渲染跟着来），体感就是"按下去先僵一下"。旧实现还在一个共享 canvas 上
+   按尺寸反复改 `element.width`，6 张不同尺寸意味着反复重分配十几 MB 的位图。
+
+三条修法，都是把成本从"源分辨率"挪到"实际画多大"：
+
+- `src/editor/state/preview-source.ts`：图片图层改为从**降采样副本**绘制，副本最长边
+  `PREVIEW_SOURCE_MAX_SIDE = 1024`，尺寸按 `box × scale` 算（`fitInside`），空窗期返回原图兜底。
+  节点显式带 `width`/`height` = 盒子尺寸，所以位置、命中区、导出取景**一个像素都没变**，换掉的只有
+  Konva 采样的像素。
+- `src/editor/state/alpha-hit.ts`：掩码**建一次就缓存**（`WeakMap` 按图片对象，内层按
+  `盒子×命中色`），并同样封顶 1024；绘制退化成一次缩放 `drawImage`。
+- 图片 / 衬板 / 文字都加 `perfectDrawEnabled={false}`：叶子形状没有"完美绘制"可言，缓冲区那一趟
+  纯粹是白给的重画。
+
+两个刻意的取舍：
+
+- **上限为什么是 1024 而不是 800。** 图层可以被放大到溢出画布（模板的 hero zoom 就是故意的），
+  导出时会按绘制尺寸采样副本，副本太小就会软。1024 在 800 画布之上留了余量，又比 1600 省一半以上。
+- **scale 为什么要分桶。** transformer 拖动时 `layer.scale` 是连续变化的，按精确值做缓存键等于
+  每个 mousemove 重建一次 —— 正是要消灭的那个成本。所以 scale 向上取整到 `SCALE_BUCKET = 0.25`：
+  副本永远不会比需要的更小，指针跨过一个桶才重建一次。每个图片只保留**当前**尺寸的那一份副本
+  （一份最多 4 MB），旧的直接丢掉，需要时重新生成。
+
+本机没有 puppeteer/playwright（`package.json` 的 devDeps 里只有 jsdom / vitest），帧率**没法在仓库里
+测**。所以量测做到了产品里：编辑器带 `?debug=drag` 时每 2 秒打印一行
+`[AIEE] 拖动诊断` —— 场景重画次数（`Layer` 的 `draw` 事件）/ 图片层数 / 最大源尺寸 / 掩码与副本的
+构建次数和耗时。构建次数应当稳定在"每张图一次"，如果它随拖动增长，说明有东西在让缓存失效
+（最先怀疑内联 `hitFunc`、`image` 引用变化、`layers` 数组被重建）。
 
 ### 10.9 测试边界
 
