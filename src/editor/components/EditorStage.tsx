@@ -4,6 +4,7 @@ import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer
 import { CANVAS_SIZE, WATERMARK_LAYER_ID } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import { createAlphaHitScratch, paintAlphaHit } from '../state/alpha-hit';
+import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
 import { estimateTextHeight } from '../state/editor-reducer';
 import { axisScale, splitSignedScale } from '../state/transform';
 
@@ -11,6 +12,9 @@ import { axisScale, splitSignedScale } from '../state/transform';
 export const MAX_PREVIEW_SIZE = 640;
 const MIN_PREVIEW_SIZE = 240;
 const MIN_LAYER_SIDE = 8;
+
+/** Marks the planner's backdrop plate — scenery, not a subject (see `drag-owner.ts`). */
+const PLATE_NAME = 'backdrop-plate';
 
 /** Shared offscreen canvas for alpha-accurate hit masks — see `state/alpha-hit.ts`. */
 const alphaHitScratch = createAlphaHitScratch();
@@ -202,31 +206,60 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
   const suppressDragEndRef = useRef<string | null>(null);
 
   /**
-   * Hand a drag to the selected layer.
+   * Decide the drag owner for a gesture that just started, and select what is
+   * being dragged.
    *
-   * A picture can be completely covered by an opaque layer above it — then no
-   * amount of clicking reaches it on the canvas, and dragging moves the top
-   * layer instead ("移动错误"). When the press landed inside the selected
-   * layer (`intersects` is alpha-accurate thanks to the custom hitFunc), the
-   * gesture belongs to the selection: cancel this layer's drag and start the
-   * selected one from the same pointer position.
+   * Two jobs in one place, because they must not disagree: the transformer and
+   * the layer panel have to follow the layer that is actually moving. Dragging a
+   * layer without selecting it left the handles on a different layer, which
+   * looks like the drag hit the wrong node.
+   *
+   * The decision itself is pure and lives in `state/drag-owner.ts`; this only
+   * gathers the facts Konva knows. Notes on the mechanics, all of them read off
+   * `node_modules/konva/lib`:
+   *
+   * - `node.stopDrag()` flips the element to `stopped` **and then runs the global
+   *   `DD._endDragBefore` / `_endDragAfter`**, which fire `dragend` on every
+   *   stopped element and drop every element that is not `dragging`. So the taken
+   *   over node needs `suppressDragEndRef`, and the selection must be started
+   *   *after* `stopDrag()` — otherwise the global end pass would kill it too.
+   * - `startDrag()` without an event is fine: `_createDragElement` falls back to
+   *   `stage._changedPointerPositions[0]`, and the next `mousemove` fills in the
+   *   `pointerId` before `_setDragPosition` needs it.
+   * - the containment test is a bounding box, not `intersects()`: `intersects`
+   *   repaints the shape into `stage.bufferHitCanvas` and reads a pixel back,
+   *   once per gesture start. Konva already skips hit redraws mid-drag
+   *   (`Konva.hitOnDragEnabled: false`), so this is the only place it would cost.
    */
-  const handoffDragToSelection = useCallback(
-    (event: Konva.KonvaEventObject<MouseEvent | TouchEvent | DragEvent>) => {
+  const beginLayerDrag = useCallback(
+    (layerId: string, event: Konva.KonvaEventObject<DragEvent>, isBackdrop = false) => {
       const node = event.target;
-      if (!selectedLayerId || node.id() === selectedLayerId) return;
       const stage = node.getStage();
       const pointer = stage?.getPointerPosition();
-      if (!stage || !pointer) return;
-      const selected = stage.findOne<Konva.Shape>(`#${selectedLayerId}`);
-      if (!selected || !(selected instanceof Konva.Shape)) return;
-      if (!selected.intersects(pointer)) return;
+      const selected =
+        selectedLayerId && selectedLayerId !== layerId
+          ? stage?.findOne<Konva.Node>(`#${selectedLayerId}`)
+          : undefined;
+      const owner = decideDragOwner({
+        pressedId: layerId,
+        pressedIsBackdrop: isBackdrop,
+        selectedId: selectedLayerId,
+        pointerInsideSelection: Boolean(
+          pointer && selected && pointInsideBox(selected.getClientRect(), pointer),
+        ),
+        forceSelection: Boolean((event.evt as MouseEvent | undefined)?.altKey),
+      });
 
-      suppressDragEndRef.current = node.id();
-      node.stopDrag();
-      selected.startDrag();
+      if (owner === 'selection' && selected instanceof Konva.Shape) {
+        suppressDragEndRef.current = layerId;
+        node.stopDrag();
+        selected.startDrag();
+        return;
+      }
+
+      onSelect(layerId);
     },
-    [selectedLayerId],
+    [onSelect, selectedLayerId],
   );
 
   /**
@@ -362,6 +395,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   }}
                   onClick={() => onSelect(layer.id)}
                   onTap={() => onSelect(layer.id)}
+                  /*
+                    WYSIWYG drag: a label is a real object you can grab, so it
+                    takes its own drag. It used to hand the gesture to the
+                    selected layer whenever the press landed inside that layer —
+                    which, after the auto-layout selects the hero, made the whole
+                    product-code label impossible to move (the hero slid
+                    instead). Alt still gives the gesture to the selection.
+                  */
+                  onDragStart={(event) => beginLayerDrag(layer.id, event)}
                   onDragEnd={(event) => onDragEnd(layer.id, event.target.x(), event.target.y())}
                   onTransformEnd={(event) => {
                     const node = event.target as Konva.Text;
@@ -405,15 +447,18 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 listen only while selected looked like a fix for "拖不动", but it also
                 made the plate impossible to pick on the canvas: clicks on the hero's
                 transparent margin fell through to the STAGE, which deselects — so the
-                canvas selection and the layer panel disagreed. The drag problem is
-                solved by `handoffDragToSelection` instead (a drag that starts on the
-                plate while the hero is selected is handed to the hero), which needs
-                this node to be draggable anyway.
+                canvas selection and the layer panel disagreed.
+
+                `name` marks it as scenery for `beginLayerDrag`: a press on the plate
+                that lands inside the selected layer's box moves the selection
+                instead. That is the one layer allowed to yield automatically — see
+                `state/drag-owner.ts` for why nothing else does.
               */
               return (
                 <Rect
                   key={layer.id}
                   id={layer.id}
+                  name={PLATE_NAME}
                   x={layer.x}
                   y={layer.y}
                   width={layer.width}
@@ -429,7 +474,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   draggable
                   onClick={() => onSelect(layer.id)}
                   onTap={() => onSelect(layer.id)}
-                  onDragStart={handoffDragToSelection}
+                  onDragStart={(event) => beginLayerDrag(layer.id, event, true)}
                   onDragEnd={(event) => {
                     if (suppressDragEndRef.current === layer.id) {
                       suppressDragEndRef.current = null;
@@ -495,7 +540,14 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 }}
                 onClick={() => onSelect(layer.id)}
                 onTap={() => onSelect(layer.id)}
-                onDragStart={handoffDragToSelection}
+                /*
+                  The picture the pointer went down on is the picture that moves.
+                  Handing every drag inside the selection to the selection is what
+                  made a stack of overlapping pictures untouchable: the top one
+                  never moved, the selected one did. Alt is the explicit way to say
+                  "the selection, not what I hit".
+                */
+                onDragStart={(event) => beginLayerDrag(layer.id, event)}
                 onDragEnd={(event) => {
                   // A drag this layer merely grabbed on behalf of the selection
                   // must not move it or commit a history step.
