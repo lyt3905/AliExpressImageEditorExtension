@@ -87,3 +87,23 @@ export function autoComposeStep(input: AutoComposeInput): AutoComposeStep {
 
   return { phase: 'run', reason: 'queue-settled' };
 }
+
+/**
+ * Count the layers the SELLER put on the canvas.
+ *
+ * The editor adds layers by itself when it opens: the product-code text layer and the
+ * auto-detected brand logo. Counting those as "existing work" made the automatic run
+ * skip every single time with 「已恢复上次的画布，未自动覆盖」 on any product whose title
+ * carried a code — most of them. Layers in `autoAddedIds` are OURS; replacing them is
+ * exactly what the run is for.
+ */
+export function countForeignLayers(
+  layers: ReadonlyArray<{ id: string }>,
+  autoAddedIds: ReadonlySet<string>,
+): number {
+  let count = 0;
+  for (const layer of layers) {
+    if (!autoAddedIds.has(layer.id)) count += 1;
+  }
+  return count;
+}

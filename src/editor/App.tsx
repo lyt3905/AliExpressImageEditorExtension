@@ -55,7 +55,7 @@ import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
 import { Toolbar } from './components/Toolbar';
 import { autoCloseStep } from './state/auto-close';
-import { autoComposeStep } from './state/auto-compose';
+import { autoComposeStep, countForeignLayers } from './state/auto-compose';
 import {
   createEditorState,
   createLayerFromMaterial,
@@ -349,6 +349,15 @@ export function App(): JSX.Element {
   const codePlacementRef = useRef<CodePlacement>({ x: 400, y: 48, scale: 1 });
   /** Id of the code layer this session auto-added; commits to it update the memory. */
   const codeLayerIdRef = useRef<string | null>(null);
+  /**
+   * Layers this editor added by itself (product code, auto brand logo).
+   *
+   * They must NOT count as "the seller's work": the automatic compose replaces the
+   * canvas, and treating its own code layer as existing content made it skip on every
+   * product whose title had a code — the panel then said 「已恢复上次的画布，未自动覆盖」
+   * and nothing ever appeared.
+   */
+  const autoAddedLayerIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -421,6 +430,7 @@ export function App(): JSX.Element {
           codePlacementRef.current,
         );
         codeLayerIdRef.current = codeLayer.id;
+        autoAddedLayerIdsRef.current.add(codeLayer.id);
         // Pushed last = top of the z-order, so nothing lands above the code.
         layers.push(codeLayer);
       } else if (productCode !== undefined && alreadyThere) {
@@ -438,8 +448,10 @@ export function App(): JSX.Element {
           layers.splice(index, 1);
           layers.push(codeLayer);
           codeLayerIdRef.current = codeLayer.id;
+        autoAddedLayerIdsRef.current.add(codeLayer.id);
         } else if (codeLayer) {
           codeLayerIdRef.current = codeLayer.id;
+        autoAddedLayerIdsRef.current.add(codeLayer.id);
         }
       }
 
@@ -488,7 +500,9 @@ export function App(): JSX.Element {
     if (alreadyOnCanvas) return;
     // The logo lands BELOW the product-code text, so the code keeps the top
     // slot it was given at hydrate time.
-    dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: createLayerFromMaterial(material) });
+    const logoLayer = createLayerFromMaterial(material);
+    autoAddedLayerIdsRef.current.add(logoLayer.id);
+    dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: logoLayer });
   }, [brands, brandMaterials, session, document, findCodeLayerId]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
@@ -543,7 +557,9 @@ export function App(): JSX.Element {
       if (!material) return;
       // Manual pick keeps the same invariant as auto-detect: the logo goes
       // under the product-code text.
-      dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: createLayerFromMaterial(material) });
+      const logoLayer = createLayerFromMaterial(material);
+      autoAddedLayerIdsRef.current.add(logoLayer.id);
+      dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: logoLayer });
     },
     [brandMaterials, document, findCodeLayerId],
   );
@@ -772,9 +788,15 @@ export function App(): JSX.Element {
   const autoComposeRef = useRef<'idle' | 'running' | 'done'>('idle');
   const [autoGraceElapsed, setAutoGraceElapsed] = useState(false);
   const [autoGiveUpElapsed, setAutoGiveUpElapsed] = useState(false);
-  /** Latest layer count, readable inside async work without stale closures. */
-  const layerCountRef = useRef(0);
-  layerCountRef.current = document.layers.length;
+  /**
+   * How many layers on the canvas belong to the seller (not to this editor).
+   *
+   * Read during render so the effect sees the current value, and mirrored into a ref
+   * because the async run must re-check it after the AI call without a stale closure.
+   */
+  const foreignLayerCount = countForeignLayers(document.layers, autoAddedLayerIdsRef.current);
+  const foreignLayerCountRef = useRef(0);
+  foreignLayerCountRef.current = foreignLayerCount;
 
   useEffect(() => {
     if (loading || fatalError) return;
@@ -819,14 +841,14 @@ export function App(): JSX.Element {
       }
 
       // The seller may have started editing while the model was thinking.
-      if (layerCountRef.current > 0) {
+      if (foreignLayerCountRef.current > 0) {
         setBindNote('画布已被改动，已取消自动排版');
         return;
       }
 
       const plan = await composeFor(hero, box);
       if (!plan) return;
-      if (layerCountRef.current > 0) {
+      if (foreignLayerCountRef.current > 0) {
         setBindNote('画布已被改动，已取消自动排版');
         return;
       }
@@ -855,7 +877,7 @@ export function App(): JSX.Element {
 
     const step = autoComposeStep({
       hydrated: hydratedRef.current,
-      existingLayerCount: document.layers.length,
+      existingLayerCount: foreignLayerCount,
       cutoutCount: cutouts.length,
       active: progress.active,
       waiting: progress.waiting,

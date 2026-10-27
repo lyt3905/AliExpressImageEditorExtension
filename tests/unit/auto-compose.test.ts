@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { autoComposeStep, type AutoComposeInput } from '../../src/editor/state/auto-compose';
+import {
+  autoComposeStep,
+  countForeignLayers,
+  type AutoComposeInput,
+} from '../../src/editor/state/auto-compose';
 
 function input(overrides: Partial<AutoComposeInput> = {}): AutoComposeInput {
   return {
@@ -101,5 +105,38 @@ describe('autoComposeStep — never clobbering work', () => {
     expect(
       autoComposeStep(input({ alreadyRan: true, active: 4, graceElapsed: true, giveUpElapsed: true })),
     ).toEqual({ phase: 'skip', reason: 'already-ran' });
+  });
+});
+
+describe('countForeignLayers — the editor’s own layers are not the seller’s work', () => {
+  const layers = [{ id: 'code-1' }, { id: 'logo-1' }, { id: 'mine-1' }, { id: 'mine-2' }];
+
+  it('counts everything when nothing was auto-added', () => {
+    expect(countForeignLayers(layers, new Set())).toBe(4);
+  });
+
+  it('ignores the auto-added code text and brand logo', () => {
+    // The reported bug in one assertion: a canvas holding only the auto-added code
+    // layer was counted as "existing work", so the run skipped with
+    // 「已恢复上次的画布，未自动覆盖」 on every product whose title carried a code.
+    expect(countForeignLayers(layers, new Set(['code-1', 'logo-1']))).toBe(2);
+  });
+
+  it('treats a canvas with only auto layers as empty', () => {
+    expect(countForeignLayers([{ id: 'code-1' }], new Set(['code-1']))).toBe(0);
+    // Which is what makes the step run rather than skip:
+    expect(autoComposeStep(input({ existingLayerCount: 0 }))).toEqual({
+      phase: 'run',
+      reason: 'queue-settled',
+    });
+  });
+
+  it('tolerates ids in the set that are no longer on the canvas', () => {
+    // Deleted layers keep their id in the set; they must not skew the count.
+    expect(countForeignLayers(layers, new Set(['code-1', 'deleted-layer']))).toBe(3);
+  });
+
+  it('is zero for an empty canvas', () => {
+    expect(countForeignLayers([], new Set(['code-1']))).toBe(0);
   });
 });
