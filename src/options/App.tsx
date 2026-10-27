@@ -21,6 +21,12 @@ import {
   saveWatermark,
   setDefaultWatermark,
 } from '../services/watermark-store';
+import {
+  loadBrandCatalogState,
+  setBrandCatalogSkipped,
+  type BrandCatalogState,
+} from '../services/brand-catalog/state';
+import { syncBrandCatalog } from '../services/brand-catalog/sync';
 
 const LAST_ERROR_KEY = 'aiee:last-error';
 const ACCEPTED_TYPES = 'image/png,image/jpeg,image/webp';
@@ -34,6 +40,17 @@ interface LastError {
 }
 
 type StatusKind = 'ok' | 'bad' | 'idle';
+
+function formatTimestamp(at: number): string {
+  const date = new Date(at);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function catalogMirrorLabel(baseUrl: string | null): string {
+  if (!baseUrl) return '';
+  return baseUrl.includes('jsdelivr') ? 'jsDelivr 镜像' : 'raw.githubusercontent.com';
+}
 
 export function OptionsApp(): JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
@@ -72,6 +89,11 @@ export function OptionsApp(): JSX.Element {
   const [newBrandKeywords, setNewBrandKeywords] = useState('');
   const [newBrandFile, setNewBrandFile] = useState<File | null>(null);
   const brandFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ---- catalog sync state (the catalog itself lives in the repo, not here)
+  const [catalogState, setCatalogState] = useState<BrandCatalogState | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [catalogStatus, setCatalogStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
 
   const refreshAuthState = useCallback(async () => {
     try {
@@ -144,6 +166,81 @@ export function OptionsApp(): JSX.Element {
   useEffect(() => {
     void refreshBrands();
   }, [refreshBrands]);
+
+  // ---- catalog sync
+
+  const refreshCatalogState = useCallback(async (): Promise<BrandCatalogState> => {
+    const next = await loadBrandCatalogState();
+    setCatalogState(next);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    void refreshCatalogState();
+  }, [refreshCatalogState]);
+
+  const handleSyncCatalog = useCallback(async () => {
+    setCatalogBusy(true);
+    setCatalogStatus({ kind: 'idle', text: '正在从 GitHub 读取品牌目录…' });
+    try {
+      const outcome = await syncBrandCatalog({ ignoreTtl: true });
+      if (!outcome.ok) {
+        setCatalogStatus({ kind: 'bad', text: `同步失败：${outcome.error}` });
+        await refreshCatalogState();
+        return;
+      }
+      const { result } = outcome;
+      // A refreshed logo keeps its brand id, so the cached object URL in
+      // `thumbUrlsRef` would keep showing the old picture. Drop just those.
+      for (const slug of result.added) {
+        const id = `remote-${slug}`;
+        const url = thumbUrlsRef.current[id];
+        if (url) {
+          URL.revokeObjectURL(url);
+          delete thumbUrlsRef.current[id];
+        }
+      }
+      if (result.added.length > 0) {
+        setBrandThumbs((previous) => {
+          const next = { ...previous };
+          for (const slug of result.added) delete next[`remote-${slug}`];
+          return next;
+        });
+      }
+      await refreshBrands();
+      await refreshCatalogState();
+
+      const parts = [
+        `新增/更新 ${result.added.length}`,
+        `未变 ${result.plan.unchanged.length}`,
+        `移除 ${result.removed.length}`,
+      ];
+      if (result.plan.conflicts.length > 0) parts.push(`本地优先 ${result.plan.conflicts.length}`);
+      if (result.plan.skipped.length > 0) parts.push(`已排除 ${result.plan.skipped.length}`);
+      const failure = result.failures
+        .map((entry) => `${entry.slug}（${entry.message}）`)
+        .join('、');
+      setCatalogStatus({
+        kind: result.failures.length > 0 ? 'bad' : 'ok',
+        text: `同步完成：${parts.join('，')}${failure ? `；失败：${failure}` : ''}`,
+      });
+    } catch (error) {
+      setCatalogStatus({ kind: 'bad', text: `同步失败：${messageOf(error)}` });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [refreshBrands, refreshCatalogState]);
+
+  const handleCatalogToggle = useCallback(async (slug: string, enabled: boolean) => {
+    const next = await setBrandCatalogSkipped(slug, !enabled);
+    setCatalogState(next);
+    setCatalogStatus({
+      kind: 'idle',
+      text: enabled
+        ? `「${slug}」会跟随目录更新`
+        : `「${slug}」已排除：同步既不覆盖也不删除它当前的 Logo`,
+    });
+  }, []);
 
   // ---- thumbnail object URLs for the brand list
   useEffect(() => {
@@ -578,6 +675,46 @@ export function OptionsApp(): JSX.Element {
         同一品牌的多个称呼都填在「别名」里即可，名称和别名本身就参与匹配。
       </p>
 
+      <div className="catalog-block">
+        <div className="catalog-block__head">
+          <strong>品牌目录（GitHub）</strong>
+          <span className="watermark-row__size">
+            {catalogState === null
+              ? '读取中…'
+              : catalogState.syncedAt > 0
+                ? `已同步 v${catalogState.version} · ${formatTimestamp(catalogState.syncedAt)}${catalogState.baseUrlUsed ? ` · ${catalogMirrorLabel(catalogState.baseUrlUsed)}` : ''}`
+                : '从未同步'}
+          </span>
+        </div>
+        <p className="hint">
+          目录来自仓库的 <code>catalog/brands.json</code>：仓库里加一个品牌、换一张 Logo，
+          这里点一次同步就能拿到，不用重新打包插件。打开编辑器时也会自动同步（24 小时内不重复请求）。
+          目录里的品牌 id 固定（<code>remote-&lt;slug&gt;</code>），所以更新 Logo 不会让历史画布断图。
+        </p>
+        <div className="row">
+          <button
+            type="button"
+            className="primary"
+            disabled={catalogBusy}
+            onClick={() => void handleSyncCatalog()}
+          >
+            {catalogBusy ? '正在同步…' : '立即同步'}
+          </button>
+        </div>
+        {catalogStatus ? (
+          <div
+            className={`status-line status-line--tight${catalogStatus.kind === 'bad' ? ' status-bad' : ''}`}
+          >
+            {catalogStatus.text}
+          </div>
+        ) : null}
+        {catalogState?.lastError ? (
+          <div className="status-line status-line--tight status-bad">
+            上次同步失败：{catalogState.lastError}
+          </div>
+        ) : null}
+      </div>
+
       <div className="field">
         <label htmlFor="brand-file">Logo 图片</label>
         <input
@@ -673,6 +810,22 @@ export function OptionsApp(): JSX.Element {
 
               <span className="watermark-row__size">
                 {meta.width}×{meta.height}
+                {meta.source === 'remote' && meta.slug ? (
+                  <label
+                    className="watermark-row__default"
+                    title="取消勾选后，目录同步既不覆盖也不删除这个品牌当前的 Logo"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!catalogState?.skipped.includes(meta.slug)}
+                      disabled={catalogBusy}
+                      onChange={(event) =>
+                        void handleCatalogToggle(meta.slug as string, event.target.checked)
+                      }
+                    />
+                    同步
+                  </label>
+                ) : null}
               </span>
 
               <button type="button" onClick={() => void handleSaveBrandRow(meta.id)}>

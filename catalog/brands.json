@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-27",
+  "brands": [
+    {
+      "id": "example-model-studio",
+      "name": "Example Model Studio",
+      "aliases": [
+        "EMS"
+      ],
+      "keywords": [
+        "example model",
+        "模型工作室"
+      ],
+      "logo": {
+        "file": "logos/example-model-studio.png",
+        "sha256": "24965300feb5af39f2c5a58731be1c80eb107e31db1d4a6218cccfa0c4ab143b"
+      }
+    },
+    {
+      "id": "example-toys",
+      "name": "Example Toys Store",
+      "aliases": [
+        "Example Toys",
+        "ET"
+      ],
+      "keywords": [
+        "example toys",
+        "玩具"
+      ],
+      "logo": {
+        "file": "logos/example-toys.png",
+        "sha256": "0705cecd1486f6d19bcc51491de29206d371c978060685d9cf33830a1ddd4cf1"
+      }
+    }
+  ]
+}

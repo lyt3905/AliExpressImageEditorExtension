@@ -913,4 +913,92 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
   它用 node 现场生成的 PNG（蓝色立板 / 棕色双面箱体）跑真实 `VisionBinder`，断言角色判对 ——
   fixture 故意做得毫无歧义，所以判错意味着 prompt 或模型变了，而不是"模型今天心情不好"。
 
+## 11. 品牌目录：把 Logo 配置搬进仓库
+
+品牌 Logo 以前只能一张一张手工上传。现在有一半来自仓库里的 `catalog/`：`brands.json` 是清单，
+`logos/<slug>.png` 是图。**一个提交就是一次发布** —— 加个品牌、换张 Logo 都不用重新打包扩展，
+也不用动版本号（`AGENTS.md` 的口径是 `src/` 变了才升版本，`catalog/` 只是数据）。
+
+### 11.1 真相源仍然是本地
+
+目录是**输入**，不是真相源。`chrome.storage.local` 的品牌注册表 + IndexedDB 的 blob 才是：
+编辑器、`matchBrandByTitle`、自动加 Logo 图层全都只读本地，**永远离线优先**。
+拿不到目录（GitHub 被墙、JSON 写错、校验和不对）时，本地照旧能用，只是这次没更新。
+
+这条决定的另一个好处：同步逻辑可以随时重跑而不会有"半个品牌"这种状态 ——
+Logo 逐个下载（一个坏图不影响其它），但**注册表只写一次**（`mergeRemoteBrands`）。
+
+### 11.2 三个 id 必须稳定，否则历史画布会断图
+
+| 是什么 | 规则 | 变了会怎样 |
+| --- | --- | --- |
+| 目录里的品牌 | `id`（slug，`^[a-z0-9][a-z0-9-]{0,63}$`） | 等于换了个新品牌，老品牌会进 `toRemove` |
+| 注册表条目 | `remote-<slug>` | 历史画布上的 Logo 图层引用的就是这个 id |
+| IndexedDB blob | `brand-logo-remote-<slug>` | 换掉就等于断图 |
+
+所以"更新一张 Logo"的正确做法是**同名覆盖文件**，不是新建文件：图片字节变了，`sha256` 变了，
+`rev` 跟着变，同步原地替换 blob，图层那边的 id 一动不动。
+
+### 11.3 `version` 和 `rev` 分别管什么
+
+- `version`（整数）：**要不要上网**。和上次成功同步的版本相同 → `up-to-date`，一次请求都不发。
+  再加一层 24 小时 TTL：打开编辑器就同步，但一天内不重复打 GitHub。
+- `rev`（每品牌）：**要不要重下这张图**。缺省回落 `sha256`，再缺省回落 `v<version>`。
+  于是"只改了一张图"不必让所有机器重下六张。
+
+`version` 只在**整份目录都落地**之后才前进（`sync.ts` 里的 `complete`）：同步到一半失败时版本留在旧值，
+下次自动重试，而重试又只会碰 `rev` 不同的那几张，成本很低。
+
+### 11.4 本地优先的三道闸
+
+目录是别人（仓库维护者）写的内容，不能反过来清掉卖家自己的东西：
+
+1. **同名手工品牌**：本地非 remote 品牌的 `name`（去空格、不分大小写）与目录某条相同 → 该条进 `conflicts`，
+   不下载。卖家自己传的 Logo 才是他要的那张。
+2. **卖家改过的远程品牌**：`updateBrand` 给 remote 条目打 `edited: true`，之后同步只换 logo 和 `remoteRev`，
+   名称/别名/关键词保持卖家的措辞。
+3. **单独关掉的品牌**：选项页每行一个「同步」勾选框（`state.skipped`）。取消勾选后，同步既不覆盖也不删除它。
+
+目录里**删掉**的品牌只删注册表条目，**blob 不删** —— 已保存的画布文档可能还引用着那个 Logo 图层，
+删了会变成空白。
+
+### 11.5 可达性：镜像按顺序试，失败要说清是谁失败
+
+`BRAND_CATALOG_URLS` 依次是 `raw.githubusercontent.com` 和 `cdn.jsdelivr.net`。逐个试，
+**记住上次成功的那台**（`baseUrlUsed`）并放到下次的第一位；全失败时错误信息拼成
+`没拿到品牌目录（raw.githubusercontent.com：HTTP 502；cdn.jsdelivr.net：超时）` ——
+卖家要能区分"GitHub 被墙"和"目录 JSON 写坏了"，这两种的修法完全不同。
+
+只接受 `https`（本机 `127.0.0.1` / `localhost` 例外，方便本地起个静态目录调试）。
+
+### 11.6 不安全输入当成不安全输入
+
+目录来自网络，最终会变成 IndexedDB 里的图片和画布上的像素。硬边界（`brand-catalog/schema.ts`）：
+
+- `logo.file` 必须是相对路径 `logos/<name>.(png|jpg|jpeg|webp)`：不要绝对地址、不要 `..`、不要其它后缀。
+- 解析成绝对 URL 后再校验一遍 **origin 相同 + pathname 仍以目录前缀开头** —— 正则以后放松了，
+  这一条还兜得住。
+- `brands.json` ≤512KB、品牌 ≤100 条、单图 ≤4MB、单条术语 ≤60 字、名称 ≤120 字。
+- `sha256` 可选；写了就强校验，对不上这张图不落地。
+
+### 11.7 目录是数据，所以有脚本看着
+
+```bash
+npm run check:catalog   # 字段 / 路径 / 文件存在 / sha256 / 数量上限
+npm run catalog:write   # 重算 sha256 + 规范化 JSON
+npm run catalog:bump    # version + 1，然后同上
+```
+
+`scripts/brand-catalog.mjs` 的存在理由跟 `check-version.mjs` 一样：CI 会跑，人也会跑。
+文件校验和是这里唯一的"编译期"，漏了它，坏图会在卖家浏览器里才炸。
+
+### 11.8 测试边界
+
+- 纯逻辑全可测：`parseBrandCatalog` / `resolveLogoUrl`（`tests/unit/brand-catalog-schema.test.ts`）、
+  `planBrandSync`（同步决策）、`applyBrandSync` + `syncBrandCatalog`（用注入端口跑，不需要网络）。
+- 注册表合并规则单独测：`tests/unit/brand-store-merge.test.ts`（保住 `createdAt`、保住 `edited` 措辞、
+  只删 remote、删条目时 blob 还在）。
+- 真网络没有自动测试：`catalog/brands.json` 的示例用两张占位 Logo，真图由卖家自己放进去。
+
+
 

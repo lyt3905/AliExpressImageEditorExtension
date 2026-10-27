@@ -645,7 +645,12 @@ AliExpressImageEditorExtension/
 │     └─ bridge.js               # 页面侧驱动（本项目自己写，不是姊妹项目的文件）
 ├─ scripts/
 │  ├─ make-icons.py              # 零依赖生成 icon{16,32,48,128}.png
+│  ├─ brand-catalog.mjs          # 校验 / 生成 catalog/brands.json（算 sha256、升 version）
 │  └─ check-dist.mjs             # 构建后校验 dist/ 完整性（构建脚本已调用）
+├─ catalog/                      # 品牌目录（在线读取的公开数据，改完推 main 即生效）
+│  ├─ brands.json                # 清单：id / name / aliases / keywords / logo.file / sha256
+│  ├─ logos/                     # 每个品牌一张图
+│  └─ README.md                  # 怎么加品牌、字段含义、硬限制
 ├─ vite.config.ts                # UI 构建（editor + options，负责清空 dist 并复制 public/）
 ├─ vite.sw.config.ts             # Service Worker 构建（单文件 ESM）
 ├─ vite.content.config.ts        # Content Script 构建（单文件 IIFE）
@@ -656,17 +661,33 @@ AliExpressImageEditorExtension/
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 视觉接口 + 水印框 + 品牌）
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images / text-measure / image-thumbnail / vision-client
-│  │  └─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
-│  │     └─ templates/           # 版式模板 JSON + 注册表（id@version）
+│  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
+│  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
+│  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 33 文件 / 555 个单元测试（不联网）
+│  ├─ unit/                      # 40 文件 / 657 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
-   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）
+   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）、§11 品牌目录同步
    └─ manual-test.md
 ```
+
+---
+
+## 品牌目录（Logo 从 GitHub 同步）
+
+品牌 Logo 一半可以来自仓库里的 `catalog/`，**改数据不用发版**：推一个提交，插件下次同步就拿到。
+
+- 目录 = `catalog/brands.json` + `catalog/logos/<slug>.png`；加品牌/换图的步骤见
+  [`catalog/README.md`](catalog/README.md)，改完跑 `npm run catalog:bump`（自动算 sha256、version +1）。
+- 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」，也支持每个远程品牌单独关掉同步；
+  工具栏打开编辑器时同样会同步（24 小时内不重复请求）。
+- 真相源仍是**本地注册表**：拉不到目录时照旧用工牌缓存，不阻塞任何操作。
+- 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
+  目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
+- 本地优先：手工上传的同名品牌、你在选项页改过名称/别名的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
 
 ---
 
@@ -695,12 +716,17 @@ AliExpressImageEditorExtension/
   "https://39.107.244.239/*",            // 自建服务端（登录 / 上传 / 抠图）
   "https://*.aliyuncs.com/*",            // 抠图结果可能落在 OSS
   "http://127.0.0.1/*",                  // 本机视觉网关（AI 识别素材角色）
-  "http://localhost/*"                   // 同上，另一种写法
+  "http://localhost/*",                  // 同上，另一种写法
+  "https://raw.githubusercontent.com/*", // 品牌目录（catalog/brands.json + logos）
+  "https://cdn.jsdelivr.net/*"           // 品牌目录镜像（raw.githubusercontent 不通时用它）
 ]
 ```
 
 视觉网关只监听本机，所以这两条**只覆盖 localhost**，不引入任何公网域名。地址仍可在选项页改配
 （端口不写进权限：match pattern 不区分端口）。
+
+品牌目录两条只读 GitHub 的公开静态文件，**不含任何用户数据**，也不发 token：拿不到就退回本地缓存
+（详见 [`catalog/README.md`](catalog/README.md) 与架构文档 §11）。
 
 `aliexpress.us` 等地区站点**未**申请：扫描器只认 `aliexpress.com` 卖家后台，授予了也进不来，
 属于死授权（早期版本误加，已移除）。若将来要支持其他地区站点，必须同时改
@@ -747,6 +773,11 @@ AliExpressImageEditorExtension/
     不静默忽略 —— 静默跳过的结果就是版式和模板不一致却查不出原因。
 16. 排版是**替换画布**语义：点「生成主图」会替换当前所有图层（含手动加的），可用一次 Ctrl+Z 整体撤销
     （它只压一条历史）。生成后编号文字由模板接管（serif + 粗体 + 模板位置），不再沿用"编号置顶记忆"的位置。
+17. 品牌目录同步是**拉取式**的：打开选项页或编辑器时才同步，24 小时内不重复请求；
+    只认 `https`（本机除外），只试 `raw.githubusercontent.com` 与 `cdn.jsdelivr.net` 两个镜像
+    （自填镜像在上线前未做）；失败不会自动重试，也没有后台定时任务。
+    本地注册表是真相源 —— 同名手工品牌、你在选项页改过的远程品牌、被取消勾选的品牌都不会被覆盖，
+    目录里删掉的品牌只移除条目、已下载的图片仍保留。
 
 ---
 
@@ -755,7 +786,8 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（35 文件 / 559 测试，其中 555 通过、4 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（42 文件 / 662 测试，其中 657 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run check:catalog` | **PASS**（示例目录 2 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |
@@ -767,5 +799,6 @@ AliExpressImageEditorExtension/
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
+| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则，共 35 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

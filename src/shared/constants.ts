@@ -172,6 +172,8 @@ export const STORAGE_KEYS = {
   codePlacement: 'aiee:code-placement',
   /** Brand registry: [{ id, name, aliases, keywords, logoBlobId, ... }]. */
   brands: 'aiee:brands',
+  /** Sync bookkeeping for the remote brand catalog (version / last sync / mirror). */
+  brandCatalog: 'aiee:brand-catalog',
 } as const;
 
 export const DB_NAME = 'aliexpress-image-editor';
@@ -203,6 +205,43 @@ export const MAX_BRAND_LOGO_BYTES = 4 * 1024 * 1024;
 
 /** Accepted brand logo mime types. */
 export const BRAND_LOGO_MIME_TYPES = WATERMARK_MIME_TYPES;
+
+// ------------------------------------------------------------- brand catalog
+
+/**
+ * Where `brands.json` + `logos/` live. Tried in order, first one that answers
+ * wins, and the winner is remembered so the next sync starts there.
+ *
+ * Two URLs because `raw.githubusercontent.com` is unreliable from mainland
+ * China: the jsDelivr mirror is fetched over a CDN instead. Both point at the
+ * same `main` branch, so a catalog edit is live after one commit — no release,
+ * no version bump (that rule only covers `src/`).
+ */
+export const BRAND_CATALOG_URLS = [
+  'https://raw.githubusercontent.com/lyt3905/AliExpressImageEditorExtension/main/catalog/',
+  'https://cdn.jsdelivr.net/gh/lyt3905/AliExpressImageEditorExtension@main/catalog/',
+] as const;
+
+/** File name of the catalog manifest inside a catalog directory. */
+export const BRAND_CATALOG_FILE = 'brands.json';
+
+/** A catalog is a small JSON manifest — anything bigger is a mistake or an attack. */
+export const BRAND_CATALOG_MAX_BYTES = 512 * 1024;
+
+/** Per-request budget for the manifest and for each logo. */
+export const BRAND_CATALOG_TIMEOUT_MS = 15_000;
+
+/** Skip the network entirely for this long after a successful sync. */
+export const BRAND_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Upper bound on entries in one catalog; keeps a bad manifest from flooding storage. */
+export const BRAND_CATALOG_MAX_BRANDS = 100;
+
+/** Logo paths inside the catalog must look like `logos/<slug>.<ext>` and nothing else. */
+export const BRAND_CATALOG_LOGO_PATTERN = /^logos\/[a-z0-9][a-z0-9._-]*\.(png|jpe?g|webp)$/;
+
+/** Slug rules for `brands[].id` in the catalog. */
+export const BRAND_CATALOG_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 // ---------------------------------------------------------------- text layers
 

@@ -113,6 +113,9 @@ export async function saveBrand(input: {
     width: size.width,
     height: size.height,
     createdAt: Date.now(),
+    // Hand-uploaded brands are never touched by a catalog sync — see
+    // `mergeRemoteBrands` and the `source` field in `shared/types.ts`.
+    source: 'local',
   };
 
   try {
@@ -136,6 +139,9 @@ export async function updateBrand(
           name: patch.name !== undefined ? patch.name.trim() || entry.name : entry.name,
           aliases: patch.aliases ?? entry.aliases,
           keywords: patch.keywords ?? entry.keywords,
+          // A renamed/retagged catalog brand keeps the seller's wording: the
+          // next sync refreshes its logo but must not undo these edits.
+          ...(entry.source === 'remote' ? { edited: true } : {}),
         }
       : entry,
   );
@@ -158,6 +164,58 @@ export async function removeBrand(id: string): Promise<BrandMeta[]> {
 
 export async function loadBrandLogo(meta: BrandMeta): Promise<Blob | null> {
   return getBlob(meta.logoBlobId).catch(() => null);
+}
+
+/**
+ * The one place a catalog sync writes the registry.
+ *
+ * Called once per sync with the whole delta, so a partial download cannot leave
+ * the list half-updated. Three rules:
+ *
+ * - An existing entry keeps its `createdAt` (list order is "oldest first", and a
+ *   brand jumping to the bottom of the Options page every day is noise).
+ * - A remote entry the seller renamed or retagged keeps that wording — only the
+ *   logo and `remoteRev` are refreshed.
+ * - Removed entries lose their registry row but NOT their blob: a saved
+ *   composition may still reference that logo layer, and a dangling blob id
+ *   renders as an empty image.
+ */
+export async function mergeRemoteBrands(input: {
+  upserts: BrandMeta[];
+  removeIds: string[];
+}): Promise<BrandMeta[]> {
+  const list = await listBrands();
+  const remove = new Set(input.removeIds);
+  // Only catalog brands may be removed by a sync; a local brand sharing the id
+  // (impossible today, cheap to guarantee) is left alone.
+  const kept = list.filter((entry) => !(remove.has(entry.id) && entry.source === 'remote'));
+  const position = new Map(kept.map((entry, index) => [entry.id, index]));
+  const existingById = new Map(list.map((entry) => [entry.id, entry]));
+
+  const merged = [...kept];
+  for (const upsert of input.upserts) {
+    const existing = existingById.get(upsert.id);
+    const entry: BrandMeta = existing
+      ? {
+          ...upsert,
+          createdAt: existing.createdAt,
+          ...(existing.edited
+            ? {
+                name: existing.name,
+                aliases: existing.aliases,
+                keywords: existing.keywords,
+                edited: true,
+              }
+            : {}),
+        }
+      : upsert;
+    const at = position.get(upsert.id);
+    if (at === undefined) merged.push(entry);
+    else merged[at] = entry;
+  }
+
+  await writeBrands(merged);
+  return merged;
 }
 
 /**

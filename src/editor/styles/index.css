@@ -812,6 +812,28 @@ button.primary:hover:not(:disabled) {
   padding-top: 8px;
 }
 
+/* ------------------------------------------------------------ brand catalog */
+
+.catalog-block {
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.catalog-block__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.catalog-block .hint {
+  margin: 0 0 8px;
+}
+
 /* ------------------------------------------------------------ text layer */
 
 .text-properties {
