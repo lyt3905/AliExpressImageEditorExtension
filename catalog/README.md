@@ -34,7 +34,10 @@ catalog/
 ```
 
 3. 跑 `npm run catalog:bump`（版本 +1，顺手算好 `sha256`、规范化 JSON），然后提交。
-4. 如果你只是想改某个 Logo 的图：换掉文件、跑 `npm run catalog:write`，`rev` 会自动跟着 `sha256` 变，装了插件的机器下次同步就会重下这一张。
+4. **只换 Logo 的图也一样跑 `catalog:bump`（不是 `catalog:write`）。**
+   换文件后 `rev` 会跟着 `sha256` 变，但扩展是**先看 `version`**：版本没变就整个目录都跳过
+   （`up-to-date`，连 `rev` 都不比），你的新图永远不会被拉下来。
+   `catalog:write` 只用于"重新算校验和、把 JSON 排整齐"，不负责通知客户端。
 
 ## 现在的品牌清单
 
