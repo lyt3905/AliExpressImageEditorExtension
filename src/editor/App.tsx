@@ -40,6 +40,13 @@ import {
   type VisionBinding,
 } from '../services/composition/vision-binder';
 import { blobToThumbnailDataUrl } from '../services/image-thumbnail';
+import {
+  bindingKeyFor,
+  createComposeCache,
+  imageIdentity,
+  resultKeyFor,
+  type CachedBinding,
+} from '../services/compose-cache';
 import { loadSettings } from '../services/settings';
 import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
 import {
@@ -85,10 +92,43 @@ interface Notice {
  */
 const NOTICE_TIMEOUT_MS: Record<Notice['kind'], number> = { ok: 6000, error: 9000 };
 
+/**
+ * Turn a cached vision answer back into material ids of THIS session.
+ *
+ * The cache stores source-image identities because material ids die with the
+ * session. Returning null means "some picture it named is gone", which is the
+ * same as a miss: a hero we cannot point at is worse than asking the model again.
+ */
+function resolveCachedBinding(
+  cached: CachedBinding,
+  identityByMaterialId: ReadonlyMap<string, string>,
+): VisionBinding | null {
+  const materialFor = (identity: string | null): string | null => {
+    if (!identity) return null;
+    for (const [materialId, candidate] of identityByMaterialId) {
+      if (candidate === identity) return materialId;
+    }
+    return null;
+  };
+  const heroId = materialFor(cached.hero);
+  if (!heroId) return null;
+  return { heroId, boxId: materialFor(cached.box), confidence: cached.confidence, reason: cached.reason };
+}
+
 export function App(): JSX.Element {
   const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
-  const { loading, fatalError, session, materials, statusByImageId, initialDocument, progress, retryCutout, addUploadedImages } =
-    useEditorSession(sessionId);
+  const {
+    loading,
+    fatalError,
+    session,
+    materials,
+    statusByImageId,
+    initialDocument,
+    progress,
+    cachedCutouts,
+    retryCutout,
+    addUploadedImages,
+  } = useEditorSession(sessionId);
 
   // ---- brand registry (logos are EditorMaterials of a special kind)
   const [brands, setBrands] = useState<BrandMeta[]>([]);
@@ -176,6 +216,15 @@ export function App(): JSX.Element {
   const [composeError, setComposeError] = useState<string | null>(null);
   const [visionBusy, setVisionBusy] = useState(false);
   const [bindNote, setBindNote] = useState<string | null>(null);
+  /**
+   * Cache key of the composition that is on screen, waiting to be photographed.
+   *
+   * Set right after a successful compose and consumed by an effect that waits for
+   * the pictures to decode — exporting before that yields a PNG with blanks in it.
+   */
+  const [pendingResultKey, setPendingResultKey] = useState<string | null>(null);
+  /** When the composed PNG was last written to the local cache (for the panel). */
+  const [resultCachedAt, setResultCachedAt] = useState<number | null>(null);
   /**
    * What the automatic run is doing right now, for the panel's status line.
    *
@@ -600,6 +649,66 @@ export function App(): JSX.Element {
   );
 
   /**
+   * Cross-session cache of the expensive steps (see `services/compose-cache.ts`).
+   *
+   * Created once: it holds no per-session state of its own, everything is keyed
+   * by source-image identity so yesterday's work keeps serving today's session.
+   */
+  const composeCache = useMemo(() => createComposeCache(), []);
+
+  /** Identity of every session image, keyed by image id. */
+  const identityByImageId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const image of session?.images ?? []) {
+      map.set(
+        image.id,
+        imageIdentity({
+          url: image.url,
+          label: image.label,
+          width: image.width,
+          height: image.height,
+          bytes: image.bytes,
+          blobId: image.blobId,
+        }),
+      );
+    }
+    return map;
+  }, [session]);
+
+  /** Cut-out material id -> the identity of the photo it came from. */
+  const identityByMaterialId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const material of cutouts) {
+      const identity = identityByImageId.get(material.imageId);
+      if (identity) map.set(material.id, identity);
+    }
+    return map;
+  }, [cutouts, identityByImageId]);
+
+  /**
+   * Cache key for the composed PNG of one (hero, box) pair, or null when the
+   * materials cannot be identified — then there is nothing to key a cache on.
+   *
+   * The key covers the whole material set, not just the two chosen ones: changing
+   * any picture is supposed to invalidate the result ("素材变了就失效").
+   */
+  const resultKeyForCompose = useCallback(
+    (heroMaterialId: string | null, boxMaterialId: string | null): string | null => {
+      const heroIdentity = heroMaterialId ? identityByMaterialId.get(heroMaterialId) ?? null : null;
+      if (!heroIdentity) return null;
+      const boxIdentity = boxMaterialId ? identityByMaterialId.get(boxMaterialId) ?? null : null;
+      return resultKeyFor({
+        productCode: session?.productCode ?? null,
+        identities: [...identityByMaterialId.values()],
+        templateKey,
+        heroIdentity,
+        boxIdentity,
+      });
+    },
+    [identityByMaterialId, session, templateKey],
+  );
+
+  /**
    * Guess hero/box once, and re-guess only when the current choice disappeared.
    *
    * Overwriting a valid choice on every material update would fight the user: a
@@ -738,6 +847,7 @@ export function App(): JSX.Element {
       const plan = await composeFor(heroId, boxId);
       if (!plan) return;
       applyComposedPlan(plan);
+      setPendingResultKey(resultKeyForCompose(heroId, boxId));
 
       const firstWarning = plan.warnings[0];
       showNotice(
@@ -752,7 +862,7 @@ export function App(): JSX.Element {
     } finally {
       setComposeBusy(false);
     }
-  }, [applyComposedPlan, boxId, composeFor, heroId, showNotice]);
+  }, [applyComposedPlan, boxId, composeFor, heroId, resultKeyForCompose, showNotice]);
 
   /**
    * Ask the model which material is the hero and which is the packaging.
@@ -760,25 +870,58 @@ export function App(): JSX.Element {
    * Throws on transport/auth problems and returns null when the answer names no
    * usable hero — the caller decides whether to fall back to labels (manual button:
    * keep them; automatic run: use them and carry on).
+   *
+   * The answer is a pure function of (these photos, this model), so it is cached:
+   * the second visit to a product skips the vision call entirely. `force` is for
+   * the manual button — pressing「AI 识别」again should really ask again.
    */
-  const bindVisionRoles = useCallback(async (): Promise<VisionBinding | null> => {
-    if (cutouts.length === 0) return null;
-    const settings = await loadSettings();
-    const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
-    // Selection happens BEFORE decoding: picking the six worth sending is cheap
-    // (labels only), and thumbnailing a dropped material would be wasted work.
-    for (const material of selectVisionCandidates(cutouts)) {
-      const blob = await getBlob(material.blobId);
-      if (!blob) continue;
-      candidates.push({
-        materialId: material.id,
-        label: material.label,
-        dataUrl: await blobToThumbnailDataUrl(blob),
+  const bindVisionRoles = useCallback(
+    async (options?: { force?: boolean }): Promise<VisionBinding | null> => {
+      if (cutouts.length === 0) return null;
+      const settings = await loadSettings();
+      const bindingKey = bindingKeyFor({
+        productCode: session?.productCode ?? null,
+        identities: [...identityByMaterialId.values()],
+        model: settings.vision.model,
+        baseUrl: settings.vision.baseUrl,
       });
-    }
-    if (candidates.length === 0) return null;
-    return bindMaterialsWithVision({ config: settings.vision, candidates });
-  }, [cutouts]);
+
+      if (!options?.force) {
+        const cached = await composeCache.getBinding(bindingKey).catch(() => null);
+        const resolved = cached ? resolveCachedBinding(cached, identityByMaterialId) : null;
+        if (resolved) return resolved;
+      }
+
+      const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
+      // Selection happens BEFORE decoding: picking the six worth sending is cheap
+      // (labels only), and thumbnailing a dropped material would be wasted work.
+      for (const material of selectVisionCandidates(cutouts)) {
+        const blob = await getBlob(material.blobId);
+        if (!blob) continue;
+        candidates.push({
+          materialId: material.id,
+          label: material.label,
+          dataUrl: await blobToThumbnailDataUrl(blob),
+        });
+      }
+      if (candidates.length === 0) return null;
+
+      const binding = await bindMaterialsWithVision({ config: settings.vision, candidates });
+      if (!binding) return null;
+      const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
+      // Stored as identities, so the next session can point at its own materials.
+      void composeCache
+        .putBinding(bindingKey, {
+          hero: heroIdentity,
+          box: binding.boxId ? identityByMaterialId.get(binding.boxId) ?? null : null,
+          confidence: binding.confidence,
+          reason: binding.reason,
+        })
+        .catch(() => undefined);
+      return binding;
+    },
+    [composeCache, cutouts, identityByMaterialId, session],
+  );
 
   /** Manual trigger: bind, then leave the result in the panel for review. */
   const handleVisionBind = useCallback(async () => {
@@ -786,7 +929,7 @@ export function App(): JSX.Element {
     setVisionBusy(true);
     setBindNote(null);
     try {
-      const binding = await bindVisionRoles();
+      const binding = await bindVisionRoles({ force: true });
       if (!binding) {
         setBindNote('AI 没有给出可用结论，已保留标签匹配结果');
         return;
@@ -879,6 +1022,7 @@ export function App(): JSX.Element {
 
       setAutoPhase('composing');
       applyComposedPlan(plan);
+      setPendingResultKey(resultKeyForCompose(hero, box));
       const firstWarning = plan.warnings[0];
       showNotice(
         firstWarning
@@ -894,7 +1038,16 @@ export function App(): JSX.Element {
       setAutoPhase('done');
       setComposeBusy(false);
     }
-  }, [applyComposedPlan, bindCandidates, bindVisionRoles, boxId, composeFor, heroId, showNotice]);
+  }, [
+    applyComposedPlan,
+    bindCandidates,
+    bindVisionRoles,
+    boxId,
+    composeFor,
+    heroId,
+    resultKeyForCompose,
+    showNotice,
+  ]);
 
   useEffect(() => {
     if (autoComposeRef.current !== 'idle' || composeBusy) return;
@@ -1184,6 +1337,116 @@ export function App(): JSX.Element {
     return { blob, dataUrl: await blobToDataUrl(blob), filename: buildExportFileName() };
   }, [showNotice]);
 
+  /**
+   * Photograph the composition that is on screen, once, into the local cache.
+   *
+   * This is what 「避免重复生图」means in practice: the next visit to the same
+   * product finds the finished 800×800 PNG, and the panel can say so. The capture
+   * waits for every picture layer to decode (`imageForLayer` is the decode map):
+   * exporting one frame early writes a PNG full of empty boxes.
+   *
+   * Failures are silent on purpose — the layout is already on screen, and a cache
+   * that cannot be written must never look like a broken 生成主图.
+   */
+  useEffect(() => {
+    if (!pendingResultKey || state.exporting) return;
+    const pictures = document.layers.filter(
+      (layer): layer is ImageLayer => layer.kind !== 'text' && layer.kind !== 'plate',
+    );
+    if (pictures.length === 0) return;
+    if (!pictures.every((layer) => imageForLayer(layer) !== undefined)) return;
+
+    const key = pendingResultKey;
+    setPendingResultKey(null);
+    void (async () => {
+      try {
+        const composed = await composePng();
+        if (!composed) return;
+        await composeCache.putResult(key, composed.blob);
+        setResultCachedAt(Date.now());
+      } catch {
+        /* best effort */
+      }
+    })();
+  }, [composeCache, composePng, document.layers, imageForLayer, pendingResultKey, state.exporting]);
+
+  /** Cache key of whatever the panel currently has selected, or null. */
+  const currentResultKey = useMemo(
+    () => resultKeyForCompose(heroId, boxId),
+    [boxId, heroId, resultKeyForCompose],
+  );
+
+  /**
+   * Whether the current selection already has a finished PNG on disk.
+   *
+   * Re-read whenever the key or the last write changes, so the panel's number is
+   * the truth rather than "we wrote it at some point in this session".
+   */
+  const [cachedResultAt, setCachedResultAt] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const entry = currentResultKey
+        ? await composeCache.getResult(currentResultKey).catch(() => null)
+        : null;
+      if (!cancelled) setCachedResultAt(entry?.at ?? null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [composeCache, currentResultKey, resultCachedAt]);
+
+  /**
+   * One line of text about what this session reused, or null when nothing was.
+   *
+   * `cachedCutouts` counts cut-outs adopted at restore; `cachedResultAt` is a finished
+   * PNG already on disk for the current material set. Both are worth stating: without
+   * them a fast second visit is indistinguishable from a slow one.
+   */
+  const cacheNote = useMemo((): string | null => {
+    const parts: string[] = [];
+    if (cachedCutouts > 0) parts.push(`已复用上次的抠图 ${cachedCutouts} 张`);
+    if (cachedResultAt) {
+      const time = new Date(cachedResultAt).toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      parts.push(`这套素材的成品图已缓存（${time}）`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : null;
+  }, [cachedCutouts, cachedResultAt]);
+
+  /** Hand out the cached PNG without re-rendering or touching the canvas. */
+  const handleDownloadCached = useCallback(async () => {
+    if (!currentResultKey) return;
+    try {
+      const blob = await composeCache.readResultBlob(currentResultKey);
+      if (!blob) {
+        showNotice({ kind: 'error', text: '缓存里的成品图已不在，重新生成一次即可' });
+        setCachedResultAt(null);
+        return;
+      }
+      await downloadBlobInPage(blob, buildExportFileName());
+      showNotice({ kind: 'ok', text: '已直接使用本地缓存的成品图（没有重新生成）' });
+    } catch (error) {
+      showNotice({ kind: 'error', text: `读取缓存失败：${messageOf(error)}` });
+    }
+  }, [composeCache, currentResultKey, showNotice]);
+
+  const handleClearCache = useCallback(async () => {
+    try {
+      await composeCache.clear();
+      setResultCachedAt(null);
+      setCachedResultAt(null);
+      showNotice({ kind: 'ok', text: '已清除本地缓存，下次会重新抠图、重新生图' });
+    } catch (error) {
+      showNotice({ kind: 'error', text: `清除缓存失败：${messageOf(error)}` });
+    }
+  }, [composeCache, showNotice]);
+
   const handleExport = useCallback(async () => {
     let composed: Awaited<ReturnType<typeof composePng>> = null;
     dispatch({ type: 'SET_EXPORTING', exporting: true });
@@ -1414,6 +1677,10 @@ export function App(): JSX.Element {
             visionBusy={visionBusy}
             bindNote={bindNote}
             status={composeStatus}
+            cacheNote={cacheNote}
+            hasCachedResult={cachedResultAt !== null}
+            onDownloadCached={() => void handleDownloadCached()}
+            onClearCache={() => void handleClearCache()}
           />
 
           <MaterialPanel

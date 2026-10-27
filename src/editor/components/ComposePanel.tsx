@@ -29,6 +29,14 @@ export interface ComposePanelProps {
   bindNote: string | null;
   /** What the automatic run is doing right now ("等待抠图完成：3/6…"), or null. */
   status: string | null;
+  /** What this session reused from the local cache, or null when nothing was. */
+  cacheNote: string | null;
+  /** True when the current material set already has a finished PNG on disk. */
+  hasCachedResult: boolean;
+  /** Downloads that PNG instead of generating again. */
+  onDownloadCached: () => void;
+  /** Forgets every cached cut-out / binding / composed PNG. */
+  onClearCache: () => void;
 }
 
 function percent(value: number): string {
@@ -52,6 +60,10 @@ export function ComposePanel({
   visionBusy,
   bindNote,
   status,
+  cacheNote,
+  hasCachedResult,
+  onDownloadCached,
+  onClearCache,
 }: ComposePanelProps): JSX.Element {
   const ready = cutouts.length > 0 && Boolean(heroId);
   const active = templates.find((template) => template.key === templateKey);
@@ -152,6 +164,37 @@ export function ComposePanel({
           <p className="compose-note">
             打开编辑器会自动生成一次；手动重新生成会替换当前画布（Ctrl+Z 可整体撤销）。
           </p>
+
+          {/*
+            Reuse is worth showing: without this line a fast second visit looks
+            identical to a slow one, and 「清除本地缓存」is the only way out when a
+            cached cut-out is the thing that looks wrong.
+          */}
+          {cacheNote ? (
+            <div className="compose-cache">
+              <p className="compose-note compose-note--cache">{cacheNote}</p>
+              {hasCachedResult ? (
+                <button
+                  type="button"
+                  className="compose-cache__clear"
+                  onClick={onDownloadCached}
+                  disabled={busy}
+                  title="直接下载上次生成的 800×800 PNG，不重新排版、不重新抠图"
+                >
+                  下载缓存成品图
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="compose-cache__clear"
+                onClick={onClearCache}
+                disabled={busy}
+                title="删除本机保存的抠图、AI 识别结论和成品图，下次会重新计算"
+              >
+                清除本地缓存
+              </button>
+            </div>
+          ) : null}
         </section>
 
         {error ? <div className="notice notice--error">{error}</div> : null}

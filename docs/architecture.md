@@ -1011,7 +1011,80 @@ npm run catalog:bump    # version + 1，然后同上
   `planBrandSync`（同步决策）、`applyBrandSync` + `syncBrandCatalog`（用注入端口跑，不需要网络）。
 - 注册表合并规则单独测：`tests/unit/brand-store-merge.test.ts`（保住 `createdAt`、保住 `edited` 措辞、
   只删 remote、删条目时 blob 还在）。
-- 真网络没有自动测试：`catalog/brands.json` 的示例用两张占位 Logo，真图由卖家自己放进去。
+- 真网络没有自动测试：`catalog/brands.json` 里的图来自卖家给的品牌 Logo，改目录后靠
+  `npm run check:catalog` 兜住；两个镜像能连是手工验过的（见 §11.5）。
+
+## 12. 本地缓存：同一套素材不重算第二遍
+
+### 12.1 为什么要有它
+
+编辑器里的一切都是**会话级**的：`createSessionId()` 每次打开都换新 id，源图被复制成
+`<imageId>` 这样的会话内 id，画布藏在 `aiee:doc:<sessionId>` 里。这个默认是对的（刷新不该
+复活别人的画布），代价是每次进门都要重付两笔最贵的账：
+
+- **抠图**：上传 + 服务端往返，一张图几十秒；
+- **AI 识别素材角色**：token + 4–10 秒等待。
+
+而这两笔账都不依赖会话。抠图是**源图的函数**，主体/包装盒是**素材集合的函数**。所以缓存
+不按会话，按**源图身份**。
+
+### 12.2 三种缓存，各存什么
+
+| 缓存 | key | 命中后省掉 |
+| --- | --- | --- |
+| 抠图 | 源图身份（CDN url；上传文件用 `label\|bytes\|宽x高`） | 上传 + 服务端抠图 |
+| AI 绑定 | 素材集 + 视觉模型（`model` + `baseUrl` + 商品编号） | 一次视觉请求 |
+| 成品 PNG | 素材集 + 模板 + 主体/包装盒 | 整条排版链 + 一次渲染 |
+
+三者的 blob 都写进现有的 `blobs` 表，**不改 IndexedDB schema**（`DB_VERSION` 还是 1）：
+id 是确定性的（`cutout-cache-<hash>` / `compose-result-<key>`），索引单独存在
+`chrome.storage.local` 的 `aiee:compose-cache` 一个键里 —— 想清干净就删这一个键。
+
+### 12.3 身份，而不是 id
+
+缓存里存的是 `url:https://…` 这样的**身份**，不是 `material-cutout-3` 这种会话内 id。原因很
+实际：跨会话的时候 materialId 全变了，存 id 等于永远不命中。AI 绑定因此也存身份，读回来
+时再映射回本会话的素材；映射不上（那张图这次没进来）就当作没命中——**指向不了的结论比
+重新问一次更糟**。
+
+上传文件没有 url（`upload-images.ts` 里写的就是 `''`），所以用 `label|bytes|宽x高` 当身份：
+同一个文件再选一次命中，换了文件就不命中。连字节数都不知道时才退回 `blob:` + 会话内 id，
+等于放弃复用——宁可慢，不要串图。
+
+### 12.4 失效规则：「素材变了就失效」
+
+每个 key 都包含涉及的全部源图身份（排序去重）。于是：
+
+- 加图、删图、换图 → key 变 → 不命中（符合直觉，不用解释 TTL）；
+- 镜头顺序变了 → **仍然命中**（身份是集合，排序过）；
+- 卖家在速卖通后台把图原地换掉但 CDN url 没变 → 还命中旧的抠图。这条跟图片下载器
+  是同一个假设（url 即内容），出口是面板上的「清除本地缓存」。
+
+### 12.5 缓存是优化，坏了不能变成故障
+
+- 索引读坏 / 写不进（配额满）→ 一律当成"没有缓存"，编辑器照常跑；`createComposeCache`
+  的每个方法都 `try/catch`，`parseComposeCacheState` 对任何垃圾输入返回空状态。
+- 索引还在但 blob 没了（清过站点数据）→ `readResultBlob` / `hasCutoutBlob` 返回 null，
+  调用方当作未命中。
+- 上限：抠图 40 条、AI 绑定 16 条、成品图 12 条，按 `at` 丢最旧的（`pruneComposeCache`）。
+  没有上限的缓存迟早把配额吃光，而配额满的表现是「加图失败」，离缓存十万八千里。
+
+### 12.6 成品图什么时候拍
+
+`pendingResultKey` 在排版成功后立刻设上，真正渲染由一个 effect 完成，而且要等**每个图片
+图层都解码完**（`imageForLayer` 就是解码表）：早一帧拍出来的 PNG 里是空框。失败静默——
+画布已经在屏幕上，缓存写不进去不该看起来像「生成主图」坏了。
+
+面板上那一行是这套机制的出口：「已复用上次的抠图 n 张」「这套素材的成品图已缓存（时间）」、
+「下载缓存成品图」（直接发文件，不重排不重抠）、「清除本地缓存」。
+
+### 12.7 测试边界
+
+- `tests/unit/compose-cache.test.ts`（28 例，纯 Node）：身份推导（url / 上传 / 只剩 blobId）、
+  hash 稳定性与分隔符、key 对顺序不敏感但对素材集和模型敏感、`parseComposeCacheState`
+  对垃圾输入的降级、裁剪到上限、写入/读回/清除、索引在而 blob 不在、存储写入抛错时照常返回。
+- 存储用注入端口（`ComposeCachePorts`）模拟，仓库里没有 fake IndexedDB，缓存也不值得为它加一个。
+- 真 IndexedDB 的往返仍靠手动测试（`docs/manual-test.md` §5.6x）。
 
 
 

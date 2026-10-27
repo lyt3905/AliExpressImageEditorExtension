@@ -130,6 +130,9 @@ export async function appendUploadedImages(
       url: '',
       width: size.width,
       height: size.height,
+      // Identifies "the same file picked again" for the compose cache — an upload
+      // has no url, so this is what keeps yesterday's cut-out reusable.
+      bytes: blob.size,
       label: name.trim() || UPLOAD_DEFAULT_LABEL,
       // Selected on purpose: the automatic pipeline only ever queues
       // `selected && idle`, so an unselected upload would sit there forever.

@@ -174,6 +174,11 @@ export const STORAGE_KEYS = {
   brands: 'aiee:brands',
   /** Sync bookkeeping for the remote brand catalog (version / last sync / mirror). */
   brandCatalog: 'aiee:brand-catalog',
+  /**
+   * Reuse bookkeeping for "生成主图": which source images were already cut out,
+   * which material set the AI already labelled, which composition is on disk.
+   */
+  composeCache: 'aiee:compose-cache',
 } as const;
 
 export const DB_NAME = 'aliexpress-image-editor';
@@ -205,6 +210,33 @@ export const MAX_BRAND_LOGO_BYTES = 4 * 1024 * 1024;
 
 /** Accepted brand logo mime types. */
 export const BRAND_LOGO_MIME_TYPES = WATERMARK_MIME_TYPES;
+
+// ---------------------------------------------------------------- compose cache
+
+/**
+ * Blob-id prefix for cut-out results that are reused across sessions.
+ *
+ * Cut-outs are the expensive step (an upload + a server round trip + tens of
+ * seconds), and they are a pure function of the source image, so the result is
+ * cached per SOURCE IMAGE rather than per session. A new session then finds the
+ * blob already in IndexedDB and never calls the server.
+ */
+export const CUTOUT_CACHE_PREFIX = 'cutout-cache-';
+
+/** Blob-id prefix for the finished 800x800 composite of one composition. */
+export const COMPOSE_RESULT_PREFIX = 'compose-result-';
+
+/** How many source images keep their cut-out. Oldest entries are dropped first. */
+export const COMPOSE_CACHE_MAX_CUTOUTS = 40;
+
+/** How many finished composites are kept on disk. */
+export const COMPOSE_CACHE_MAX_RESULTS = 12;
+
+/** How many AI material bindings (hero / box decisions) are remembered. */
+export const COMPOSE_CACHE_MAX_BINDINGS = 16;
+
+/** Schema version of the cache index itself, not of the products in it. */
+export const COMPOSE_CACHE_VERSION = 1;
 
 // ------------------------------------------------------------- brand catalog
 

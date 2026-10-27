@@ -42,6 +42,14 @@ export interface SessionImage {
   url: string;
   width: number;
   height: number;
+  /**
+   * Byte size of the original blob.
+   *
+   * Only the compose cache reads it: a page-scanned image is identified by its
+   * url, but a locally uploaded file has none, so its size is what distinguishes
+   * "the same file picked again" from a different photo of the same dimensions.
+   */
+  bytes?: number;
   /** Page-provided slot label, e.g. 商品正面图 / 商品背面图. */
   label?: string;
   /** Seller-console slot number this image was scanned from (see ScannedImage). */

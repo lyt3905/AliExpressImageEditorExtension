@@ -21,6 +21,7 @@ import type {
 } from '../../shared/types';
 import { CutoutQueue } from '../../services/cutout-queue';
 import { HttpCutoutClient } from '../../services/cutout-client';
+import { createComposeCache, imageIdentity } from '../../services/compose-cache';
 import { getBlob, getSession, patchSessionImage, putBlob, putSession } from '../../services/indexed-db';
 import { readBlobSize } from '../../services/image-size';
 import { loadSettings } from '../../services/settings';
@@ -28,6 +29,26 @@ import { appendUploadedImages, type UploadOutcome } from '../../services/upload-
 import { emptyDocument, keepLayerWithMaterials, restoreStoredLayer } from './editor-reducer';
 
 const IN_FLIGHT: ReadonlySet<CutoutStatus> = new Set<CutoutStatus>(['queued', 'uploading', 'processing']);
+
+/**
+ * Cache identity of one session image.
+ *
+ * `bytes` is only needed for uploaded files (they have no url); the page-scanned
+ * ones are identified by their CDN url, which is what makes reuse work across
+ * sessions. See `services/compose-cache.ts` for the whole scheme.
+ */
+function identityOf(image: SessionImage, bytes?: number): string {
+  return imageIdentity({
+    url: image.url,
+    label: image.label,
+    width: image.width,
+    height: image.height,
+    // The stored size wins: it is what the editor computes the same identity
+    // from later, when it no longer has the blob at hand.
+    bytes: image.bytes ?? bytes,
+    blobId: image.blobId,
+  });
+}
 
 /**
  * Reject `promise` if it has not settled within `ms`.
@@ -67,6 +88,12 @@ export interface EditorSessionState {
   statusByImageId: Record<string, MaterialStatusEntry>;
   initialDocument: EditorDocument;
   progress: CutoutProgress;
+  /**
+   * How many cut-outs were adopted from the local cache instead of being
+   * requested again (0 for a first visit). Purely informational — the panel says
+   * "已复用上次的抠图" with it.
+   */
+  cachedCutouts: number;
   retryCutout: (imageId: string) => void;
   /**
    * Add local files (picker or clipboard paste) to the session and hand them to
@@ -107,6 +134,7 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
   const [statusByImageId, setStatusByImageId] = useState<Record<string, MaterialStatusEntry>>({});
   const [initialDocument, setInitialDocument] = useState<EditorDocument>(emptyDocument);
   const [progress, setProgress] = useState<CutoutProgress>({ total: 0, success: 0, failed: 0, active: 0, waiting: 0 });
+  const [cachedCutouts, setCachedCutouts] = useState(0);
 
   const imagesRef = useRef<SessionImage[]>([]);
   /**
@@ -146,6 +174,10 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
     let cancelled = false;
     const objectUrls = objectUrlsRef.current;
     const persistChain = persistChainRef;
+    // Cut-outs are cached per SOURCE IMAGE, so opening the editor again for the
+    // same product adopts yesterday's result instead of calling the server again.
+    const cache = createComposeCache();
+    let adoptedFromCache = 0;
 
     const setStatus = (imageId: string, entry: MaterialStatusEntry) => {
       if (cancelled) return;
@@ -201,9 +233,13 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
           '抠图超时：服务端长时间无响应，请稍后点「重试」',
         );
 
-        const cutoutBlobId = `${image.blobId}-cutout`;
-        await putBlob(cutoutBlobId, result.blob);
         const size = await readBlobSize(result.blob);
+        const identity = identityOf(image, original.size);
+        // The cache id is deterministic, so a second session pointing at the same
+        // product photo reads one blob instead of storing a second copy.
+        const cached = await cache.putCutout(identity, result.blob, size).catch(() => null);
+        const cutoutBlobId = cached?.blobId ?? `${image.blobId}-cutout`;
+        if (!cached) await putBlob(cutoutBlobId, result.blob);
         const patch: Partial<SessionImage> = {
           cutoutStatus: 'success',
           cutoutBlobId,
@@ -272,6 +308,32 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
             changed = true;
           }
 
+          /*
+            Adopt a cut-out made for another session of the same product.
+
+            This has to happen BEFORE the enqueue loop below, and it has to leave
+            `cutoutStatus` on success: that is what stops the image from being sent
+            to the server again. The blob is shared, not copied — the id is derived
+            from the source image, so the same photo always lands on the same id.
+          */
+          if (next.cutoutStatus !== 'success') {
+            const identity = identityOf(next, originalBlob.size);
+            const cachedCutout = await cache.getCutout(identity).catch(() => null);
+            const cachedBlob = cachedCutout ? await getBlob(cachedCutout.blobId).catch(() => null) : null;
+            if (cachedCutout && cachedBlob) {
+              next = {
+                ...next,
+                cutoutStatus: 'success',
+                cutoutBlobId: cachedCutout.blobId,
+                cutoutWidth: cachedCutout.width || width,
+                cutoutHeight: cachedCutout.height || height,
+                cutoutError: undefined,
+              };
+              changed = true;
+              adoptedFromCache += 1;
+            }
+          }
+
           let cutoutBlob: Blob | null = null;
           if (next.cutoutStatus === 'success' && next.cutoutBlobId) {
             cutoutBlob = await getBlob(next.cutoutBlobId).catch(() => null);
@@ -332,6 +394,7 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
           active: 0,
           waiting: 0,
         });
+        setCachedCutouts(adoptedFromCache);
 
         // Persist the recovered statuses so a second refresh is a no-op.
         if (changed) {
@@ -493,6 +556,7 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
     statusByImageId,
     initialDocument,
     progress,
+    cachedCutouts,
     retryCutout,
     addUploadedImages,
   };

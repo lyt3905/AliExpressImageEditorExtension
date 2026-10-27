@@ -655,17 +655,17 @@ AliExpressImageEditorExtension/
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 视觉接口 + 水印框 + 品牌）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images / text-measure / image-thumbnail / vision-client
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 40 文件 / 656 个单元测试（不联网）
+│  ├─ unit/                      # 41 文件 / 684 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
-   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）、§11 品牌目录同步
+   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）、§11 品牌目录同步、§12 本地缓存
    └─ manual-test.md
 ```
 
@@ -685,6 +685,24 @@ AliExpressImageEditorExtension/
 - 本地优先：手工上传的同名品牌、你在选项页改过名称/别名的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
 - 读的是**功能分支**（`BRAND_CATALOG_REF = 'feat/ai-image-generation'`，功能还没发版）。合并到 `main`
   之后必须把该常量改回 `main`，否则删分支会连带断掉所有已装插件的同步。
+
+---
+
+## 本地缓存（同一套素材不重算第二遍）
+
+编辑器的一切都是会话级的（新开一次就换 session id），所以默认情况下每次进门都要重付两笔最贵的账：
+抠图（上传 + 服务端往返）和 AI 识别素材角色（token + 几秒等待）。缓存按**源图身份**而不是会话记住结果：
+
+- **抠图**：按源图身份（CDN url；上传文件按 `label + 字节数 + 像素`）缓存 blob，下次打开同一商品直接复用，
+  不再上传；面板上会显示「已复用上次的抠图 n 张」。
+- **AI 识别结论**：按「素材集 + 视觉模型」缓存，存的是图片身份而不是会话内的素材 id。手动点「AI 识别」
+  会强制重新问一次（`force`），自动排版则优先用缓存。
+- **成品图**：排版成功且图层都解码完后，把 800×800 PNG 也存一份；面板上可以「下载缓存成品图」，
+  直接发文件、不重排不重抠。
+- **失效规则是「素材变了就失效」**：key 里含涉及的全部源图身份（排序去重），加图/删图/换图就不命中；
+  没有 TTL，需要强制重算就点「清除本地缓存」。
+- 存储不改 IndexedDB schema：blob 仍进 `blobs` 表（确定性 id），索引只占 `chrome.storage.local` 的一个键
+  `aiee:compose-cache`；读坏或写不进时一律当成"没有缓存"，编辑器照常跑。
 
 ---
 
@@ -775,6 +793,10 @@ AliExpressImageEditorExtension/
     （自填镜像在上线前未做）；失败不会自动重试，也没有后台定时任务。
     本地注册表是真相源 —— 同名手工品牌、你在选项页改过的远程品牌、被取消勾选的品牌都不会被覆盖，
     目录里删掉的品牌只移除条目、已下载的图片仍保留。
+18. 本地缓存**没有 TTL**，失效只靠「素材变了」：加图/删图/换图会让 key 变掉，但**同一张图在后台被
+    原地替换、CDN url 没变时不会失效**（跟图片下载器是同一个「url 即内容」的假设），出口是面板上的
+    「清除本地缓存」。上限：抠图 40 条 / AI 识别结论 16 条 / 成品图 12 条，按最旧先丢。
+    缓存的成品图**只能下载**，不会被自动放回画布 —— 画布仍是会话级的，刷新后靠文档恢复。
 
 ---
 
@@ -783,8 +805,8 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（42 文件 / 661 测试，其中 656 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
-| `npm run check:catalog` | **PASS**（示例目录 2 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
+| `npm run test` | **PASS**（43 文件 / 689 测试，其中 684 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
 | `npm run check:dist` | **PASS**（manifest 引用完整、内容脚本与回填脚本均为合法经典脚本、页面资源可解析；已实测：移走任一回填脚本会以非 0 退出并指名缺失文件） |
@@ -797,5 +819,6 @@ AliExpressImageEditorExtension/
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则，共 35 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
+| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.63） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。
