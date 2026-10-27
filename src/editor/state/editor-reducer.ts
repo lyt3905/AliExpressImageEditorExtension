@@ -197,8 +197,13 @@ export type EditorAction =
    * One history entry for the entire layout: a generated 主图 is one action from
    * the user's point of view, so one undo has to take it away again. The layers
    * passed in are already in paint order (bottom first).
+   *
+   * `selectLayerId` pre-selects one of them (the caller passes the hero). A freshly
+   * composed canvas looks the same as a restored one, and with nothing selected the
+   * first drag goes to whatever is under the pointer — usually the backdrop plate,
+   * which moves invisibly behind the product and reads as "拖动没反应".
    */
-  | { type: 'APPLY_PLAN'; layers: EditorLayer[] }
+  | { type: 'APPLY_PLAN'; layers: EditorLayer[]; selectLayerId?: string | null }
   | { type: 'DELETE_LAYER'; layerId: string }
   | { type: 'UPDATE_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'COMMIT_LAYER'; layerId: string; patch: LayerPatch }
@@ -229,10 +234,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'APPLY_PLAN': {
       if (action.layers.length === 0) return state;
       const document: EditorDocument = { layers: action.layers };
+      const selected = action.selectLayerId ?? null;
       return {
         ...state,
         history: pushHistory(state.history, document),
-        selectedLayerId: null,
+        selectedLayerId: document.layers.some((layer) => layer.id === selected) ? selected : null,
       };
     }
 

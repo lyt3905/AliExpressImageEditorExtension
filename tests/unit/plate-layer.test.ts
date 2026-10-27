@@ -164,4 +164,27 @@ describe('APPLY_PLAN', () => {
     const initial = createEditorState();
     expect(editorReducer(initial, { type: 'APPLY_PLAN', layers: [] })).toBe(initial);
   });
+
+  it('pre-selects the layer the caller names', () => {
+    // A composed canvas looks like a restored one; leaving nothing selected sent the
+    // first drag to whatever was under the pointer — usually the backdrop plate, which
+    // moves invisibly behind the hero and reads as "拖不动".
+    const plate = createPlateLayer({ width: 100, height: 100, fill: '#fff', cornerRadius: 0 });
+    const applied = editorReducer(createEditorState(), {
+      type: 'APPLY_PLAN',
+      layers: [plate],
+      selectLayerId: plate.id,
+    });
+    expect(applied.selectedLayerId).toBe(plate.id);
+  });
+
+  it('never selects a layer that is not in the plan', () => {
+    const plate = createPlateLayer({ width: 100, height: 100, fill: '#fff', cornerRadius: 0 });
+    const applied = editorReducer(createEditorState(), {
+      type: 'APPLY_PLAN',
+      layers: [plate],
+      selectLayerId: 'layer-from-another-document',
+    });
+    expect(applied.selectedLayerId).toBeNull();
+  });
 });

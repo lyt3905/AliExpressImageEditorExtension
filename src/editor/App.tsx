@@ -703,7 +703,18 @@ export function App(): JSX.Element {
 
   /** One dispatch = one history entry, so a single Ctrl+Z restores the canvas. */
   const applyComposedPlan = useCallback((plan: CompositionPlan) => {
-    dispatch({ type: 'APPLY_PLAN', layers: planToLayers(plan) });
+    const layers = planToLayers(plan);
+    /*
+      Select the hero on the way in. The composed canvas is opaque-looking but its top
+      picture is mostly transparent margin at this zoom, so with nothing selected the
+      first drag grabs whatever is underneath — usually the backdrop plate, which moves
+      behind the product and reads as "拖不动". With the hero selected, the stage's
+      existing hand-off sends any drag that starts inside it to the hero itself.
+    */
+    const hero = [...layers]
+      .reverse()
+      .find((layer) => layer.kind !== 'text' && layer.kind !== 'plate');
+    dispatch({ type: 'APPLY_PLAN', layers, selectLayerId: hero?.id ?? null });
     setComposePlan(plan);
   }, []);
 
