@@ -114,16 +114,35 @@ export function profileFromPixels(
   const sourceHeight = options.sourceHeight ?? height;
   const inverse = scale > 0 ? 1 / scale : 1;
 
+  // Round the two EDGES of the box, not the origin and the size. Rounding both
+  // independently lets them drift apart: a real cut-out (1600×1600 scanned at
+  // 512, so ×3.125) had its top edge at 4 → 12.5 → 13 and its height at 508 →
+  // 1587.5 → 1588, and 13 + 1588 = 1601 — one pixel past the source, which the
+  // profile contract rejects ("trim 超出源尺寸"), so generating failed outright.
+  // Clamping after the fact would still leave a box that is half a scan pixel
+  // off; rounding edges keeps the box exactly as wide as the pixels found.
+  const trim: TrimBox = {
+    left: clamp(Math.round(scan.trim.left * inverse), 0, sourceWidth - 1),
+    top: clamp(Math.round(scan.trim.top * inverse), 0, sourceHeight - 1),
+    width: 0,
+    height: 0,
+  };
+  trim.width =
+    clamp(Math.round((scan.trim.left + scan.trim.width) * inverse), trim.left + 1, sourceWidth) -
+    trim.left;
+  trim.height =
+    clamp(Math.round((scan.trim.top + scan.trim.height) * inverse), trim.top + 1, sourceHeight) -
+    trim.top;
+
   return createAlphaProfile({
     sourceWidth,
     sourceHeight,
     maskSize: scan.maskSize,
     mask: scan.mask,
-    trim: {
-      left: Math.max(0, Math.round(scan.trim.left * inverse)),
-      top: Math.max(0, Math.round(scan.trim.top * inverse)),
-      width: Math.max(1, Math.round(scan.trim.width * inverse)),
-      height: Math.max(1, Math.round(scan.trim.height * inverse)),
-    },
+    trim,
   });
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

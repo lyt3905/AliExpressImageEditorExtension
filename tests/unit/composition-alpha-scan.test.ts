@@ -87,4 +87,47 @@ describe('profileFromPixels', () => {
     const image = canvas(4, 4);
     expect(profileFromPixels(image.pixels, 4, 4)).toBeNull();
   });
+
+  it('keeps the trim box inside the source when both ends round up', () => {
+    // Reported in the wild: a 1600×1600 cut-out scanned at 512 (×3.125), with
+    // opaque rows 4..511 and columns 112..459. Rounding the origin and the size
+    // separately gave top 12.5→13 and height 1587.5→1588, so 13+1588 = 1601 —
+    // one pixel past the source — and every 生成主图 died with
+    // "AlphaProfile: trim … 超出源尺寸 1600×1600".
+    const image = canvas(512, 512);
+    image.fill(112, 4, 460, 512, 255);
+    const profile = profileFromPixels(image.pixels, 512, 512, {
+      maskSize: 8,
+      scale: 512 / 1600,
+      sourceWidth: 1600,
+      sourceHeight: 1600,
+    })!;
+
+    expect(profile.trim).toEqual({ left: 350, top: 13, width: 1088, height: 1587 });
+    expect(profile.trim.top + profile.trim.height).toBe(1600);
+    expect(profile.trim.left + profile.trim.width).toBe(1438);
+  });
+
+  it('never reports a box outside the source, at any scan scale', () => {
+    for (const side of [1600, 1080, 999, 700, 300]) {
+      const scale = Math.min(1, 512 / side);
+      const scanSide = Math.max(1, Math.round(side * scale));
+      const image = canvas(scanSide, scanSide);
+      image.fill(0, 0, scanSide, scanSide, 255);
+
+      const profile = profileFromPixels(image.pixels, scanSide, scanSide, {
+        maskSize: 4,
+        scale,
+        sourceWidth: side,
+        sourceHeight: side,
+      })!;
+
+      expect(profile.trim.left).toBe(0);
+      expect(profile.trim.top).toBe(0);
+      expect(profile.trim.left + profile.trim.width).toBeLessThanOrEqual(side);
+      expect(profile.trim.top + profile.trim.height).toBeLessThanOrEqual(side);
+      expect(profile.trim.width).toBeGreaterThan(0);
+      expect(profile.trim.height).toBeGreaterThan(0);
+    }
+  });
 });
