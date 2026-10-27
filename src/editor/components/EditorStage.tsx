@@ -397,14 +397,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 and it must NOT fall through to `imageForLayer`, which would look up a
                 material that does not exist.
 
-                It only listens while it is the SELECTED layer, and is picked from the
-                layer panel. A backdrop slate is opaque and sits behind the product, so
-                with listening on it swallowed every click that landed on the hero's
-                transparent margin: the plate got selected, dragging it moved something
-                hidden under the product, and the canvas looked unresponsive. Selecting
-                it in the panel still works, and then it can be dragged or resized.
+                It stays clickable even though it sits behind the product. Making it
+                listen only while selected looked like a fix for "拖不动", but it also
+                made the plate impossible to pick on the canvas: clicks on the hero's
+                transparent margin fell through to the STAGE, which deselects — so the
+                canvas selection and the layer panel disagreed. The drag problem is
+                solved by `handoffDragToSelection` instead (a drag that starts on the
+                plate while the hero is selected is handed to the hero), which needs
+                this node to be draggable anyway.
               */
-              const plateInteractive = layer.id === selectedLayerId;
               return (
                 <Rect
                   key={layer.id}
@@ -421,8 +422,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   scaleX={axisScale(layer, 'x')}
                   scaleY={axisScale(layer, 'y')}
                   rotation={layer.rotation}
-                  listening={plateInteractive}
-                  draggable={plateInteractive}
+                  draggable
                   onClick={() => onSelect(layer.id)}
                   onTap={() => onSelect(layer.id)}
                   onDragStart={handoffDragToSelection}

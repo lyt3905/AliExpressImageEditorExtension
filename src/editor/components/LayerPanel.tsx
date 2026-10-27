@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { TEXT_LAYER_LABEL_MAX } from '../../shared/constants';
 import type { EditorLayer, LayerPatch, TextLayer } from '../../shared/types';
 import type { TransformCommand } from '../state/transform';
@@ -80,6 +81,22 @@ export function LayerPanel({
   // Derived here rather than passed in: the panel already owns both halves.
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
 
+  /**
+   * Scroll the selected row into view when the selection comes from the canvas.
+   *
+   * The panel is short and the list is long — six photos plus a plate plus the
+   * product code is already taller than the box. Selecting a layer on the canvas
+   * therefore highlighted a row that was usually out of sight, which looks exactly
+   * like "画布选中了、列表没同步". `block: 'nearest'` only scrolls when the row is
+   * genuinely clipped, so clicking a visible row does not yank the list around.
+   */
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (!selectedLayerId) return;
+    const row = rowRefs.current.get(selectedLayerId);
+    if (typeof row?.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+  }, [selectedLayerId]);
+
   return (
     <aside className="panel">
       <div className="panel__title">
@@ -132,6 +149,10 @@ export function LayerPanel({
           ordered.map((layer) => (
             <div
               key={layer.id}
+              ref={(node) => {
+                if (node) rowRefs.current.set(layer.id, node);
+                else rowRefs.current.delete(layer.id);
+              }}
               className={`layer-row${layer.id === selectedLayerId ? ' layer-row--selected' : ''}`}
               role="button"
               tabIndex={0}
