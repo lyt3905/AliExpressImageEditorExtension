@@ -13,11 +13,12 @@
   "slots": [
     {
       "id": "rear_view_background",
-      "role": "secondary",
+      "role": "support",
       "required": true,
       "max_items": 1,
       "z_index": 10,
       "source_selection": {
+        "product_match": "same_product",
         "expected_class": "figure",
         "view_type": ["rear", "back"],
         "framing": ["full", "three_quarter"],
@@ -35,11 +36,12 @@
     },
     {
       "id": "front_view_right",
-      "role": "secondary",
+      "role": "support",
       "required": true,
       "max_items": 1,
       "z_index": 20,
       "source_selection": {
+        "product_match": "same_product",
         "expected_class": "figure",
         "view_type": ["front", "front_three_quarter"],
         "framing": ["full", "three_quarter"],
@@ -62,6 +64,7 @@
       "max_items": 1,
       "z_index": 30,
       "source_selection": {
+        "product_match": "same_product",
         "expected_class": "figure",
         "view_type": ["dynamic", "front_three_quarter", "action"],
         "framing": ["closeup", "full", "three_quarter"],
@@ -79,28 +82,57 @@
     }
   ],
   "rules": {
-    "hero_dominance": {
-      "min_canvas_occupancy": 0.28,
-      "target_canvas_occupancy": [0.35, 0.5]
+    "source_selection": {
+      "same_product_required": true,
+      "distinct_source_images_required": true,
+      "allow_same_product_multiple_views": true,
+      "deduplicate_near_identical_images": true,
+      "prefer_pose_diversity": true
+    },
+    "background_removal": {
+      "enabled": true,
+      "method": "product_instance_segmentation",
+      "preserve_original_product_pixels": true,
+      "do_not_regenerate_product": true,
+      "remove": [
+        "scene_background",
+        "floor",
+        "clouds",
+        "speech_bubble",
+        "speech_bubble_text",
+        "display_base",
+        "display_stand",
+        "legal_disclaimer",
+        "source_image_watermarks"
+      ],
+      "preserve": ["toy_figure", "physically_attached_accessories", "product_effect_parts"],
+      "preserve_translucent_accessories": true,
+      "use_tight_alpha_bounds": true
     },
     "collage": {
       "allow_alpha_overlap": true,
+      "prevent_alpha_overlap": false,
       "min_gap_px": 0,
-      "clip_to_canvas": true
+      "allow_canvas_overflow": true,
+      "clip_to_canvas": true,
+      "render_order": ["rear_view_background", "front_view_right", "action_pose_left_hero"]
     },
-    "shadow": {
-      "enabled": false,
-      "opacity": 40,
-      "blur": 5,
-      "offset": [4, 6]
+    "hero_dominance": {
+      "min_canvas_occupancy": 0.28,
+      "target_canvas_occupancy": [0.35, 0.5],
+      "measure": "visible_alpha_pixels_after_canvas_clip"
     },
-    "package_readability": {
-      "required": false,
-      "min_visible_ratio": 0
+    "figure_integrity": {
+      "preserve_original_geometry": true,
+      "preserve_original_colors": true,
+      "no_ai_redrawing": true,
+      "no_nonuniform_scaling": true,
+      "allow_partial_canvas_crop": true
     },
-    "text": {
-      "keep_clear_of_hero": true,
-      "prefer_black_on_white": true
+    "fallback": {
+      "allow_two_pose_degraded_candidate": true,
+      "never_duplicate_same_source_to_fill_slot": true,
+      "prefer_clear_distinct_views": true
     }
   }
 }

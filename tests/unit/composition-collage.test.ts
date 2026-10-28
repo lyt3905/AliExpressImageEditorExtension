@@ -15,8 +15,8 @@ import {
   type BindCandidate,
 } from '../../src/services/composition/bind-materials';
 import { buildCompositionPlan, type PlannerMaterial } from '../../src/services/composition/planner';
-import { parseLayoutTemplateOrThrow } from '../../src/services/composition/template-schema';
-import { parseBindingAnswer } from '../../src/services/composition/vision-binder';
+import { parseLayoutTemplate, parseLayoutTemplateOrThrow } from '../../src/services/composition/template-schema';
+import { buildBindingPrompt, parseBindingAnswer } from '../../src/services/composition/vision-binder';
 import type { MeasureText } from '../../src/services/composition/text-fit';
 
 const TEMPLATE = parseLayoutTemplateOrThrow(COLLAGE_SOURCE);
@@ -237,3 +237,150 @@ describe('parseBindingAnswer — collage slots', () => {
 
 /** `measure` is exercised by the planner tests; kept here so the template stays measurable. */
 void measure;
+
+describe('template dialect — the collage fields are actually read', () => {
+  it('accepts `support` as a slot role', () => {
+    const rear = TEMPLATE.slots.find((slot) => slot.id === 'rear_view_background')!;
+    expect(rear.role).toBe('support');
+    expect(rear.sourceSelection?.productMatch).toBe('same_product');
+  });
+
+  it('keeps the whole source_selection, not just view_type', () => {
+    const hero = TEMPLATE.slots.find((slot) => slot.role === 'hero')!;
+    expect(hero.sourceSelection?.framing).toEqual(['closeup', 'full', 'three_quarter']);
+    expect(hero.sourceSelection?.prefer).toContain('攻击或飞行动作');
+    expect(hero.sourceSelection?.exclude).toContain('包装盒');
+  });
+
+  it('parses render_order', () => {
+    expect(TEMPLATE.rules.renderOrder).toEqual([
+      'rear_view_background',
+      'front_view_right',
+      'action_pose_left_hero',
+    ]);
+  });
+
+  it('lets a collage omit the package-era rules', () => {
+    // No `shadow` / `package_readability` / `text` in this template: they are
+    // defaults with a warning, not errors, because a collage has no box.
+    const result = parseLayoutTemplate(COLLAGE_SOURCE);
+    expect(result.issues).toEqual([]);
+    expect(result.template).not.toBeNull();
+    expect(result.warnings.map((entry) => entry.path)).toContain('rules.shadow');
+    expect(result.template!.rules.packageReadability.required).toBe(false);
+    expect(result.template!.rules.text.keepClearOfHero).toBe(true);
+  });
+
+  it('rejects a render_order that names a slot the template does not have', () => {
+    const broken = JSON.parse(JSON.stringify(COLLAGE_SOURCE)) as {
+      rules: { collage: { render_order: string[] } };
+    };
+    broken.rules.collage.render_order = ['rear_view_background', 'front_view_wrong', 'action_pose_left_hero'];
+    const result = parseLayoutTemplate(broken);
+    expect(result.issues.map((issue) => issue.path)).toContain('rules.render_order[1]');
+  });
+});
+
+describe('render_order controls paint order', () => {
+  /** Same template with z_index deliberately disagreeing with render_order. */
+  function conflicting(): typeof TEMPLATE {
+    const clone = JSON.parse(JSON.stringify(COLLAGE_SOURCE)) as Record<string, unknown>;
+    const slots = clone.slots as Array<{ id: string; z_index: number }>;
+    for (const slot of slots) if (slot.id === 'action_pose_left_hero') slot.z_index = 5;
+    return parseLayoutTemplateOrThrow(clone);
+  }
+
+  it('follows render_order even when z_index says otherwise', () => {
+    const template = conflicting();
+    const plan = buildCompositionPlan({
+      template,
+      hero: HERO,
+      supports: [
+        { slotId: 'rear_view_background', material: REAR },
+        { slotId: 'front_view_right', material: FRONT },
+      ],
+      seed: 'MTS-0001',
+    });
+
+    expect(plan.images.map((image) => image.slotId)).toEqual([
+      'rear_view_background',
+      'front_view_right',
+      'action_pose_left_hero',
+    ]);
+    // Renumbered from the render order, so the emitted layers inherit it.
+    expect(plan.images.map((image) => image.zIndex)).toEqual([10, 20, 30]);
+  });
+
+  it('falls back to z_index when the template has no render_order', () => {
+    const clone = JSON.parse(JSON.stringify(COLLAGE_SOURCE)) as {
+      rules: { collage: Record<string, unknown> };
+    };
+    delete clone.rules.collage.render_order;
+    const template = parseLayoutTemplateOrThrow(clone);
+    expect(template.rules.renderOrder).toBeUndefined();
+
+    const plan = buildCompositionPlan({
+      template,
+      hero: HERO,
+      supports: [
+        { slotId: 'rear_view_background', material: REAR },
+        { slotId: 'front_view_right', material: FRONT },
+      ],
+      seed: 'MTS-0001',
+    });
+    expect(plan.images.map((image) => image.zIndex)).toEqual([10, 20, 30]);
+  });
+});
+
+describe('per-slot placement', () => {
+  it('uses each slot own viewport and center_x, not one shared box', () => {
+    const plan = buildCompositionPlan({
+      template: TEMPLATE,
+      hero: HERO,
+      supports: [
+        { slotId: 'rear_view_background', material: REAR },
+        { slotId: 'front_view_right', material: FRONT },
+      ],
+      seed: 'MTS-0001',
+    });
+    const rear = plan.images.find((image) => image.slotId === 'rear_view_background')!;
+    const front = plan.images.find((image) => image.slotId === 'front_view_right')!;
+    const hero = plan.images.find((image) => image.slotId === 'action_pose_left_hero')!;
+
+    // center_x: 380 / 650 / 250 in the template.
+    expect(rear.x).toBeLessThan(front.x);
+    expect(hero.x).toBeLessThan(rear.x);
+    // The three poses do not all sit on one baseline: each viewport top differs.
+    expect(new Set([rear.y, front.y, hero.y]).size).toBe(3);
+  });
+});
+
+describe('buildBindingPrompt — collage slot hints', () => {
+  it('spells out view types, framing, preferences and exclusions', () => {
+    const prompt = buildBindingPrompt(
+      [
+        { key: 'A', label: '商品正面图' },
+        { key: 'B', label: '背面图' },
+      ],
+      [
+        {
+          slotId: 'rear_view_background',
+          expectedClass: 'figure',
+          viewTypes: ['rear', 'back'],
+          framing: ['full'],
+          prefer: ['清晰的背部细节'],
+          exclude: ['包装盒'],
+        },
+      ],
+    );
+    expect(prompt).toContain('图位 rear_view_background');
+    expect(prompt).toContain('优先选：rear / back');
+    expect(prompt).toContain('取景：full');
+    expect(prompt).toContain('应该是一张「figure」');
+    expect(prompt).toContain('希望：清晰的背部细节');
+    expect(prompt).toContain('不要：包装盒');
+    // The old contract must survive: the panel test only checks these substrings.
+    expect(prompt).toContain('A（商品正面图）');
+    expect(prompt).toContain('package_found');
+  });
+});

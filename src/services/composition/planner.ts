@@ -137,6 +137,15 @@ const DEFAULT_BOX_SEARCH_STEPS = 24;
 /** Text sits above the photographs: the code must never be buried under them. */
 export const TEXT_Z_INDEX = 1000;
 
+/**
+ * Spacing used when `render_order` renumbers the picture layers.
+ *
+ * Room to spare between neighbours on purpose: a later pass that wants to slip a
+ * layer in between (a plate, a shadow copy) still has a number to use instead of
+ * renumbering everything.
+ */
+const Z_INDEX_STEP = 10;
+
 /** Padding inside a plate before its caption is fitted. */
 const PLATE_TEXT_PADDING_RATIO = 0.08;
 const PLATE_TEXT_PADDING_MAX = 28;
@@ -522,9 +531,22 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   // collage's value is the composition the designer drew, so "solving" it would
   // only invent a different one.
   const usedMaterialIds = new Set([hero.materialId, boxSource?.materialId ?? '']);
+
+  /**
+   * Paint order of a picture slot: `render_order` position when the template has
+   * one, else its `z_index`. Both are ascending — back to front.
+   */
+  const renderOrder = template.rules.renderOrder;
+  const pictureRank = (slotId: string): number => {
+    if (renderOrder) {
+      const index = renderOrder.indexOf(slotId);
+      return index === -1 ? renderOrder.length : index;
+    }
+    return template.slots.find((slot) => slot.id === slotId)?.zIndex ?? 0;
+  };
   const supportSlots = [...template.slots]
     .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
-    .sort((left, right) => left.zIndex - right.zIndex);
+    .sort((left, right) => pictureRank(left.id) - pictureRank(right.id));
 
   for (const slot of supportSlots) {
     const assignment = request.supports?.find((entry) => entry.slotId === slot.id);
@@ -553,7 +575,23 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     images.push(placedFromMaterial(assignment.material, supportPlacement, slot));
   }
 
-  images.sort((a, b) => a.zIndex - b.zIndex);
+  /*
+    `rules.collage.render_order` wins over `z_index` for the picture layers.
+
+    The list is the designer's own paint order ("先背面、再正面、最后动作特写"), and
+    honouring it here — by renumbering the emitted z-index — means the canvas, the
+    layer panel and the template all say the same thing. Slots the list forgets
+    keep their `z_index` and land in front, so a half-written list degrades instead
+    of scrambling the collage.
+  */
+  if (renderOrder) {
+    images.sort((a, b) => pictureRank(a.slotId) - pictureRank(b.slotId) || a.zIndex - b.zIndex);
+    images.forEach((image, index) => {
+      image.zIndex = (index + 1) * Z_INDEX_STEP;
+    });
+  } else {
+    images.sort((a, b) => a.zIndex - b.zIndex);
+  }
 
   const zone = modelCodeZone(template);
   // Skipped when the code already sits on a plate: printing it twice on one 主图

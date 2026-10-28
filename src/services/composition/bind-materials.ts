@@ -87,11 +87,19 @@ export function pickSecondary(
   );
 }
 
-/** One `secondary` / `accent` slot of a collage template. */
+/** One `support` / `secondary` / `accent` slot of a collage template. */
 export interface SupportSlotRequest {
   slotId: string;
-  /** `view_type` hints from `source_selection` — only the vision model can use them. */
+  /** `expected_class`: what the picture is supposed to be (`figure` / `package`). */
+  expectedClass?: string;
+  /** `view_type`: `rear` / `front` / `dynamic` … the model decides, we only pass it on. */
   viewTypes?: readonly string[];
+  /** `framing`: `full` / `three_quarter` / `closeup`. */
+  framing?: readonly string[];
+  /** `prefer`: free-form「想要什么」，prose straight from the template. */
+  prefer?: readonly string[];
+  /** `exclude`: free-form「不要什么」. */
+  exclude?: readonly string[];
 }
 
 export interface SupportAssignment {

@@ -67,7 +67,7 @@ export interface TemplateParseResult {
   warnings: TemplateIssue[];
 }
 
-const SLOT_ROLES: readonly SlotRole[] = ['hero', 'box', 'secondary', 'accent'];
+const SLOT_ROLES: readonly SlotRole[] = ['hero', 'box', 'secondary', 'accent', 'support'];
 const TEMPLATE_STATUSES: readonly TemplateStatus[] = ['draft', 'active', 'retired'];
 const FALLBACK_KINDS: readonly SlotFallback['kind'][] = [
   'secondary_view',
@@ -536,7 +536,9 @@ function parseSourceSelection(
   };
 
   const expectedClass = record.expected_class === undefined ? undefined : readString(record.expected_class, `${path}.expected_class`, sink) ?? undefined;
+  const productMatch = record.product_match === undefined ? undefined : readString(record.product_match, `${path}.product_match`, sink) ?? undefined;
   return {
+    ...(productMatch ? { productMatch } : {}),
     ...(expectedClass ? { expectedClass } : {}),
     viewTypes: strings(record.view_type, `${path}.view_type`),
     framing: strings(record.framing, `${path}.framing`),
@@ -674,9 +676,17 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
     if (gap !== null) collision = { preventAlphaOverlap: prevent, minGapPx: gap };
   }
 
-  const shadowRaw = readRecord(rules.shadow, 'rules.shadow', sink);
+  // Only read the record when it exists: `readRecord(undefined, …)` records a
+  // "missing" error, and a rule that has a default must not report one.
+  const shadowRaw = rules.shadow === undefined ? null : readRecord(rules.shadow, 'rules.shadow', sink);
   let shadow: ShadowRule | null = null;
-  if (shadowRaw) {
+  if (rules.shadow === undefined) {
+    // A collage has no package and no drop shadow; making it restate the two
+    // package-era rules just to get through the parser would be noise. Absent
+    // means "off", and the warning says so out loud.
+    sink.warn('rules.shadow', '未声明，按「不投影」处理（图片图层目前也不渲染阴影）');
+    shadow = { enabled: false, opacity: 40, blur: 5, offset: [4, 6] };
+  } else if (shadowRaw) {
     const enabled = readBoolean(shadowRaw.enabled, 'rules.shadow.enabled', sink, false);
     const opacity = readRange(shadowRaw.opacity, 'rules.shadow.opacity', sink, 0, 100);
     const blur = readRange(shadowRaw.blur, 'rules.shadow.blur', sink, 0, 200);
@@ -691,9 +701,16 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
     }
   }
 
-  const readabilityRaw = readRecord(rules.package_readability, 'rules.package_readability', sink);
+  const readabilityRaw =
+    rules.package_readability === undefined
+      ? null
+      : readRecord(rules.package_readability, 'rules.package_readability', sink);
   let packageReadability: TemplateRules['packageReadability'] | null = null;
-  if (readabilityRaw) {
+  if (rules.package_readability === undefined) {
+    // No box slot → nothing to read. Default to "not required" and skip the
+    // per-field warning; the missing block is the statement.
+    packageReadability = { required: false, minVisibleRatio: DEFAULT_PACKAGE_VISIBLE_RATIO };
+  } else if (readabilityRaw) {
     const required = readBoolean(readabilityRaw.required, 'rules.package_readability.required', sink, false);
     let minVisibleRatio = DEFAULT_PACKAGE_VISIBLE_RATIO;
     if (readabilityRaw.min_visible_ratio === undefined) {
@@ -709,9 +726,12 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
     packageReadability = { required, minVisibleRatio };
   }
 
-  const textRaw = readRecord(rules.text, 'rules.text', sink);
+  const textRaw = rules.text === undefined ? null : readRecord(rules.text, 'rules.text', sink);
   let text: TemplateRules['text'] | null = null;
-  if (textRaw) {
+  if (rules.text === undefined) {
+    sink.warn('rules.text', '未声明，按「文字不压主体、白底用黑字」处理');
+    text = { keepClearOfHero: true, preferBlackOnWhite: true };
+  } else if (textRaw) {
     text = {
       keepClearOfHero: readBoolean(textRaw.keep_clear_of_hero, 'rules.text.keep_clear_of_hero', sink, true),
       preferBlackOnWhite: readBoolean(textRaw.prefer_black_on_white, 'rules.text.prefer_black_on_white', sink, true),
@@ -719,7 +739,33 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
   }
 
   if (!heroDominance || !collision || !shadow || !packageReadability || !text) return null;
-  return { heroDominance, collision, shadow, packageReadability, text };
+  const renderOrder = parseRenderOrder(rules.collision ?? rules.collage, collisionKey, sink);
+  return { heroDominance, collision, shadow, packageReadability, text, ...(renderOrder ? { renderOrder } : {}) };
+}
+
+/**
+ * `rules.collage.render_order`: slot ids back to front.
+ *
+ * The planner uses it instead of `z_index` for the picture layers, so a designer
+ * can reorder the collage in one list. Ids are checked against the template's
+ * slots by `crossCheck` — a typo here would otherwise silently fall back to
+ * `z_index` and look like the field is ignored.
+ */
+function parseRenderOrder(raw: unknown, path: string, sink: Sink): readonly string[] | undefined {
+  const record = readRecord(raw, path, sink);
+  if (!record || record.render_order === undefined) return undefined;
+  const list = readArray(record.render_order, `${path}.render_order`, sink);
+  if (!list) return undefined;
+  const out: string[] = [];
+  list.forEach((entry, index) => {
+    const text = readString(entry, `${path}.render_order[${index}]`, sink);
+    if (text && !out.includes(text)) out.push(text);
+  });
+  if (out.length === 0) {
+    sink.error(`${path}.render_order`, 'render_order 不能为空数组；想按 z_index 排就不要写这个字段');
+    return undefined;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- cross checks
@@ -744,6 +790,16 @@ export function slotFootprints(slot: TemplateSlot): Rect[] {
 function crossCheck(template: LayoutTemplate, sink: Sink): void {
   const { width, height, safeMargin, reservedZones } = template.canvas;
   const safe: Rect = [safeMargin, safeMargin, width - safeMargin, height - safeMargin];
+
+  const renderOrder = template.rules.renderOrder;
+  if (renderOrder) {
+    const known = new Set(template.slots.map((slot) => slot.id));
+    renderOrder.forEach((id, index) => {
+      if (!known.has(id)) {
+        sink.error(`rules.render_order[${index}]`, `没有 id 为 ${id} 的槽位（拼写错误会让排序悄悄退回 z_index）`);
+      }
+    });
+  }
 
   for (const slot of template.slots) {
     const footprints = slotFootprints(slot);

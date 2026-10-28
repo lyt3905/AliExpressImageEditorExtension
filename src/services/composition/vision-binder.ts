@@ -87,8 +87,13 @@ export function buildBindingPrompt(
       '',
       '另外还要为下面这些图位各挑一张**互不相同**的图（也不能和 hero 用同一张）：',
       ...slots.map((slot) => {
-        const hints = slot.viewTypes?.length ? `（优先选：${slot.viewTypes.join(' / ')}）` : '';
-        return `- 图位 ${slot.slotId}${hints}`;
+        const hints: string[] = [];
+        if (slot.viewTypes?.length) hints.push(`优先选：${slot.viewTypes.join(' / ')}`);
+        if (slot.framing?.length) hints.push(`取景：${slot.framing.join(' / ')}`);
+        if (slot.expectedClass) hints.push(`应该是一张「${slot.expectedClass}」`);
+        if (slot.prefer?.length) hints.push(`希望：${slot.prefer.join('、')}`);
+        if (slot.exclude?.length) hints.push(`不要：${slot.exclude.join('、')}`);
+        return `- 图位 ${slot.slotId}${hints.length > 0 ? `（${hints.join('；')}）` : ''}`;
       }),
       '挑不出来就留空（把该图位填 null），不要拿同一张图凑数。',
     );

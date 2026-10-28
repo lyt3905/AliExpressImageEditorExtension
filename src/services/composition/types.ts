@@ -21,7 +21,7 @@ export type Size = [number, number];
 export type Point = [number, number];
 
 /** What a slot is for. Also the vocabulary `reserved_zones.avoid_for` uses. */
-export type SlotRole = 'hero' | 'box' | 'secondary' | 'accent';
+export type SlotRole = 'hero' | 'box' | 'secondary' | 'accent' | 'support';
 
 export type TemplateStatus = 'draft' | 'active' | 'retired';
 
@@ -97,6 +97,8 @@ export type SlotFallback =
  * crops of the same one.
  */
 export interface SlotSourceSelection {
+  /** `same_product` in every shipped template; parsed so a fork is not silently ignored. */
+  productMatch?: string;
   /** `figure` / `package` … free-form class hint. */
   expectedClass?: string;
   /** `rear` / `back` / `front` / `front_three_quarter` / `dynamic` / `action` … */
@@ -159,6 +161,16 @@ export interface TemplateRules {
     keepClearOfHero: boolean;
     preferBlackOnWhite: boolean;
   };
+  /**
+   * Slot ids in paint order, back to front — `rules.collage.render_order`.
+   *
+   * A collage has to say「先画背面、再画正面、最后画动作特写」in a way that cannot
+   * drift from `z_index`, and a designer who reorders the collage should fix one
+   * list instead of three numbers. When present it wins over `zIndex` for the
+   * picture layers; unknown ids are rejected at parse time, slots it omits keep
+   * their `zIndex` and go in front.
+   */
+  renderOrder?: readonly string[];
 }
 
 export interface TemplateCanvas {

@@ -155,10 +155,22 @@ function resolveCachedBinding(
  * template returns an empty list and the whole collage path stays switched off.
  */
 function supportSlotsOf(template: LayoutTemplate): SupportSlotRequest[] {
+  const renderOrder = template.rules.renderOrder;
+  const rank = (slotId: string, zIndex: number): number => {
+    const index = renderOrder?.indexOf(slotId) ?? -1;
+    return index === -1 ? zIndex : index;
+  };
   return [...template.slots]
     .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
-    .sort((left, right) => left.zIndex - right.zIndex)
-    .map((slot) => ({ slotId: slot.id, viewTypes: slot.sourceSelection?.viewTypes }));
+    .sort((left, right) => rank(left.id, left.zIndex) - rank(right.id, right.zIndex))
+    .map((slot) => ({
+      slotId: slot.id,
+      ...(slot.sourceSelection?.expectedClass ? { expectedClass: slot.sourceSelection.expectedClass } : {}),
+      ...(slot.sourceSelection?.viewTypes.length ? { viewTypes: slot.sourceSelection.viewTypes } : {}),
+      ...(slot.sourceSelection?.framing.length ? { framing: slot.sourceSelection.framing } : {}),
+      ...(slot.sourceSelection?.prefer.length ? { prefer: slot.sourceSelection.prefer } : {}),
+      ...(slot.sourceSelection?.exclude.length ? { exclude: slot.sourceSelection.exclude } : {}),
+    }));
 }
 
 export function App(): JSX.Element {
