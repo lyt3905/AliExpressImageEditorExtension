@@ -154,6 +154,18 @@ export function OptionsApp(): JSX.Element {
   const [brandThumbs, setBrandThumbs] = useState<Record<string, string>>({});
   const [brandStatus, setBrandStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   const [brandBusy, setBrandBusy] = useState(false);
+  /**
+   * Which brand row is expanded for editing, or `null` when every row is
+   * collapsed.
+   *
+   * The list is read far more often than it is edited — a collapsed row still
+   * shows the logo, the name and the keywords, which is everything you need to
+   * answer "is this brand registered correctly?". Expanding one row at a time
+   * keeps the nine-inputs-per-brand look out of the page.
+   */
+  const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
+  /** The "add brand" form is collapsed behind one button, same reason. */
+  const [brandFormOpen, setBrandFormOpen] = useState(false);
   /** Draft for the "add brand" form. */
   const [newBrandName, setNewBrandName] = useState('');
   const [newBrandKeywords, setNewBrandKeywords] = useState('');
@@ -166,6 +178,8 @@ export function OptionsApp(): JSX.Element {
   const [catalogStatus, setCatalogStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   /** Draft for the self-hosted catalog URL; `''` = use the built-in mirrors only. */
   const [catalogUrl, setCatalogUrl] = useState('');
+  /** Mirror override + explanation, collapsed into the catalog block's head row. */
+  const [catalogOpen, setCatalogOpen] = useState(false);
   /** Result of the "保存视觉设置" button — kept apart from the login status line. */
   const [visionStatus, setVisionStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
 
@@ -580,6 +594,8 @@ export function OptionsApp(): JSX.Element {
       setNewBrandKeywords('');
       setNewBrandFile(null);
       if (brandFileInputRef.current) brandFileInputRef.current.value = '';
+      // Added brands are read back from the list, not from the form: collapse it.
+      setBrandFormOpen(false);
     } catch (error) {
       setBrandStatus({ kind: 'bad', text: messageOf(error) });
     } finally {
@@ -598,6 +614,9 @@ export function OptionsApp(): JSX.Element {
         }),
       );
       setBrandStatus({ kind: 'ok', text: '已保存品牌修改' });
+      // Collapse on save: the row goes back to its one-line summary, which now
+      // shows the values that were just stored.
+      setEditingBrandId(null);
     },
     [brandDraftKeywords, brandDraftNames, brands],
   );
@@ -616,6 +635,9 @@ export function OptionsApp(): JSX.Element {
     });
     setBrands(await removeBrand(meta.id));
     setBrandStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
+    // Deleting the expanded row must not leave `editingBrandId` pointing at a
+    // brand that no longer exists.
+    setEditingBrandId((current) => (current === meta.id ? null : current));
   }, []);
 
   return (
@@ -925,20 +947,20 @@ export function OptionsApp(): JSX.Element {
       <div className="catalog-block">
         <div className="catalog-block__head">
           <strong>品牌目录（GitHub）</strong>
-          <span className="watermark-row__size">
+          <span className="catalog-block__state">
             {catalogState === null
               ? '读取中…'
               : catalogState.syncedAt > 0
                 ? `已同步 v${catalogState.version} · ${formatTimestamp(catalogState.syncedAt)}${catalogState.baseUrlUsed ? ` · ${catalogMirrorLabel(catalogState.baseUrlUsed)}` : ''}`
                 : '从未同步'}
           </span>
-        </div>
-        <p className="hint">
-          目录来自仓库的 <code>catalog/brands.json</code>：仓库里加一个品牌、换一张 Logo，
-          这里点一次同步就能拿到，不用重新打包插件。打开编辑器时也会自动同步（24 小时内不重复请求）。
-          目录里的品牌 id 固定（<code>remote-&lt;slug&gt;</code>），所以更新 Logo 不会让历史画布断图。
-        </p>
-        <div className="row">
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setCatalogOpen((previous) => !previous)}
+          >
+            {catalogOpen ? '收起' : '镜像设置'}
+          </button>
           <button
             type="button"
             className="primary"
@@ -948,6 +970,35 @@ export function OptionsApp(): JSX.Element {
             {catalogBusy ? '正在同步…' : '立即同步'}
           </button>
         </div>
+        {catalogOpen ? (
+          <>
+            <p className="hint">
+              目录来自仓库的 <code>catalog/brands.json</code>：仓库里加一个品牌、换一张 Logo，
+              这里点一次同步就能拿到，不用重新打包插件。打开编辑器时也会自动同步（24 小时内不重复请求）。
+              目录里的品牌 id 固定（<code>remote-&lt;slug&gt;</code>），所以更新 Logo 不会让历史画布断图。
+            </p>
+            <div className="field">
+              <label htmlFor="catalog-url">自填目录地址（可选）</label>
+              <input
+                id="catalog-url"
+                value={catalogUrl}
+                spellCheck={false}
+                disabled={catalogBusy}
+                onChange={(event) => setCatalogUrl(event.target.value)}
+                placeholder="https://你的域名/catalog/"
+              />
+              <small>
+                国内访问 GitHub 不稳时，把这个仓库的 <code>catalog/</code> 镜像到别处再填这里。
+                同步会先试它、失败再回落到内置镜像。留空 = 只用内置镜像。改完点上面的「设置」区保存，
+                或直接「立即同步」按当前输入试一次。只接受 HTTPS（本机 <code>127.0.0.1</code> 可用 HTTP）。
+              </small>
+            </div>
+          </>
+        ) : (
+          <p className="hint hint--tight">
+            仓库里的 <code>catalog/brands.json</code> 改完点「立即同步」就能拿到，不用重新打包插件。
+          </p>
+        )}
         {catalogStatus ? (
           <div
             className={`status-line status-line--tight${catalogStatus.kind === 'bad' ? ' status-bad' : ''}`}
@@ -960,130 +1011,173 @@ export function OptionsApp(): JSX.Element {
             上次同步失败：{catalogState.lastError}
           </div>
         ) : null}
-        <div className="field">
-          <label htmlFor="catalog-url">自填目录地址（可选）</label>
-          <input
-            id="catalog-url"
-            value={catalogUrl}
-            spellCheck={false}
-            disabled={catalogBusy}
-            onChange={(event) => setCatalogUrl(event.target.value)}
-            placeholder="https://你的域名/catalog/"
-          />
-          <small>
-            国内访问 GitHub 不稳时，把这个仓库的 <code>catalog/</code> 镜像到别处再填这里。
-            同步会先试它、失败再回落到内置镜像。留空 = 只用内置镜像。改完点上面的「设置」区保存，
-            或直接「立即同步」按当前输入试一次。只接受 HTTPS（本机 <code>127.0.0.1</code> 可用 HTTP）。
-          </small>
-        </div>
       </div>
 
-      <div className="field">
-        <label htmlFor="brand-file">Logo 图片</label>
-        <input
-          id="brand-file"
-          ref={brandFileInputRef}
-          type="file"
-          accept={ACCEPTED_TYPES}
-          disabled={brandBusy}
-          onChange={(event) => setNewBrandFile(event.target.files?.[0] ?? null)}
-        />
-        <small>PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {LOGO_SIZE_LIMIT_MB}MB。</small>
-      </div>
-      <div className="field">
-        <label htmlFor="brand-name">品牌名称</label>
-        <input
-          id="brand-name"
-          value={newBrandName}
-          spellCheck={false}
-          disabled={brandBusy}
-          onChange={(event) => setNewBrandName(event.target.value)}
-          placeholder="例：Morph Toys"
-        />
-        <small>只用来区分不同品牌（这里和编辑器里的品牌下拉显示的就是它），不参与标题匹配。</small>
-      </div>
-      <div className="field">
-        <label htmlFor="brand-keywords">标题关键词（逗号分隔）</label>
-        <input
-          id="brand-keywords"
-          value={newBrandKeywords}
-          spellCheck={false}
-          disabled={brandBusy}
-          onChange={(event) => setNewBrandKeywords(event.target.value)}
-          placeholder="例：Morph Toys, MTS, 摩变"
-        />
-        <small>
-          标题里出现任一关键词（<b>不区分大小写</b>）就判定为该品牌，所以把品牌名、英文名、系列缩写都写进来。
-          留空 = 永不自动识别，只能在编辑器里手动选品牌。
-        </small>
-      </div>
       <div className="row">
-        <button type="button" className="primary" disabled={brandBusy || !newBrandFile} onClick={() => void handleAddBrand()}>
-          添加品牌
+        <button type="button" onClick={() => setBrandFormOpen((previous) => !previous)}>
+          {brandFormOpen ? '收起添加表单' : '+ 添加品牌'}
         </button>
       </div>
+
+      {brandFormOpen ? (
+        <div className="brand-form">
+          <div className="field">
+            <label htmlFor="brand-file">Logo 图片</label>
+            <input
+              id="brand-file"
+              ref={brandFileInputRef}
+              type="file"
+              accept={ACCEPTED_TYPES}
+              disabled={brandBusy}
+              onChange={(event) => setNewBrandFile(event.target.files?.[0] ?? null)}
+            />
+            <small>PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {LOGO_SIZE_LIMIT_MB}MB。</small>
+          </div>
+          <div className="field">
+            <label htmlFor="brand-name">品牌名称</label>
+            <input
+              id="brand-name"
+              value={newBrandName}
+              spellCheck={false}
+              disabled={brandBusy}
+              onChange={(event) => setNewBrandName(event.target.value)}
+              placeholder="例：Morph Toys"
+            />
+            <small>只用来区分不同品牌（这里和编辑器里的品牌下拉显示的就是它），不参与标题匹配。</small>
+          </div>
+          <div className="field">
+            <label htmlFor="brand-keywords">标题关键词（逗号分隔）</label>
+            <input
+              id="brand-keywords"
+              value={newBrandKeywords}
+              spellCheck={false}
+              disabled={brandBusy}
+              onChange={(event) => setNewBrandKeywords(event.target.value)}
+              placeholder="例：Morph Toys, MTS, 摩变"
+            />
+            <small>
+              标题里出现任一关键词（<b>不区分大小写</b>）就判定为该品牌，所以把品牌名、英文名、系列缩写都写进来。
+              留空 = 永不自动识别，只能在编辑器里手动选品牌。
+            </small>
+          </div>
+          <div className="row">
+            <button
+              type="button"
+              className="primary"
+              disabled={brandBusy || !newBrandFile}
+              onClick={() => void handleAddBrand()}
+            >
+              添加品牌
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {brands.length === 0 ? (
         <div className="empty">还没有品牌，先上传一张 Logo 并填上名称。</div>
       ) : (
         <div className="watermark-list">
-          {brands.map((meta) => (
-            <div className="watermark-row watermark-row--brand" key={meta.id}>
-              <span className="watermark-row__thumb">
-                {brandThumbs[meta.id] ? (
-                  <img src={brandThumbs[meta.id]} alt="" />
-                ) : (
-                  <span className="watermark-row__thumb-empty" />
-                )}
-              </span>
+          {brands.map((meta) => {
+            const expanded = editingBrandId === meta.id;
+            const keywords = (brandDraftKeywords[meta.id] ?? meta.keywords.join(', ')).trim();
+            return (
+              <div
+                className={`watermark-row watermark-row--brand${expanded ? ' watermark-row--editing' : ''}`}
+                key={meta.id}
+              >
+                <span className="watermark-row__thumb">
+                  {brandThumbs[meta.id] ? (
+                    <img src={brandThumbs[meta.id]} alt="" />
+                  ) : (
+                    <span className="watermark-row__thumb-empty" />
+                  )}
+                </span>
 
-              <span className="watermark-row__brand-fields">
-                <input
-                  value={brandDraftNames[meta.id] ?? meta.name}
-                  spellCheck={false}
-                  placeholder="品牌名称"
-                  onChange={(event) =>
-                    setBrandDraftNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                  }
-                />
-                <input
-                  value={brandDraftKeywords[meta.id] ?? ''}
-                  spellCheck={false}
-                  placeholder="标题关键词（逗号分隔，留空 = 不自动识别）"
-                  onChange={(event) =>
-                    setBrandDraftKeywords((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                  }
-                />
-              </span>
-
-              <span className="watermark-row__size">
-                {meta.width}×{meta.height}
-                {meta.source === 'remote' && meta.slug ? (
-                  <label
-                    className="watermark-row__default"
-                    title="取消勾选后，目录同步既不覆盖也不删除这个品牌当前的 Logo"
-                  >
+                {expanded ? (
+                  <span className="watermark-row__brand-fields">
                     <input
-                      type="checkbox"
-                      checked={!catalogState?.skipped.includes(meta.slug)}
-                      disabled={catalogBusy}
+                      value={brandDraftNames[meta.id] ?? meta.name}
+                      spellCheck={false}
+                      placeholder="品牌名称"
                       onChange={(event) =>
-                        void handleCatalogToggle(meta.slug as string, event.target.checked)
+                        setBrandDraftNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
                       }
                     />
-                    同步
-                  </label>
-                ) : null}
-              </span>
+                    <input
+                      value={brandDraftKeywords[meta.id] ?? ''}
+                      spellCheck={false}
+                      placeholder="标题关键词（逗号分隔，留空 = 不自动识别）"
+                      onChange={(event) =>
+                        setBrandDraftKeywords((previous) => ({ ...previous, [meta.id]: event.target.value }))
+                      }
+                    />
+                  </span>
+                ) : (
+                  // Collapsed: the two things you actually read at a glance — who
+                  // this brand is, and what text would trigger it.
+                  <span className="watermark-row__brand-summary">
+                    <strong className="watermark-row__brand-name">{meta.name}</strong>
+                    <span className="watermark-row__brand-keywords">
+                      {keywords === '' ? '无关键词（不会自动识别）' : keywords}
+                    </span>
+                  </span>
+                )}
 
-              <button type="button" onClick={() => void handleSaveBrandRow(meta.id)}>
-                保存
-              </button>
-              <button type="button" onClick={() => void handleRemoveBrand(meta)}>
-                删除
-              </button>
-            </div>
-          ))}
+                {expanded ? (
+                  <span className="watermark-row__size">
+                    {meta.width}×{meta.height}
+                    {meta.source === 'remote' && meta.slug ? (
+                      <label
+                        className="watermark-row__default"
+                        title="取消勾选后，目录同步既不覆盖也不删除这个品牌当前的 Logo"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!catalogState?.skipped.includes(meta.slug)}
+                          disabled={catalogBusy}
+                          onChange={(event) =>
+                            void handleCatalogToggle(meta.slug as string, event.target.checked)
+                          }
+                        />
+                        同步
+                      </label>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span className="watermark-row__size">
+                    {meta.source === 'remote' ? '目录同步' : '手动上传'}
+                  </span>
+                )}
+
+                {expanded ? (
+                  <>
+                    <button type="button" className="primary" onClick={() => void handleSaveBrandRow(meta.id)}>
+                      保存
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button link-button--danger"
+                      onClick={() => void handleRemoveBrand(meta)}
+                    >
+                      删除
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      title="收起，不改动任何设置"
+                      onClick={() => setEditingBrandId(null)}
+                    >
+                      收起
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setEditingBrandId(meta.id)}>
+                    编辑
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -828,9 +828,98 @@ button.primary:hover:not(:disabled) {
   user-select: none;
 }
 
+/* ------------------------------------------------------------ brand rows */
+
+/* Collapsed row = logo + name + keywords: enough to answer "is this brand
+   registered right?" without opening anything. Expanded row swaps the summary
+   for the two inputs and grows its action set. */
+.watermark-row--editing {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  background: #f7f9fc;
+}
+
+.watermark-row__brand-summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.watermark-row__brand-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watermark-row__brand-keywords {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two stacked inputs when expanded — the name on top, the keywords under it. */
+.watermark-row__brand-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.watermark-row__brand-fields input {
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* The "add brand" form, opened from one button. */
+.brand-form {
+  padding: 10px 12px 2px;
+  margin: 0 0 14px;
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .status-line--tight {
   margin-top: 8px;
   padding-top: 8px;
+}
+
+/* A text button: reads as a link, acts as a button. Used for "收起", "镜像设置",
+   "删除" — the actions that must stay available without competing with the one
+   real action in the row. */
+.link-button {
+  padding: 0;
+  color: #4b5563;
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover:not(:disabled) {
+  color: #1f2937;
+}
+
+.link-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.link-button--danger {
+  color: #b42318;
+}
+
+.link-button--danger:hover:not(:disabled) {
+  color: #7a1a12;
 }
 
 /* ------------------------------------------------------------ brand catalog */
@@ -843,16 +932,28 @@ button.primary:hover:not(:disabled) {
   border-radius: 8px;
 }
 
+/* One line by design: who it is, what state it is in, and the two things you can
+   do. The explanation and the mirror override live behind 镜像设置. */
 .catalog-block__head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   margin-bottom: 4px;
 }
 
+.catalog-block__state {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .catalog-block .hint {
   margin: 0 0 8px;
+}
+
+/* Collapsed variant: a single line under the head row, no field block. */
+.hint--tight {
+  font-size: 12px;
 }
 
 /* ------------------------------------------------------------- vision chain */
