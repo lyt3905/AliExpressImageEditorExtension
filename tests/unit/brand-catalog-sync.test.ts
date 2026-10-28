@@ -4,7 +4,7 @@ import type { BrandCatalog } from '../../src/services/brand-catalog/schema';
 import type { BrandCatalogState } from '../../src/services/brand-catalog/state';
 import { applyBrandSync, syncBrandCatalog, type SyncPorts } from '../../src/services/brand-catalog/sync';
 import { planBrandSync } from '../../src/services/brand-catalog/sync-plan';
-import { BRAND_CATALOG_TTL_MS } from '../../src/shared/constants';
+import { BRAND_CATALOG_TTL_MS, BRAND_CATALOG_URLS } from '../../src/shared/constants';
 
 /**
  * Two rules carry most of the weight here and both are about *not* doing damage:
@@ -364,5 +364,31 @@ describe('syncBrandCatalog', () => {
 
     const forced = await syncBrandCatalog({ ports, ignoreTtl: true });
     expect(forced.ok && forced.result.plan.reason).toBe('sync');
+  });
+
+  it('tries the self-hosted mirror first, without dropping the built-in ones', async () => {
+    const { ports } = syncHarness({ catalog: catalog([{ id: 'a' }], 4) });
+    const seen: string[][] = [];
+    ports.fetchCatalog = async (options) => {
+      seen.push([...options.baseUrls]);
+      return { catalog: catalog([{ id: 'a' }], 4), baseUrl: 'https://mine.test/catalog/', attempts: [] };
+    };
+    const outcome = await syncBrandCatalog({ ports, extraBaseUrls: ['https://mine.test/catalog/'] });
+    expect(outcome.ok).toBe(true);
+    // The seller's mirror is first, the built-in defaults still follow as fallback.
+    expect(seen[0][0]).toBe('https://mine.test/catalog/');
+    for (const builtIn of BRAND_CATALOG_URLS) expect(seen[0]).toContain(builtIn);
+  });
+
+  it('does not duplicate a mirror that is also a built-in', async () => {
+    const builtIn = BRAND_CATALOG_URLS[0];
+    const { ports } = syncHarness({ catalog: catalog([{ id: 'a' }], 1) });
+    let urls: string[] = [];
+    ports.fetchCatalog = async (options) => {
+      urls = [...options.baseUrls];
+      return { catalog: catalog([{ id: 'a' }], 1), baseUrl: builtIn, attempts: [] };
+    };
+    await syncBrandCatalog({ ports, extraBaseUrls: [builtIn] });
+    expect(urls.filter((entry) => entry === builtIn)).toHaveLength(1);
   });
 });

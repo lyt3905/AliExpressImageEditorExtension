@@ -32,6 +32,8 @@ export interface VisionSettings {
 export interface ExtensionSettings {
   serverUrl: string;
   username: string;
+  /** Self-hosted / business-mirror URL for the brand catalog. Empty = built-in mirrors only. */
+  brandCatalogUrl: string;
   vision: VisionSettings;
 }
 
@@ -52,6 +54,7 @@ const DEFAULT_VISION: VisionSettings = {
 const DEFAULT_SETTINGS: ExtensionSettings = {
   serverUrl: DEFAULT_SERVER_URL,
   username: '',
+  brandCatalogUrl: '',
   vision: { ...DEFAULT_VISION },
 };
 
@@ -80,6 +83,10 @@ export async function loadSettings(): Promise<ExtensionSettings> {
     return {
       serverUrl: value?.serverUrl?.trim() || DEFAULT_SETTINGS.serverUrl,
       username: value?.username?.trim() || '',
+      // Not falling back to a default: an empty string is the meaningful value
+      // ("use the built-in mirrors"). Kept as written; validity is checked where
+      // it is used, not here.
+      brandCatalogUrl: typeof value?.brandCatalogUrl === 'string' ? value.brandCatalogUrl.trim() : '',
       vision: normalizeVision(value?.vision),
     };
   } catch {
@@ -92,6 +99,9 @@ export async function saveSettings(settings: Partial<ExtensionSettings>): Promis
   const next: ExtensionSettings = {
     serverUrl: settings.serverUrl?.trim() || current.serverUrl,
     username: settings.username?.trim() ?? current.username,
+    // `''` is a deliberate value here (clear the mirror), so only `undefined`
+    // means "leave it alone" — the same reason username uses `??`, not `||`.
+    brandCatalogUrl: settings.brandCatalogUrl?.trim() ?? current.brandCatalogUrl,
     // Merged field by field: the Options page may save only the vision block, and a
     // wholesale replace would silently blank the server URL.
     vision: settings.vision

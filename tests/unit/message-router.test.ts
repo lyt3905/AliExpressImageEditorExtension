@@ -36,11 +36,13 @@ function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers
     getSettings: async () => ({
       serverUrl: 'https://cutout.test',
       username: 'admin',
+      brandCatalogUrl: '',
       vision: { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
     }),
     saveSettings: async (payload) => ({
       serverUrl: payload.serverUrl,
       username: payload.username,
+      brandCatalogUrl: payload.brandCatalogUrl ?? '',
       vision: payload.vision
         ? {
             baseUrl: payload.vision.baseUrl ?? 'http://127.0.0.1:8788/v1',

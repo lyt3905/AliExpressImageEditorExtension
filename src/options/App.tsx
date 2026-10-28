@@ -49,7 +49,14 @@ function formatTimestamp(at: number): string {
 
 function catalogMirrorLabel(baseUrl: string | null): string {
   if (!baseUrl) return '';
-  return baseUrl.includes('jsdelivr') ? 'jsDelivr 镜像' : 'raw.githubusercontent.com';
+  if (baseUrl.includes('jsdelivr')) return 'jsDelivr 镜像';
+  if (baseUrl.includes('raw.githubusercontent.com')) return 'raw.githubusercontent.com';
+  // A URL the seller typed in themselves — show its host, not "raw.github…".
+  try {
+    return `${new URL(baseUrl).host}（自填）`;
+  } catch {
+    return baseUrl;
+  }
 }
 
 export function OptionsApp(): JSX.Element {
@@ -94,6 +101,8 @@ export function OptionsApp(): JSX.Element {
   const [catalogState, setCatalogState] = useState<BrandCatalogState | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogStatus, setCatalogStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
+  /** Draft for the self-hosted catalog URL; `''` = use the built-in mirrors only. */
+  const [catalogUrl, setCatalogUrl] = useState('');
 
   const refreshAuthState = useCallback(async () => {
     try {
@@ -128,6 +137,7 @@ export function OptionsApp(): JSX.Element {
       if (response?.ok && response.data) {
         setServerUrl(response.data.serverUrl);
         setUsername(response.data.username);
+        setCatalogUrl(response.data.brandCatalogUrl ?? '');
         if (response.data.vision) {
           setVisionBaseUrl(response.data.vision.baseUrl);
           setVisionModel(response.data.vision.model);
@@ -183,7 +193,11 @@ export function OptionsApp(): JSX.Element {
     setCatalogBusy(true);
     setCatalogStatus({ kind: 'idle', text: '正在从 GitHub 读取品牌目录…' });
     try {
-      const outcome = await syncBrandCatalog({ ignoreTtl: true });
+      const mirror = catalogUrl.trim();
+      const outcome = await syncBrandCatalog({
+        ignoreTtl: true,
+        ...(mirror ? { extraBaseUrls: [mirror] } : {}),
+      });
       if (!outcome.ok) {
         setCatalogStatus({ kind: 'bad', text: `同步失败：${outcome.error}` });
         await refreshCatalogState();
@@ -229,7 +243,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setCatalogBusy(false);
     }
-  }, [refreshBrands, refreshCatalogState]);
+  }, [refreshBrands, refreshCatalogState, catalogUrl]);
 
   const handleCatalogToggle = useCallback(async (slug: string, enabled: boolean) => {
     const next = await setBrandCatalogSkipped(slug, !enabled);
@@ -336,6 +350,7 @@ export function OptionsApp(): JSX.Element {
           serverUrl,
           username,
           ...(password ? { password } : {}),
+          brandCatalogUrl: catalogUrl.trim(),
           vision: { baseUrl: visionBaseUrl, model: visionModel, apiKey: visionApiKey },
         },
       });
@@ -349,7 +364,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [password, serverUrl, username, visionApiKey, visionBaseUrl, visionModel]);
+  }, [password, serverUrl, username, visionApiKey, visionBaseUrl, visionModel, catalogUrl]);
 
   // ---- watermark management
 
@@ -713,6 +728,22 @@ export function OptionsApp(): JSX.Element {
             上次同步失败：{catalogState.lastError}
           </div>
         ) : null}
+        <div className="field">
+          <label htmlFor="catalog-url">自填目录地址（可选）</label>
+          <input
+            id="catalog-url"
+            value={catalogUrl}
+            spellCheck={false}
+            disabled={catalogBusy}
+            onChange={(event) => setCatalogUrl(event.target.value)}
+            placeholder="https://你的域名/catalog/"
+          />
+          <small>
+            国内访问 GitHub 不稳时，把这个仓库的 <code>catalog/</code> 镜像到别处再填这里。
+            同步会先试它、失败再回落到内置镜像。留空 = 只用内置镜像。改完点上面的「设置」区保存，
+            或直接「立即同步」按当前输入试一次。只接受 HTTPS（本机 <code>127.0.0.1</code> 可用 HTTP）。
+          </small>
+        </div>
       </div>
 
       <div className="field">

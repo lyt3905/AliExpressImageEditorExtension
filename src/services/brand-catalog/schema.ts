@@ -233,6 +233,23 @@ export function resolveLogoUrl(baseUrl: string, file: string): string {
   return resolved.toString();
 }
 
+/**
+ * Whether a catalog base URL is one this extension may fetch from.
+ *
+ * Same rule the resolver enforces, exported so the Options page can refuse a
+ * typo before it saves, rather than surfacing "品牌目录地址不是合法 URL" from a
+ * background sync the seller never sees. Loopback HTTP stays allowed for local
+ * catalog hosting — see `parseCatalogBase`.
+ */
+export function isAllowedCatalogBase(baseUrl: string): boolean {
+  try {
+    parseCatalogBase(baseUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseCatalogBase(baseUrl: string): URL {
   let base: URL;
   try {

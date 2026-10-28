@@ -67,6 +67,8 @@ export interface SyncPorts {
 export interface SyncBrandCatalogOptions {
   /** The Options page button means "now", not "in a day". */
   ignoreTtl?: boolean;
+  /** Extra catalog URL to try before the built-in mirrors (a self-hosted copy). */
+  extraBaseUrls?: readonly string[];
   ports?: SyncPorts;
 }
 
@@ -148,7 +150,7 @@ export async function syncBrandCatalog(
 
   const state = await loadState();
   const ttlState = options.ignoreTtl ? { ...state, syncedAt: 0 } : state;
-  const baseUrls = brandCatalogBaseUrls(state);
+  const baseUrls = mergeBaseUrls(options.extraBaseUrls ?? [], brandCatalogBaseUrls(state));
 
   let fetched: { catalog: BrandCatalog; baseUrl: string; attempts: CatalogAttempt[] };
   try {
@@ -188,4 +190,14 @@ export async function syncBrandCatalog(
     ok: true,
     result: { plan, ...applied, attempts: fetched.attempts },
   };
+}
+
+/**
+ * Prepend the seller's own catalog URL to the mirror list, without duplicates.
+ *
+ * The last-used mirror goes right after it: if the self-hosted copy is down, the
+ * run still falls back to whatever worked before rather than starting over.
+ */
+function mergeBaseUrls(extra: readonly string[], base: readonly string[]): string[] {
+  return [...new Set([...extra, ...base])];
 }

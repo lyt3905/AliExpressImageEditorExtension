@@ -35,6 +35,8 @@ import {
   type LogoPlacementMap,
 } from '../services/logo-placement';
 import { listBrands, loadBrandLogo, matchBrandByTitle } from '../services/brand-store';
+import { syncBrandCatalog } from '../services/brand-catalog/sync';
+import { claimSilentSyncAttempt } from '../services/brand-catalog/silent-sync';
 import { putBlob, getBlob } from '../services/indexed-db';
 import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
@@ -141,35 +143,72 @@ export function App(): JSX.Element {
   const [brandMaterials, setBrandMaterials] = useState<EditorMaterial[]>([]);
   const [activeBrandId, setActiveBrandId] = useState<string | null>(null);
 
+  /**
+   * Load the brand registry into memory, mapping each logo blob to an
+   * `EditorMaterial`. Extracted so the silent sync below can re-run it after it
+   * changes the registry — without that, a first-ever visitor would see the list
+   * they loaded before the sync landed and have to reload the page.
+   */
+  const loadBrandMaterials = useCallback(async (): Promise<void> => {
+    const list = await listBrands();
+    setBrands(list);
+    if (list.length === 0) {
+      setBrandMaterials([]);
+      return;
+    }
+    const loaded: EditorMaterial[] = [];
+    for (const brand of list) {
+      const blob = await loadBrandLogo(brand);
+      if (!blob) continue;
+      // Reuse the shared blob store: brand materials survive like cutouts.
+      await putBlob(brand.logoBlobId, blob).catch(() => undefined);
+      loaded.push({
+        id: `material-brand-${brand.id}`,
+        imageId: `brand-${brand.id}`,
+        blobId: brand.logoBlobId,
+        kind: 'brand',
+        width: brand.width,
+        height: brand.height,
+        url: URL.createObjectURL(blob),
+        label: `品牌：${brand.name}`,
+      });
+    }
+    setBrandMaterials(loaded);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const list = await listBrands();
-      if (cancelled || list.length === 0) return;
-      setBrands(list);
-      const loaded: EditorMaterial[] = [];
-      for (const brand of list) {
-        const blob = await loadBrandLogo(brand);
-        if (!blob || cancelled) continue;
-        // Reuse the shared blob store: brand materials survive like cutouts.
-        await putBlob(brand.logoBlobId, blob).catch(() => undefined);
-        loaded.push({
-          id: `material-brand-${brand.id}`,
-          imageId: `brand-${brand.id}`,
-          blobId: brand.logoBlobId,
-          kind: 'brand',
-          width: brand.width,
-          height: brand.height,
-          url: URL.createObjectURL(blob),
-          label: `品牌：${brand.name}`,
-        });
+      /*
+        Sync the catalog first, then read the registry — but never let the sync
+        delay the first paint for long. It gets one shot per tab
+        (`claimSilentSyncAttempt`); if the catalog is already fresh the 24h TTL
+        makes this a single storage read, and if GitHub is unreachable the 15s
+        timeout ends in the catch below. Either way the editor renders with
+        whatever the local registry already holds.
+      */
+      if (claimSilentSyncAttempt()) {
+        try {
+          const settings = await loadSettings();
+          const outcome = await syncBrandCatalog(
+            settings.brandCatalogUrl ? { extraBaseUrls: [settings.brandCatalogUrl] } : {},
+          );
+          // Failures are already recorded in `lastError` for the Options page; a
+          // background toast for "GitHub unreachable" would only worry the seller.
+          if (outcome.ok && outcome.result.added.length === 0) {
+            return; // nothing new — keep the (already loaded) list, skip the reload
+          }
+        } catch {
+          /* silent: see comment above */
+        }
       }
-      if (!cancelled) setBrandMaterials(loaded);
+      if (cancelled) return;
+      await loadBrandMaterials();
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadBrandMaterials]);
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => createEditorState());
   // Raw setter: always go through `showNotice` so the dismiss timer is armed.

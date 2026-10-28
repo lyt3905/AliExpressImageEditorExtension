@@ -279,7 +279,12 @@ const handlers: MessageHandlers = {
   },
 
   async saveSettings(payload) {
-    const next = await saveSettings({ serverUrl: payload.serverUrl, username: payload.username });
+    const next = await saveSettings({
+      serverUrl: payload.serverUrl,
+      username: payload.username,
+      // Omitted (undefined) = leave the stored mirror alone; `''` clears it.
+      ...(payload.brandCatalogUrl !== undefined ? { brandCatalogUrl: payload.brandCatalogUrl } : {}),
+    });
     if (payload.password) {
       await saveCredentials({ serverUrl: next.serverUrl, username: next.username, password: payload.password });
     }

@@ -81,6 +81,8 @@ export interface SaveSettingsMessage {
     serverUrl: string;
     username: string;
     password?: string;
+    /** Self-hosted brand-catalog URL; `''` clears it, omitted leaves it unchanged. */
+    brandCatalogUrl?: string;
     vision?: { baseUrl?: string; model?: string; apiKey?: string };
   };
 }

@@ -659,7 +659,7 @@ AliExpressImageEditorExtension/
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
-│  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state
+│  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
 │  ├─ unit/                      # 42 文件 / 695 个单元测试（不联网）
@@ -679,7 +679,9 @@ AliExpressImageEditorExtension/
 - 目录 = `catalog/brands.json` + `catalog/logos/<slug>.png`；加品牌/换图的步骤见
   [`catalog/README.md`](catalog/README.md)，改完跑 `npm run catalog:bump`（自动算 sha256、version +1）。
 - 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」，也支持每个远程品牌单独关掉同步；
-  工具栏打开编辑器时同样会同步（24 小时内不重复请求）。
+  **打开编辑器时**也会静默同步（24 小时内不重复请求；同一标签页最多试一次，失败不弹窗，只记录在选项页）。
+- **自填镜像**：国内拉 GitHub 不稳时，把仓库 `catalog/` 镜像到自己的域名，填在选项页「自填目录地址」里，
+  同步会先试它、失败再回落内置镜像。只接受 HTTPS（本机 `127.0.0.1` 可用 HTTP）。
 - 真相源仍是**本地注册表**：拉不到目录时照旧用工牌缓存，不阻塞任何操作。
 - 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
   目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
@@ -816,6 +818,9 @@ AliExpressImageEditorExtension/
 19. 品牌 Logo 的锁定只挡**画布上的误操作**（点不中、拖不动），不挡删除：锁着的 Logo 仍可在图层面板点 ✕
     删掉，切品牌也会先删掉旧 Logo。位置记忆按品牌存在 `aiee:logo-placement`，没有"恢复默认位置"的按钮 ——
     拖歪了只能自己拖回去（清了这条存储就会回到右下角默认位）。
+20. 自填镜像地址**不会**自动申请跨域权限：填的是一个新域名、而它又不在 `host_permissions` 里，
+    请求会被浏览器拦下（表现就是同步失败）。要嘛把域名配进 manifest，要嘛继续用内置的 GitHub /
+    jsDelivr 两个镜像。**动态申请权限（`optional_host_permissions`）是下一步的事，本次没做。**
 
 ---
 
@@ -824,7 +829,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（44 文件 / 700 测试，其中 695 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（46 文件 / 709 测试，其中 704 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -837,7 +842,7 @@ AliExpressImageEditorExtension/
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
-| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则，共 35 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
+| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 自填镜像排序去重 / 静默同步按标签页限一次，共 42 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 | 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 

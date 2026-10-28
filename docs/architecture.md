@@ -1014,6 +1014,37 @@ npm run catalog:bump    # version + 1，然后同上
 - 真网络没有自动测试：`catalog/brands.json` 里的图来自卖家给的品牌 Logo，改目录后靠
   `npm run check:catalog` 兜住；两个镜像能连是手工验过的（见 §11.5）。
 
+### 11.9 打开编辑器时的静默同步
+
+第一步（10.5.0）只有选项页一个「立即同步」按钮。第二步把它接进编辑器的启动流程，并允许
+卖家自填一个镜像 —— 这两件事的难点都不在"调一次 `syncBrandCatalog`"。
+
+**一次每次打开都同步是错的。** 目录本身有 24h TTL（`planBrandSync` 里 `now - syncedAt < TTL`
+直接返回 `fresh`），所以成功的同步不会重复。但**失败的**不会：`syncBrandCatalog` 在拿不到目录时
+只写 `lastError`、`syncedAt` 原地不动 —— 这是对的（下次还得重试），于是"GitHub 被墙"那天，
+每开一个商品页就多一次 15s 超时。卖家一天开几十个页面。
+
+所以加了 `src/services/brand-catalog/silent-sync.ts` 的 `claimSilentSyncAttempt()`：模块作用域
+一个布尔值，**每个标签页只给一次机会**，刷新页面重置。它不落盘、不跨标签页共享 —— 这是特性
+不是缺陷：频繁开关页面属于刷新，值得再试；同一页面里的重渲染不该再发一次网络请求。
+
+顺序上先同步、后读注册表，但同步永远不阻塞首屏：`syncBrandCatalog` 内部有 15s 上限，超时或
+抛错都进同一个 `catch`，编辑器照常渲染本地已有的品牌。
+
+**自填镜像**（`extraBaseUrls`）排在所有内置镜像之前，内置的仍跟在后面当兜底 —— "自己搭的镜像
+先试，挂了还能落回 GitHub"。`isAllowedCatalogBase()` 把 `resolveCatalogBase` 的校验规则导出给
+选项页，让卖家输错地址时当场就看到红字，而不是等到后台某次同步静默失败。字段存在
+`ExtensionSettings.brandCatalogUrl`，`''` 表示"只用内置镜像"、`undefined` 表示"别动它"——
+`saveSettings` 用 `??` 而不是 `||` 就是为了让 `''` 能真的清空。
+
+### 11.10 测试边界（静默同步）
+
+- `tests/unit/brand-catalog-sync.test.ts` 加了「自填镜像排在首位且内置不丢」「重复地址去重」两例；
+- `tests/unit/brand-catalog-base.test.ts`：`isAllowedCatalogBase` 放行 https / loopback、拒绝公网
+  http 与垃圾输入，并断言它与 `resolveCatalogUrl` 对同一地址的判断一致（避免"存得下、同步却拒"）；
+- `tests/unit/silent-sync.test.ts`：一次标签页只给一次机会；新模块实例（新标签页）重新放行。
+- 编辑器启动时的真实时序（首屏不等同步、失败静默）只能手工验，步骤见 `docs/manual-test.md` 5.74。
+
 ## 12. 本地缓存：同一套素材不重算第二遍
 
 ### 12.1 为什么要有它

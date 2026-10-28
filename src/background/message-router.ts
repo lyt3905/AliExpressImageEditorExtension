@@ -16,6 +16,8 @@ export type SaveSettingsPayload = {
   serverUrl: string;
   username: string;
   password?: string;
+  /** Self-hosted catalog URL; `''` clears it. Omitted = leave unchanged. */
+  brandCatalogUrl?: string;
   vision?: Partial<VisionSettings>;
 };
 
