@@ -186,7 +186,7 @@ export const STORAGE_KEYS = {
    * there instead of re-waiting out a timeout on a gateway known to be down.
    */
   visionPin: 'aiee:vision-pin',
-  /** Brand registry: [{ id, name, aliases, keywords, logoBlobId, ... }]. */
+  /** Brand registry: [{ id, name, keywords[], logoBlobId, ... }]. */
   brands: 'aiee:brands',
   /** Sync bookkeeping for the remote brand catalog (version / last sync / mirror). */
   brandCatalog: 'aiee:brand-catalog',

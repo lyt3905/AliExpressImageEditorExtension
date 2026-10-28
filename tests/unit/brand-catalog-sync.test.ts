@@ -25,7 +25,6 @@ function catalog(
     brands: brands.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
-      aliases: [],
       keywords: [],
       logo: { file: `logos/${entry.id}.png` },
       rev: entry.rev ?? `v${version}`,
@@ -41,7 +40,6 @@ function localBrand(overrides: Partial<BrandMeta> = {}): BrandMeta {
   return {
     id: 'brand-logo-abc',
     name: 'Local Brand',
-    aliases: [],
     keywords: [],
     logoBlobId: 'brand-logo-abc',
     width: 100,
@@ -55,7 +53,6 @@ function remoteBrand(slug: string, rev: string, overrides: Partial<BrandMeta> = 
   return {
     id: `remote-${slug}`,
     name: slug,
-    aliases: [],
     keywords: [],
     logoBlobId: `brand-logo-remote-${slug}`,
     width: 100,
@@ -254,7 +251,6 @@ describe('applyBrandSync', () => {
             {
               id: 'a',
               name: 'A',
-              aliases: [],
               keywords: [],
               logo: { file: 'logos/a.png', sha256: 'c'.repeat(64) },
               rev: 'r1',

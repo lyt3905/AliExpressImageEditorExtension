@@ -657,7 +657,7 @@ AliExpressImageEditorExtension/
 │  ├─ brand-catalog.mjs          # 校验 / 生成 catalog/brands.json（算 sha256、升 version）
 │  └─ check-dist.mjs             # 构建后校验 dist/ 完整性（构建脚本已调用）
 ├─ catalog/                      # 品牌目录（在线读取的公开数据，改完推 main 即生效）
-│  ├─ brands.json                # 清单：id / name / aliases / keywords / logo.file / sha256
+│  ├─ brands.json                # 清单：id / name / keywords[] / logo.file / sha256
 │  ├─ logos/                     # 每个品牌一张图
 │  └─ README.md                  # 怎么加品牌、字段含义、硬限制
 ├─ vite.config.ts                # UI 构建（editor + options，负责清空 dist 并复制 public/）
@@ -675,7 +675,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 45 文件 / 725 个单元测试（不联网）
+│  ├─ unit/                      # 45 文件 / 730 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -691,6 +691,10 @@ AliExpressImageEditorExtension/
 
 - 目录 = `catalog/brands.json` + `catalog/logos/<slug>.png`；加品牌/换图的步骤见
   [`catalog/README.md`](catalog/README.md)，改完跑 `npm run catalog:bump`（自动算 sha256、version +1）。
+- **每条品牌只有两样东西**：`name`（显示名，用来区分不同品牌，也显示在编辑器下拉里）和
+  `keywords`（**唯一**参与标题匹配的列表，不区分大小写的子串判断）。名称不参与匹配 ——
+  叫「魔方」的品牌不该因为标题里出现「魔方」就被认领，想让哪个叫法能命中就把它写进关键词。
+  关键词留空 = 永不自动识别，只能在编辑器里手动选品牌。
 - 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」，也支持每个远程品牌单独关掉同步；
   **打开编辑器时**也会静默同步（24 小时内不重复请求；同一标签页最多试一次，失败不弹窗，只记录在选项页）。
 - **自填镜像**：国内拉 GitHub 不稳时，把仓库 `catalog/` 镜像到自己的域名，填在选项页「自填目录地址」里，
@@ -698,7 +702,7 @@ AliExpressImageEditorExtension/
 - 真相源仍是**本地注册表**：拉不到目录时照旧用工牌缓存，不阻塞任何操作。
 - 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
   目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
-- 本地优先：手工上传的同名品牌、你在选项页改过名称/别名的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
+- 本地优先：手工上传的同名品牌、你在选项页改过名称/关键词的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
 - 读的是**功能分支**（`BRAND_CATALOG_REF = 'feat/ai-image-generation'`，功能还没发版）。合并到 `main`
   之后必须把该常量改回 `main`，否则删分支会连带断掉所有已装插件的同步。
 
@@ -848,7 +852,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（47 文件 / 730 测试，其中 725 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（47 文件 / 735 测试，其中 730 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -861,10 +865,11 @@ AliExpressImageEditorExtension/
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
-| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 自填镜像排序去重 / 静默同步按标签页限一次，共 42 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
+| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 | 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 | 视觉接口三项保存（10.8.1 修复） | **仅自动化验证**（3 个单测：只补一个字段时其余两项保留、单独存视觉不动账号字段、空 Key 回落默认。修复前 `src/background/service-worker.ts` 的 `saveSettings` 处理器漏传 `vision`，值永远存不进去。真机对照步骤见 manual-test 5.78） |
 | 视觉接口多条配置 + 自动切换（10.9.0） | **仅自动化验证**（14 个单测：`resolveVisionConfigs` 的继承与默认回落、`orderByPin` 的三种情况、逐条回退、全挂时抛第一条错误并附其余原因、只 pin 成功者、pin 存储坏掉也照常返回答案、空链拒绝；另 13 个 `settings` 单测锁住「列表整体替换 / 单个对象只改主接口 / 旧对象升级成一条链」。**真网关的两次请求未在 Chrome 里连跑过**，步骤见 manual-test 5.79–5.81） |
+| 品牌只剩「名称 + 关键词」（10.10.0） | **仅自动化验证**（`brandTerms` / `matchBrandByTitle` 锁住「名称永不参与匹配」「没关键词的品牌永不命中」，注册表与目录两侧各 3 例覆盖旧 `aliases` 折进关键词且写回后不复现，`check:catalog` 对残留 `aliases` 只提示不失败。**真机对照**：换成旧版本装过的品牌列表，按原别名仍能识别，步骤见 manual-test 5.83–5.85） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

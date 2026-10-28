@@ -1,8 +1,12 @@
 /**
- * Brand registry logic: alias/keyword parsing and title matching.
+ * Brand registry logic: keyword parsing and title matching.
  *
  * Pure functions over plain data, so the tests run in the node environment
  * without touching chrome.storage or IndexedDB.
+ *
+ * The rule these tests pin down: **only `keywords` match a title.** The display
+ * name tells brands apart. A brand called「魔方」must not be claimed because a
+ * title happens to contain those two characters.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -12,7 +16,6 @@ import { brandTerms, matchBrandByTitle, parseBrandTerms } from '../../src/servic
 function brand(partial: Partial<BrandMeta> & { id: string }): BrandMeta {
   return {
     name: 'Brand',
-    aliases: [],
     keywords: [],
     logoBlobId: 'blob',
     width: 100,
@@ -38,39 +41,45 @@ describe('parseBrandTerms', () => {
 });
 
 describe('brandTerms', () => {
-  it('combines name, aliases and keywords', () => {
-    expect(
-      brandTerms(brand({ id: 'b', name: 'Hasbro', aliases: ['孩之宝'], keywords: ['Transformers'] })),
-    ).toEqual(['Hasbro', '孩之宝', 'Transformers']);
+  it('is the keyword list, not the display name', () => {
+    expect(brandTerms(brand({ id: 'b', name: 'Hasbro', keywords: ['孩之宝', 'Transformers'] }))).toEqual([
+      '孩之宝',
+      'Transformers',
+    ]);
   });
 });
 
 describe('matchBrandByTitle', () => {
   const brands = [
-    brand({ id: 'a', name: 'Morph Toys', aliases: ['MT'], keywords: ['Transformation Galaxy'] }),
-    brand({ id: 'b', name: 'PureSun', aliases: ['PS'], keywords: ['Sunny'] }),
+    brand({ id: 'a', name: 'Morph Toys', keywords: ['Morph Toys', 'MT', 'Transformation Galaxy'] }),
+    brand({ id: 'b', name: 'PureSun', keywords: ['PS', 'Sunny'] }),
   ];
 
-  it('matches the brand name', () => {
-    expect(matchBrandByTitle(brands, 'Morph Toys robot figure')?.id).toBe('a');
+  it('matches a keyword case-insensitively', () => {
+    expect(matchBrandByTitle(brands, 'collector mt edition')?.id).toBe('a');
   });
 
-  it('matches an alias case-insensitively', () => {
-    expect(matchBrandByTitle(brands, 'collector MT edition')?.id).toBe('a');
-  });
-
-  it('matches a keyword', () => {
+  it('matches a multi-word keyword', () => {
     expect(matchBrandByTitle(brands, 'Transformation Galaxy OP Commander')?.id).toBe('a');
+  });
+
+  it('ignores the display name entirely', () => {
+    // "PureSun" is the brand's name only; its keywords are PS / Sunny.
+    expect(matchBrandByTitle(brands, 'PureSun robot figure')).toBeNull();
   });
 
   it('returns null when nothing matches', () => {
     expect(matchBrandByTitle(brands, 'Some other toy brand')).toBeNull();
   });
 
+  it('returns null for a brand with no keywords at all', () => {
+    expect(matchBrandByTitle([brand({ id: 'z', name: '官方马赛克' })], '官方马赛克 灯片')).toBeNull();
+  });
+
   it('returns the first brand in registry order on overlap', () => {
     const overlapping = [
-      brand({ id: 'x', name: 'Galaxy' }),
-      brand({ id: 'y', name: 'Galaxy Toys' }),
+      brand({ id: 'x', name: 'Galaxy', keywords: ['Galaxy'] }),
+      brand({ id: 'y', name: 'Galaxy Toys', keywords: ['Galaxy Toys'] }),
     ];
     expect(matchBrandByTitle(overlapping, 'Galaxy Toys')?.id).toBe('x');
   });

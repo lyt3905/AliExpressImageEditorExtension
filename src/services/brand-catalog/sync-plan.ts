@@ -24,7 +24,6 @@ export interface CatalogSyncItem {
   /** IndexedDB blob id (`brand-logo-remote-<slug>`). */
   logoBlobId: string;
   name: string;
-  aliases: string[];
   keywords: string[];
   /** Absolute, validated URL. */
   url: string;
@@ -123,7 +122,6 @@ export function planBrandSync(input: PlanBrandSyncInput): BrandSyncPlan {
       brandId: remoteBrandId(brand.id),
       logoBlobId: remoteLogoBlobId(brand.id),
       name: brand.name,
-      aliases: brand.aliases,
       keywords: brand.keywords,
       url: resolveLogoUrl(baseUrl, brand.logo.file),
       rev: brand.rev,

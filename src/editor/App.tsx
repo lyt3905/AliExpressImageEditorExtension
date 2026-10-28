@@ -613,8 +613,8 @@ export function App(): JSX.Element {
   //
   // Runs once per session, after the document is hydrated AND the brand logos
   // are loaded (they arrive asynchronously). The title is matched against
-  // every brand's name / aliases / keywords; the logo is appended on top and
-  // locked (see `createLogoLayer`).
+  // every brand's keywords (the display name is not a matching term); the logo
+  // is appended on top and locked (see `createLogoLayer`).
   const brandAutoAppliedRef = useRef(false);
   useEffect(() => {
     if (!hydratedRef.current || brandAutoAppliedRef.current) return;

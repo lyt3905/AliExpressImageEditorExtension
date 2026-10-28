@@ -109,7 +109,6 @@ export async function applyBrandSync(
       upserts.push({
         id: item.brandId,
         name: item.name,
-        aliases: item.aliases,
         keywords: item.keywords,
         logoBlobId: item.logoBlobId,
         width: size.width,

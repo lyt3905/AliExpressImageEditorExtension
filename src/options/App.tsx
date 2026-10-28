@@ -114,14 +114,12 @@ export function OptionsApp(): JSX.Element {
   // ---- brand registry state
   const [brands, setBrands] = useState<BrandMeta[]>([]);
   const [brandDraftNames, setBrandDraftNames] = useState<Record<string, string>>({});
-  const [brandDraftAliases, setBrandDraftAliases] = useState<Record<string, string>>({});
   const [brandDraftKeywords, setBrandDraftKeywords] = useState<Record<string, string>>({});
   const [brandThumbs, setBrandThumbs] = useState<Record<string, string>>({});
   const [brandStatus, setBrandStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   const [brandBusy, setBrandBusy] = useState(false);
   /** Draft for the "add brand" form. */
   const [newBrandName, setNewBrandName] = useState('');
-  const [newBrandAliases, setNewBrandAliases] = useState('');
   const [newBrandKeywords, setNewBrandKeywords] = useState('');
   const [newBrandFile, setNewBrandFile] = useState<File | null>(null);
   const brandFileInputRef = useRef<HTMLInputElement>(null);
@@ -195,7 +193,6 @@ export function OptionsApp(): JSX.Element {
     const list = await listBrands();
     setBrands(list);
     setBrandDraftNames(Object.fromEntries(list.map((entry) => [entry.id, entry.name])));
-    setBrandDraftAliases(Object.fromEntries(list.map((entry) => [entry.id, entry.aliases.join(', ')])));
     setBrandDraftKeywords(Object.fromEntries(list.map((entry) => [entry.id, entry.keywords.join(', ')])));
     return list;
   }, []);
@@ -526,13 +523,11 @@ export function OptionsApp(): JSX.Element {
       const meta = await saveBrand({
         file: newBrandFile,
         name: newBrandName || newBrandFile.name.replace(/\.[^.]+$/, ''),
-        aliases: parseBrandTerms(newBrandAliases),
         keywords: parseBrandTerms(newBrandKeywords),
       });
       await refreshBrands();
       setBrandStatus({ kind: 'ok', text: `已添加品牌「${meta.name}」` });
       setNewBrandName('');
-      setNewBrandAliases('');
       setNewBrandKeywords('');
       setNewBrandFile(null);
       if (brandFileInputRef.current) brandFileInputRef.current.value = '';
@@ -541,7 +536,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setBrandBusy(false);
     }
-  }, [newBrandAliases, newBrandFile, newBrandKeywords, newBrandName, refreshBrands]);
+  }, [newBrandFile, newBrandKeywords, newBrandName, refreshBrands]);
 
   const handleSaveBrandRow = useCallback(
     async (id: string) => {
@@ -550,13 +545,12 @@ export function OptionsApp(): JSX.Element {
       setBrands(
         await updateBrand(id, {
           name: brandDraftNames[id],
-          aliases: parseBrandTerms(brandDraftAliases[id] ?? ''),
           keywords: parseBrandTerms(brandDraftKeywords[id] ?? ''),
         }),
       );
       setBrandStatus({ kind: 'ok', text: '已保存品牌修改' });
     },
-    [brandDraftAliases, brandDraftKeywords, brandDraftNames, brands],
+    [brandDraftKeywords, brandDraftNames, brands],
   );
 
   const handleRemoveBrand = useCallback(async (meta: BrandMeta) => {
@@ -824,9 +818,9 @@ export function OptionsApp(): JSX.Element {
 
       <h2>品牌商标</h2>
       <p className="hint">
-        维护「品牌 → Logo」列表。打开编辑器时会用 <strong>名称 / 别名 / 关键词</strong> 匹配商品标题，
+        维护「品牌 → Logo」列表。只有**关键词**参与匹配：打开编辑器时拿关键词去商品标题里找（不区分大小写），
         命中的品牌 Logo 会自动作为图层加到画布上；也可以在编辑器工具栏手动选择。
-        同一品牌的多个称呼都填在「别名」里即可，名称和别名本身就参与匹配。
+        名称只用来区分不同品牌，不参与匹配——把品牌名、英文名、系列缩写都写进关键词即可。
       </p>
 
       <div className="catalog-block">
@@ -907,29 +901,22 @@ export function OptionsApp(): JSX.Element {
           onChange={(event) => setNewBrandName(event.target.value)}
           placeholder="例：Morph Toys"
         />
+        <small>只用来区分不同品牌（这里和编辑器里的品牌下拉显示的就是它），不参与标题匹配。</small>
       </div>
       <div className="field">
-        <label htmlFor="brand-aliases">别名（同品牌的其他叫法，逗号分隔）</label>
-        <input
-          id="brand-aliases"
-          value={newBrandAliases}
-          spellCheck={false}
-          disabled={brandBusy}
-          onChange={(event) => setNewBrandAliases(event.target.value)}
-          placeholder="例：MT, MorphToys, 摩变"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="brand-keywords">标题关键词（可选，逗号分隔）</label>
+        <label htmlFor="brand-keywords">标题关键词（逗号分隔）</label>
         <input
           id="brand-keywords"
           value={newBrandKeywords}
           spellCheck={false}
           disabled={brandBusy}
           onChange={(event) => setNewBrandKeywords(event.target.value)}
-          placeholder="例：Transformation Galaxy, OP Commander"
+          placeholder="例：Morph Toys, MTS, 摩变"
         />
-        <small>标题里出现任一「名称 / 别名 / 关键词」（不区分大小写）即判定为该品牌。</small>
+        <small>
+          标题里出现任一关键词（<b>不区分大小写</b>）就判定为该品牌，所以把品牌名、英文名、系列缩写都写进来。
+          留空 = 永不自动识别，只能在编辑器里手动选品牌。
+        </small>
       </div>
       <div className="row">
         <button type="button" className="primary" disabled={brandBusy || !newBrandFile} onClick={() => void handleAddBrand()}>
@@ -961,17 +948,9 @@ export function OptionsApp(): JSX.Element {
                   }
                 />
                 <input
-                  value={brandDraftAliases[meta.id] ?? ''}
-                  spellCheck={false}
-                  placeholder="别名（逗号分隔）"
-                  onChange={(event) =>
-                    setBrandDraftAliases((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                  }
-                />
-                <input
                   value={brandDraftKeywords[meta.id] ?? ''}
                   spellCheck={false}
-                  placeholder="标题关键词（逗号分隔）"
+                  placeholder="标题关键词（逗号分隔，留空 = 不自动识别）"
                   onChange={(event) =>
                     setBrandDraftKeywords((previous) => ({ ...previous, [meta.id]: event.target.value }))
                   }

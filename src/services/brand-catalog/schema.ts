@@ -50,8 +50,9 @@ export interface CatalogLogo {
 export interface CatalogBrand {
   /** Stable slug — the primary key. Renaming it creates a new brand. */
   id: string;
+  /** Display name, used to tell brands apart. Never used for title matching. */
   name: string;
-  aliases: string[];
+  /** The only strings matched against a product title. */
   keywords: string[];
   logo: CatalogLogo;
   /**
@@ -146,11 +147,28 @@ function readBrand(value: unknown, index: number, version: number): CatalogBrand
   return {
     id,
     name,
-    aliases: readTerms(value.aliases, 'aliases', index),
-    keywords: readTerms(value.keywords, 'keywords', index),
+    // `aliases` was dropped from the format in 10.10.0 (name + keywords only).
+    // A manifest still carrying it — a fork, a mirror, a cached copy — keeps its
+    // words by having them read as keywords instead of being silently ignored.
+    keywords: mergeTerms(
+      readTerms(value.keywords, 'keywords', index),
+      readTerms(value.aliases, 'aliases', index),
+    ),
     logo: sha256 ? { file, sha256 } : { file },
     rev,
   };
+}
+
+/** Union preserving order: `primary` first, then anything new from `legacy`. */
+function mergeTerms(primary: string[], legacy: string[]): string[] {
+  const merged = [...primary];
+  const seen = new Set(merged);
+  for (const term of legacy) {
+    if (seen.has(term)) continue;
+    seen.add(term);
+    merged.push(term);
+  }
+  return merged;
 }
 
 /**

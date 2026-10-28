@@ -38,7 +38,6 @@ function upsert(slug: string, overrides: Partial<BrandMeta> = {}): BrandMeta {
   return {
     id: remoteBrandId(slug),
     name: slug,
-    aliases: [],
     keywords: [],
     logoBlobId: remoteLogoBlobId(slug),
     width: 200,
@@ -107,7 +106,7 @@ describe('mergeRemoteBrands', () => {
     const edited = (await listBrands()).map((entry) => ({
       ...entry,
       name: '摩变玩具',
-      aliases: ['摩变'],
+      keywords: ['摩变'],
       edited: true,
     }));
     await (globalThis as unknown as { chrome: typeof chrome }).chrome.storage.local.set({
@@ -115,12 +114,12 @@ describe('mergeRemoteBrands', () => {
     });
 
     const merged = await mergeRemoteBrands({
-      upserts: [upsert('morph-toys', { name: 'Morph Toys', aliases: ['MT'], remoteRev: 'rev-3' })],
+      upserts: [upsert('morph-toys', { name: 'Morph Toys', keywords: ['MT'], remoteRev: 'rev-3' })],
       removeIds: [],
     });
     expect(merged[0]).toMatchObject({
       name: '摩变玩具',
-      aliases: ['摩变'],
+      keywords: ['摩变'],
       // The logo still refreshes — only the wording is protected.
       remoteRev: 'rev-3',
       edited: true,
@@ -144,5 +143,59 @@ describe('mergeRemoteBrands', () => {
     const local = await saveBrand({ file: pngBlob(), name: 'Hand Made' });
     const merged = await mergeRemoteBrands({ upserts: [], removeIds: [local.id] });
     expect(merged.map((entry) => entry.id)).toEqual([local.id]);
+  });
+});
+
+describe('legacy aliases', () => {
+  /**
+   * 10.9.x stored every brand with an extra `aliases` list, and both the name and
+   * the aliases counted as title keywords. 10.10.0 keeps `name` + `keywords`
+   * only, so the aliases of an already-installed brand have to survive as
+   * keywords — losing them would silently stop detecting those brands.
+   */
+  function legacyBrand(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      name: '魔方',
+      keywords: [],
+      logoBlobId: 'blob-legacy',
+      width: 200,
+      height: 100,
+      createdAt: 1,
+      ...overrides,
+    };
+  }
+
+  it('folds a stored aliases list into keywords', async () => {
+    await (globalThis as unknown as { chrome: typeof chrome }).chrome.storage.local.set({
+      [STORAGE_KEYS.brands]: [legacyBrand({ id: 'legacy-1', aliases: ['MS-TOYS', 'Magic Square'] })],
+    });
+
+    const [entry] = await listBrands();
+    expect(entry.keywords).toEqual(['MS-TOYS', 'Magic Square']);
+    // The dead field must not be handed around any more — a caller writing the
+    // list back would otherwise keep resurrecting it in storage.
+    expect(entry).not.toHaveProperty('aliases');
+  });
+
+  it('appends legacy aliases after keywords and skips duplicates', async () => {
+    await (globalThis as unknown as { chrome: typeof chrome }).chrome.storage.local.set({
+      [STORAGE_KEYS.brands]: [
+        legacyBrand({ id: 'legacy-2', keywords: ['魔方', 'MS-TOYS'], aliases: ['MS-TOYS', 'Magic Square'] }),
+      ],
+    });
+
+    const [entry] = await listBrands();
+    expect(entry.keywords).toEqual(['魔方', 'MS-TOYS', 'Magic Square']);
+  });
+
+  it('tolerates junk in either field', async () => {
+    await (globalThis as unknown as { chrome: typeof chrome }).chrome.storage.local.set({
+      [STORAGE_KEYS.brands]: [
+        legacyBrand({ id: 'legacy-3', keywords: 'nope', aliases: [42, 'Magic Square', '  '] }),
+      ],
+    });
+
+    const [entry] = await listBrands();
+    expect(entry.keywords).toEqual(['Magic Square']);
   });
 });

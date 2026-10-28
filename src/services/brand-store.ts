@@ -28,7 +28,7 @@ function createBrandId(): string {
   return `${BRAND_BLOB_PREFIX}${Date.now().toString(36)}-${random}`;
 }
 
-/** Split a comma/space separated alias string into a clean list. */
+/** Split a comma/space separated keyword string into a clean list. */
 export function parseBrandTerms(raw: string): string[] {
   return Array.from(
     new Set(
@@ -38,6 +38,29 @@ export function parseBrandTerms(raw: string): string[] {
         .filter((entry) => entry.length > 0),
     ),
   );
+}
+
+/**
+ * Read back the `aliases` field that entries stored before 10.10.0 still carry.
+ *
+ * Those entries were written when the name and the aliases both took part in
+ * title matching. Dropping the field on read would silently narrow the matching,
+ * so the words move into `keywords` instead — same detection, one list.
+ */
+function foldLegacyTerms(keywords: unknown, aliases: unknown): string[] {
+  const list = Array.isArray(keywords) ? keywords.filter((entry) => typeof entry === 'string') : [];
+  if (!Array.isArray(aliases)) return list;
+  const seen = new Set(list);
+  for (const entry of aliases) {
+    if (typeof entry !== 'string') continue;
+    const term = entry.trim();
+    // Skip anything already there: a re-read must not keep growing the list.
+    if (term && !seen.has(term)) {
+      seen.add(term);
+      list.push(term);
+    }
+  }
+  return list;
 }
 
 function isBrandMeta(value: unknown): value is BrandMeta {
@@ -60,11 +83,12 @@ export async function listBrands(): Promise<BrandMeta[]> {
     if (!Array.isArray(value)) return [];
     return value
       .filter(isBrandMeta)
-      .map((entry) => ({
-        ...entry,
-        aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
-        keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
-      }))
+      .map((entry) => {
+        // `aliases` is gone as of 10.10.0; entries written before that keep
+        // their words by having them folded into `keywords` on every read.
+        const { aliases: legacyAliases, ...rest } = entry as BrandMeta & { aliases?: unknown };
+        return { ...rest, keywords: foldLegacyTerms(rest.keywords, legacyAliases) };
+      })
       .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
   } catch {
     return [];
@@ -79,7 +103,6 @@ async function writeBrands(list: BrandMeta[]): Promise<void> {
 export async function saveBrand(input: {
   file: Blob;
   name: string;
-  aliases?: string[];
   keywords?: string[];
 }): Promise<BrandMeta> {
   const { file, name } = input;
@@ -107,7 +130,6 @@ export async function saveBrand(input: {
   const meta: BrandMeta = {
     id,
     name: name.trim() || `品牌 ${list.length + 1}`,
-    aliases: input.aliases ?? [],
     keywords: input.keywords ?? [],
     logoBlobId: id,
     width: size.width,
@@ -129,7 +151,7 @@ export async function saveBrand(input: {
 
 export async function updateBrand(
   id: string,
-  patch: Partial<Pick<BrandMeta, 'name' | 'aliases' | 'keywords'>>,
+  patch: Partial<Pick<BrandMeta, 'name' | 'keywords'>>,
 ): Promise<BrandMeta[]> {
   const list = await listBrands();
   const next = list.map((entry) =>
@@ -137,7 +159,6 @@ export async function updateBrand(
       ? {
           ...entry,
           name: patch.name !== undefined ? patch.name.trim() || entry.name : entry.name,
-          aliases: patch.aliases ?? entry.aliases,
           keywords: patch.keywords ?? entry.keywords,
           // A renamed/retagged catalog brand keeps the seller's wording: the
           // next sync refreshes its logo but must not undo these edits.
@@ -202,7 +223,6 @@ export async function mergeRemoteBrands(input: {
           ...(existing.edited
             ? {
                 name: existing.name,
-                aliases: existing.aliases,
                 keywords: existing.keywords,
                 edited: true,
               }
@@ -221,11 +241,13 @@ export async function mergeRemoteBrands(input: {
 /**
  * Every string that identifies a brand in a product title.
  *
- * Name and aliases count too — a brand named "Hasbro" matches a title saying
- * "Hasbro" without the seller repeating it in the keyword box.
+ * Only `keywords` — the name is for telling brands apart, not for claiming a
+ * title. A brand called「魔方」/「三零」/「X社」would otherwise match titles that
+ * have nothing to do with it, and the seller never gets a chance to notice.
+ * Want the display name to count too? Put it in the keyword list as well.
  */
 export function brandTerms(brand: BrandMeta): string[] {
-  return [brand.name, ...brand.aliases, ...brand.keywords];
+  return brand.keywords;
 }
 
 /**

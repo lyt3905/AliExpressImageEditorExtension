@@ -101,7 +101,12 @@ for (const [index, brand] of brands.entries()) {
   } else if (brand.name.length > MAX_NAME) {
     fail(`${at}.name 超过 ${MAX_NAME} 字符`);
   }
-  for (const field of ['aliases', 'keywords']) {
+  if (brand.aliases !== undefined) {
+    note(
+      `${at}.aliases 已废弃（10.10.0 起每条只保留 name + keywords）；扩展仍会把它的内容当关键词读，但请直接写进 keywords`,
+    );
+  }
+  for (const field of ['keywords']) {
     const list = brand[field];
     if (list === undefined) {
       note(`${at}.${field} 缺失，按空数组处理`);

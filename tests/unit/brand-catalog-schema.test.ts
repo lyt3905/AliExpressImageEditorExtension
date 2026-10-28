@@ -25,8 +25,7 @@ function brand(overrides: Record<string, unknown> = {}): Record<string, unknown>
   return {
     id: 'morph-toys',
     name: 'Morph Toys Store',
-    aliases: ['Morph Toys'],
-    keywords: ['morph'],
+    keywords: ['Morph Toys', 'morph'],
     logo: { file: 'logos/morph-toys.png' },
     ...overrides,
   };
@@ -51,7 +50,6 @@ describe('parseBrandCatalog', () => {
       {
         id: 'x',
         name: 'X',
-        aliases: [],
         keywords: [],
         logo: { file: 'logos/x.png' },
         // No sha256 and no rev → the version is the fingerprint, so bumping
@@ -77,9 +75,19 @@ describe('parseBrandCatalog', () => {
 
   it('trims and de-duplicates terms', () => {
     const catalog = parseBrandCatalog(
-      manifest([brand({ aliases: [' MT ', 'MT', 'MorphToys', '  '] })]),
+      manifest([brand({ keywords: [' MT ', 'MT', 'MorphToys', '  '] })]),
     );
-    expect(catalog.brands[0].aliases).toEqual(['MT', 'MorphToys']);
+    expect(catalog.brands[0].keywords).toEqual(['MT', 'MorphToys']);
+  });
+
+  it('reads a legacy aliases list as extra keywords', () => {
+    // 10.9.x manifests still carry `aliases`. They must keep matching, otherwise
+    // a fork or a mirror on the old format silently loses half its terms.
+    const catalog = parseBrandCatalog(
+      manifest([brand({ keywords: ['morph'], aliases: [' MT ', 'morph', 'MorphToys'] })]),
+    );
+    expect(catalog.brands[0].keywords).toEqual(['morph', 'MT', 'MorphToys']);
+    expect(catalog.brands[0]).not.toHaveProperty('aliases');
   });
 
   it('rejects a version that is not a positive integer', () => {

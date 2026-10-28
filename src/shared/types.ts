@@ -271,17 +271,25 @@ export interface WatermarkMeta {
 /**
  * A brand in the registry.
  *
- * `keywords` are the strings matched (case-insensitive, substring) against the
- * product title to auto-detect the brand. `aliases` are other names the same
- * brand is known by — they display in the UI and also act as keywords, so a
- * brand has exactly one matching list to maintain.
+ * Two fields, two jobs, no overlap:
+ *
+ * - `name` is how the brand is *told apart* from the others — the Options page
+ *   list, the editor's brand dropdown, the layer name. It never takes part in
+ *   title matching. A brand called「魔方」must not be claimed just because a
+ *   title happens to contain those two characters.
+ * - `keywords` are the only strings matched (case-insensitive, substring)
+ *   against the product title to auto-detect the brand. Empty means "never
+ *   auto-detected" — the seller picks the brand by hand.
+ *
+ * There is deliberately no `aliases` field any more: two matching lists for one
+ * job made the seller maintain the same word twice. Old entries that still carry
+ * `aliases` are read back as extra keywords (see `brand-store.ts`).
  */
 export interface BrandMeta {
   id: string;
+  /** Display name — distinguishes brands, never used for title matching. */
   name: string;
-  /** Other names this brand goes by; each is also a title keyword. */
-  aliases: string[];
-  /** Extra title keywords beyond name/aliases. */
+  /** The only strings matched against the product title. */
   keywords: string[];
   /** Id of the logo image blob in IndexedDB (same store as product images). */
   logoBlobId: string;
@@ -305,7 +313,7 @@ export interface BrandMeta {
    */
   remoteRev?: string;
   /**
-   * The seller edited name/aliases/keywords by hand after a sync. Kept so the
+   * The seller edited name/keywords by hand after a sync. Kept so the
    * Options page can say so, and so a later catalog change can overwrite it
    * knowingly instead of silently.
    */

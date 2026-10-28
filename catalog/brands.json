@@ -1,14 +1,14 @@
 {
-  "version": 2,
-  "updatedAt": "2026-10-27",
+  "version": 3,
+  "updatedAt": "2026-10-28",
   "brands": [
     {
       "id": "animaster",
       "name": "大漫匠",
-      "aliases": [
+      "keywords": [
+        "大漫匠",
         "AniMester"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/animaster.png",
         "sha256": "5e955e8048df0974924e9545a30c7f7aa059a6267c2cb92ee9bf91af56db2222"
@@ -17,10 +17,10 @@
     {
       "id": "bandai",
       "name": "万代",
-      "aliases": [
+      "keywords": [
+        "万代",
         "BANDAI"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/bandai.png",
         "sha256": "5134a416cdfc5ce32943343219a8503bc5a16370f4877842feb7de388122d2a1"
@@ -29,10 +29,10 @@
     {
       "id": "dlx",
       "name": "DLX",
-      "aliases": [
+      "keywords": [
+        "DLX",
         "DLX Collectible Figure"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/dlx.png",
         "sha256": "b67145611f4dbf78ed34a3738c313ad2a4997f75bdd958cd4bab967a94f913aa"
@@ -41,12 +41,12 @@
     {
       "id": "dr-wu",
       "name": "吴医生",
-      "aliases": [
+      "keywords": [
+        "吴医生",
         "Dr.Wu",
         "DrWu",
         "Dr Wu"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/dr-wu.png",
         "sha256": "29db45c8b73c709fe99a7e0b7cc2124a5029b7edf5e237de282bb77ffb86f1ca"
@@ -55,10 +55,10 @@
     {
       "id": "fans-toys",
       "name": "FansToys",
-      "aliases": [
+      "keywords": [
+        "FansToys",
         "Fans Toys"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/fans-toys.png",
         "sha256": "d11139822b936c0fb84fcab6e063210729ccd11f93e3e36d37eb257a2aa3eb5c"
@@ -67,12 +67,11 @@
     {
       "id": "galaxy-toys",
       "name": "银河玩具社",
-      "aliases": [
+      "keywords": [
+        "银河玩具社",
+        "银河社",
         "Galaxy Toys",
         "Galaxy"
-      ],
-      "keywords": [
-        "银河社"
       ],
       "logo": {
         "file": "logos/galaxy-toys.png",
@@ -82,10 +81,10 @@
     {
       "id": "hasbro",
       "name": "孩之宝",
-      "aliases": [
+      "keywords": [
+        "孩之宝",
         "Hasbro"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/hasbro.png",
         "sha256": "45ab9ae2c66c3ace3f06a55b1915d7a6ce4b947a6f72899de05779819938f0c8"
@@ -94,12 +93,11 @@
     {
       "id": "lucky-cat-toys",
       "name": "招财猫玩具",
-      "aliases": [
+      "keywords": [
+        "招财猫玩具",
+        "激光猫",
         "Lucky Cat Toys",
         "LuckyCat Toys"
-      ],
-      "keywords": [
-        "激光猫"
       ],
       "logo": {
         "file": "logos/lucky-cat-toys.png",
@@ -109,12 +107,12 @@
     {
       "id": "ms-toys",
       "name": "魔方",
-      "aliases": [
+      "keywords": [
+        "魔方",
         "MS-TOYS",
         "MS TOYS",
         "Magic Square"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/ms-toys.png",
         "sha256": "1e5bd84a73ba133bba845d5c9e8a97d5a59db94901f899c3a4127a377e211e26"
@@ -123,7 +121,6 @@
     {
       "id": "official-mosaic",
       "name": "官方马赛克",
-      "aliases": [],
       "keywords": [],
       "logo": {
         "file": "logos/official-mosaic.png",
@@ -133,12 +130,12 @@
     {
       "id": "shfiguarts",
       "name": "SHF",
-      "aliases": [
+      "keywords": [
+        "SHF",
         "S.H.Figuarts",
         "SHFiguarts",
         "S.H. Figuarts"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/shfiguarts.png",
         "sha256": "cd05885675b934727d11afc8e5578ecadff88dc92c6e842af4d10b8ed150c41f"
@@ -147,12 +144,12 @@
     {
       "id": "threezero",
       "name": "三零",
-      "aliases": [
+      "keywords": [
+        "三零",
         "threezero",
         "ThreeZero",
         "three zero"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/threezero.png",
         "sha256": "60ba258210f73c29e1803d4022a4249e8364fe22ca7ee7d15b2535ef991ff233"
@@ -161,11 +158,11 @@
     {
       "id": "x-transbots",
       "name": "X社",
-      "aliases": [
+      "keywords": [
+        "X社",
         "X-TRANSBOTS",
         "XTRANSBOTS"
       ],
-      "keywords": [],
       "logo": {
         "file": "logos/x-transbots.png",
         "sha256": "bef0b6b7871b983adb1449d29c2dd89ce3f1afa4f888d8e10dd1c75f947fd3f7"
