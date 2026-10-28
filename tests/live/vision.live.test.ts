@@ -187,7 +187,7 @@ describe.skipIf(!READY)('vision gateway (live)', () => {
     'binds roles end to end through the binder',
     async () => {
       const binding = await bindMaterialsWithVision({
-        config,
+        configs: [config],
         candidates: [
           { materialId: 'm-product', label: '商品正面图', dataUrl: productPng() },
           { materialId: 'm-box', label: '包装图', dataUrl: boxPng() },
@@ -208,7 +208,7 @@ describe.skipIf(!READY)('vision gateway (live)', () => {
       // The cap question in one test: 6 is what a product page can hold, and the
       // package photo is often the last one. Four distractors in front of it.
       const binding = await bindMaterialsWithVision({
-        config,
+        configs: [config],
         candidates: [
           { materialId: 'm-product', label: '商品正面图', dataUrl: productPng([30, 90, 200]) },
           { materialId: 'm-back', label: '商品背面图', dataUrl: productPng([30, 140, 90]) },

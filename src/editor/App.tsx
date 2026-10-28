@@ -56,6 +56,7 @@ import {
   type CachedBinding,
 } from '../services/compose-cache';
 import { loadSettings } from '../services/settings';
+import { resolveVisionConfigs } from '../services/vision-endpoints';
 import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
 import {
   DEFAULT_TEMPLATE_KEY,
@@ -964,11 +965,18 @@ export function App(): JSX.Element {
     async (options?: { force?: boolean }): Promise<VisionBinding | null> => {
       if (cutouts.length === 0) return null;
       const settings = await loadSettings();
+      const configs = resolveVisionConfigs(settings.vision);
       const bindingKey = bindingKeyFor({
         productCode: session?.productCode ?? null,
         identities: [...identityByMaterialId.values()],
-        model: settings.vision.model,
-        baseUrl: settings.vision.baseUrl,
+        model: configs[0]?.model ?? '',
+        /*
+          The whole chain, not whichever gateway ends up answering. The answer is a
+          function of (photos, model); keying on the answering host would throw the
+          cache away the first time a fallback fires, even though the model that
+          produced the answer was the same.
+        */
+        baseUrl: configs.map((config) => config.baseUrl).join(','),
       });
 
       if (!options?.force) {
@@ -991,7 +999,7 @@ export function App(): JSX.Element {
       }
       if (candidates.length === 0) return null;
 
-      const binding = await bindMaterialsWithVision({ config: settings.vision, candidates });
+      const binding = await bindMaterialsWithVision({ configs, candidates });
       if (!binding) return null;
       const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
       // Stored as identities, so the next session can point at its own materials.

@@ -252,7 +252,7 @@ describe('bindMaterialsWithVision', () => {
       package_found: true,
       reason: 'A 清晰适合特写',
     });
-    const binding = await bindMaterialsWithVision({ config: CONFIG, candidates, fetchImpl: impl });
+    const binding = await bindMaterialsWithVision({ configs: [CONFIG], candidates, fetchImpl: impl });
 
     expect(binding?.heroId).toBe('m1');
     expect(binding?.boxId).toBe('m2');
@@ -269,7 +269,7 @@ describe('bindMaterialsWithVision', () => {
       dataUrl: `data:image/png;base64,${index}`,
     }));
     const { impl, captured } = fakeFetch({ hero: 'A', package_found: false });
-    await bindMaterialsWithVision({ config: CONFIG, candidates: six, fetchImpl: impl });
+    await bindMaterialsWithVision({ configs: [CONFIG], candidates: six, fetchImpl: impl });
     const content = captured.body.messages[0].content as unknown[];
     // prompt + (label + image) per candidate
     expect(content).toHaveLength(1 + 6 * 2);
@@ -286,7 +286,7 @@ describe('bindMaterialsWithVision', () => {
       { materialId: 'g', label: '补白图', dataUrl: 'data:image/png;base64,6' },
     ];
     const { impl, captured } = fakeFetch({ hero: 'A', package_found: false });
-    await bindMaterialsWithVision({ config: CONFIG, candidates: many, fetchImpl: impl });
+    await bindMaterialsWithVision({ configs: [CONFIG], candidates: many, fetchImpl: impl });
 
     const content = captured.body.messages[0].content as Array<Record<string, unknown>>;
     expect(content).toHaveLength(1 + 6 * 2);
@@ -301,13 +301,13 @@ describe('bindMaterialsWithVision', () => {
       called = true;
       return new Response('{}');
     };
-    expect(await bindMaterialsWithVision({ config: CONFIG, candidates: [], fetchImpl: impl })).toBeNull();
+    expect(await bindMaterialsWithVision({ configs: [CONFIG], candidates: [], fetchImpl: impl })).toBeNull();
     expect(called).toBe(false);
   });
 
   it('returns null when the answer names no usable hero', async () => {
     const { impl } = fakeFetch({ hero: null, package_found: false });
-    expect(await bindMaterialsWithVision({ config: CONFIG, candidates, fetchImpl: impl })).toBeNull();
+    expect(await bindMaterialsWithVision({ configs: [CONFIG], candidates, fetchImpl: impl })).toBeNull();
   });
 });
 

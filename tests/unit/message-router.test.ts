@@ -37,19 +37,15 @@ function makeHandlers(overrides: Partial<MessageHandlers> = {}): MessageHandlers
       serverUrl: 'https://cutout.test',
       username: 'admin',
       brandCatalogUrl: '',
-      vision: { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
+      vision: [{ baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' }],
     }),
     saveSettings: async (payload) => ({
       serverUrl: payload.serverUrl,
       username: payload.username,
       brandCatalogUrl: payload.brandCatalogUrl ?? '',
-      vision: payload.vision
-        ? {
-            baseUrl: payload.vision.baseUrl ?? 'http://127.0.0.1:8788/v1',
-            model: payload.vision.model ?? 'glm-5.3',
-            apiKey: payload.vision.apiKey ?? '',
-          }
-        : { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
+      vision: payload.vision ?? [
+        { baseUrl: 'http://127.0.0.1:8788/v1', model: 'glm-5.3', apiKey: '' },
+      ],
     }),
     getAuthState: async () => ({ loggedIn: true, user: { id: 1, username: 'admin' } }),
     login: async (payload) => ({ id: 1, username: payload.username }),

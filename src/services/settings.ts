@@ -20,9 +20,30 @@ import {
   DEFAULT_VISION_API_KEY,
   DEFAULT_VISION_BASE_URL,
   DEFAULT_VISION_MODEL,
+  MAX_VISION_ENDPOINTS,
   STORAGE_KEYS,
 } from '../shared/constants';
 
+/**
+ * One gateway in the vision chain, as the Options page stores it.
+ *
+ * `model` / `apiKey` may be empty: an empty field means "use whatever the first
+ * entry says", so a second gateway that only differs by address costs one line and
+ * does not silently go out with a blank key. The inheritance is applied by
+ * `resolveVisionConfigs()`, not here — stored rows keep what the user typed so the
+ * inputs do not fill themselves in behind their back.
+ */
+export interface VisionEndpoint {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+/**
+ * A resolved single-endpoint config — exactly what one HTTP request needs.
+ * Only `resolveVisionConfigs()` produces these; keep the two types apart so an
+ * unresolved row cannot be passed to the client by mistake.
+ */
 export interface VisionSettings {
   baseUrl: string;
   model: string;
@@ -34,7 +55,11 @@ export interface ExtensionSettings {
   username: string;
   /** Self-hosted / business-mirror URL for the brand catalog. Empty = built-in mirrors only. */
   brandCatalogUrl: string;
-  vision: VisionSettings;
+  /**
+   * Ordered vision gateways; the first one that answers wins. Never empty — an
+   * empty list normalises back to the built-in default gateway.
+   */
+  vision: VisionEndpoint[];
 }
 
 export interface SessionCredentials {
@@ -51,34 +76,69 @@ const DEFAULT_VISION: VisionSettings = {
   apiKey: DEFAULT_VISION_API_KEY,
 };
 
+/**
+ * The chain when nothing is stored: one entry, no overrides, so it resolves to
+ * `DEFAULT_VISION` exactly like the old single-object setting did.
+ */
+const DEFAULT_VISION_ENDPOINTS: VisionEndpoint[] = [
+  { baseUrl: DEFAULT_VISION.baseUrl, model: '', apiKey: '' },
+];
+
 const DEFAULT_SETTINGS: ExtensionSettings = {
   serverUrl: DEFAULT_SERVER_URL,
   username: '',
   brandCatalogUrl: '',
-  vision: { ...DEFAULT_VISION },
+  vision: DEFAULT_VISION_ENDPOINTS.map((entry) => ({ ...entry })),
 };
 
-function normalizeVision(value: Partial<VisionSettings> | undefined): VisionSettings {
-  return {
-    baseUrl: value?.baseUrl?.trim() || DEFAULT_VISION.baseUrl,
-    model: value?.model?.trim() || DEFAULT_VISION.model,
-    /*
-      An empty stored key falls back to the build-time default instead of staying
-      empty. Reason: the Options page saves all three vision fields together, so a
-      single "仅保存设置" click taken before the key existed would persist `''` and
-      silently shadow every future default — the field would look configured while
-      every request went out unauthenticated (HTTP 401). Clearing the field now means
-      "use the built-in default", which is also what the hint on that input says.
-    */
-    apiKey: value?.apiKey?.trim() || DEFAULT_VISION.apiKey,
-  };
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Normalise the stored vision chain.
+ *
+ * Accepts three shapes on purpose:
+ *   - the 10.8.x and earlier single object `{baseUrl, model, apiKey}` → one entry;
+ *   - an array of entries (current);
+ *   - anything else → the default chain.
+ *
+ * Rows without an address are dropped rather than kept as blanks: an endpoint
+ * cannot be tried without one, and keeping it would make the Options page show a
+ * row that claims to be part of the chain but never fires. Empty `model`/`apiKey`
+ * are kept as written — they mean "inherit from the first entry", and filling them
+ * in here would hide that from the user the next time they open the page.
+ *
+ * An empty `apiKey` used to fall back to the build-time default instead of staying
+ * empty, and it still does — that resolution now happens in
+ * `resolveVisionConfigs()`, so the stored value stays honest while every request
+ * still carries a key. Reason it matters: one "仅保存设置" click taken before a key
+ * existed would otherwise shadow every future default and every request would go
+ * out unauthenticated (HTTP 401) while the field looked configured.
+ */
+function normalizeVisionEndpoints(value: unknown): VisionEndpoint[] {
+  const raw: unknown[] = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object'
+      ? [value]
+      : [];
+  const entries: VisionEndpoint[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const baseUrl = readString(record.baseUrl);
+    if (!baseUrl) continue;
+    entries.push({ baseUrl, model: readString(record.model), apiKey: readString(record.apiKey) });
+    if (entries.length >= MAX_VISION_ENDPOINTS) break;
+  }
+  return entries.length > 0 ? entries : DEFAULT_VISION_ENDPOINTS.map((entry) => ({ ...entry }));
 }
 
 export async function loadSettings(): Promise<ExtensionSettings> {
   try {
     const stored = await chrome.storage.local.get(STORAGE_KEYS.settings);
     const value = stored?.[STORAGE_KEYS.settings] as
-      | (Partial<Omit<ExtensionSettings, 'vision'>> & { vision?: Partial<VisionSettings> })
+      | (Partial<Omit<ExtensionSettings, 'vision'>> & { vision?: unknown })
       | undefined;
     return {
       serverUrl: value?.serverUrl?.trim() || DEFAULT_SETTINGS.serverUrl,
@@ -87,35 +147,46 @@ export async function loadSettings(): Promise<ExtensionSettings> {
       // ("use the built-in mirrors"). Kept as written; validity is checked where
       // it is used, not here.
       brandCatalogUrl: typeof value?.brandCatalogUrl === 'string' ? value.brandCatalogUrl.trim() : '',
-      vision: normalizeVision(value?.vision),
+      vision: normalizeVisionEndpoints(value?.vision),
     };
   } catch {
-    return { ...DEFAULT_SETTINGS, vision: { ...DEFAULT_VISION } };
+    return { ...DEFAULT_SETTINGS, vision: DEFAULT_VISION_ENDPOINTS.map((entry) => ({ ...entry })) };
   }
 }
 
 /**
- * Every field is optional, and `vision` itself is a partial: the Options page
- * saves the vision block on its own, and a partial there means "keep what is
- * stored for the fields I did not send".
+ * Every field is optional. `vision` is normally the whole chain (a list replaces the
+ * stored one — removing a gateway has to be expressible). A single object still
+ * works: it patches the MAIN gateway field by field, which is what the editor does
+ * when it only knows about one address, and what every caller written before the
+ * chain existed sends.
  */
 export type SettingsPatch = Partial<Omit<ExtensionSettings, 'vision'>> & {
-  vision?: Partial<VisionSettings>;
+  vision?: VisionEndpoint[] | Partial<VisionSettings>;
 };
 
 export async function saveSettings(settings: SettingsPatch): Promise<ExtensionSettings> {
   const current = await loadSettings();
+  const patchVision = settings.vision;
+  const nextVision = Array.isArray(patchVision)
+    ? normalizeVisionEndpoints(patchVision)
+    : patchVision
+      ? // Patch the first row, keep the backups: a caller that only saves one
+        // address must not thereby delete the rest of the chain.
+        normalizeVisionEndpoints([
+          { ...current.vision[0], ...patchVision },
+          ...current.vision.slice(1),
+        ])
+      : current.vision;
   const next: ExtensionSettings = {
     serverUrl: settings.serverUrl?.trim() || current.serverUrl,
     username: settings.username?.trim() ?? current.username,
     // `''` is a deliberate value here (clear the mirror), so only `undefined`
     // means "leave it alone" — the same reason username uses `??`, not `||`.
     brandCatalogUrl: settings.brandCatalogUrl?.trim() ?? current.brandCatalogUrl,
-    // Merged field by field: the Options page may save only the vision block, and a
-    // wholesale replace would silently blank the server URL.
-    vision: settings.vision
-      ? normalizeVision({ ...current.vision, ...settings.vision })
-      : current.vision,
+    // Omitted means "leave the chain alone": the Options page may save only the
+    // vision block, and a wholesale replace would silently blank the server URL.
+    vision: nextVision,
   };
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
   return next;

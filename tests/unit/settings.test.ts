@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_VISION_API_KEY, DEFAULT_VISION_MODEL, STORAGE_KEYS } from '../../src/shared/constants';
+import { DEFAULT_VISION_BASE_URL, STORAGE_KEYS } from '../../src/shared/constants';
 import { loadSettings, saveSettings } from '../../src/services/settings';
 
 /**
@@ -22,45 +22,73 @@ afterEach(() => {
 });
 
 describe('loadSettings — vision block', () => {
-  it('falls back to the build-time default key when nothing is stored', () => {
-    // In CI there is no `.env.local`, so this default is ''. On a developer machine
-    // it is their own key. Either way the assertion is about WIRING, not the value.
+  /*
+    Storage keeps what the user typed; the "empty key means use the built-in one"
+    rule now resolves in `resolveVisionConfigs()` at request time (see
+    `tests/unit/vision-endpoints.test.ts`). Written down here because it looks like
+    a regression: a stored `''` no longer reads back as the default key. It must
+    not — the Options page has to show the field the user left blank, and the
+    request-time resolution still prevents the 401 trap.
+  */
+  it('returns a single default row when nothing is stored', async () => {
     stubStoredSettings(undefined);
-    return expect(loadSettings()).resolves.toMatchObject({
-      vision: { apiKey: DEFAULT_VISION_API_KEY, model: DEFAULT_VISION_MODEL },
-    });
+    const { vision } = await loadSettings();
+    expect(vision).toEqual([{ baseUrl: DEFAULT_VISION_BASE_URL, model: '', apiKey: '' }]);
   });
 
-  it('falls back to the default when the stored key is EMPTY', () => {
-    // The trap this guards: the Options page saves all three vision fields together,
-    // so one "仅保存设置" click taken before a key existed persists `''`. Honouring
-    // that literally would shadow every future default while the field looks
-    // configured — and every request would go out unauthenticated (HTTP 401).
+  it('keeps an empty stored key empty instead of faking the default', async () => {
     stubStoredSettings({ serverUrl: 'https://x.test', username: 'u', vision: { apiKey: '' } });
-    return expect(loadSettings()).resolves.toMatchObject({
-      vision: { apiKey: DEFAULT_VISION_API_KEY },
-    });
+    const [main] = (await loadSettings()).vision;
+    expect(main).toMatchObject({ apiKey: '' });
   });
 
-  it('falls back when the stored key is only whitespace', () => {
-    stubStoredSettings({ vision: { apiKey: '   ' } });
-    return expect(loadSettings()).resolves.toMatchObject({
-      vision: { apiKey: DEFAULT_VISION_API_KEY },
-    });
+  it('trims a whitespace-only key down to empty', async () => {
+    stubStoredSettings({ vision: { baseUrl: 'http://a.test/v1', apiKey: '   ' } });
+    const [main] = (await loadSettings()).vision;
+    expect(main).toMatchObject({ apiKey: '' });
   });
 
-  it('lets a saved key win over the default', () => {
-    stubStoredSettings({ vision: { apiKey: '   saved-key  ' } });
-    return expect(loadSettings()).resolves.toMatchObject({
-      vision: { apiKey: 'saved-key' },
-    });
+  it('lets a saved key win, trimmed', async () => {
+    stubStoredSettings({ vision: { baseUrl: 'http://a.test/v1', apiKey: '   saved-key  ' } });
+    const [main] = (await loadSettings()).vision;
+    expect(main).toMatchObject({ apiKey: 'saved-key' });
   });
 
-  it('keeps stored base URL and model, filling anything absent', () => {
+  it('keeps the stored base URL and leaves the model for request time', async () => {
     stubStoredSettings({ vision: { baseUrl: 'http://10.0.0.5:8788/v1' } });
-    return expect(loadSettings()).resolves.toMatchObject({
-      vision: { baseUrl: 'http://10.0.0.5:8788/v1', model: DEFAULT_VISION_MODEL },
+    const [main] = (await loadSettings()).vision;
+    expect(main).toEqual({ baseUrl: 'http://10.0.0.5:8788/v1', model: '', apiKey: '' });
+  });
+
+  it('upgrades a legacy single-object block into a one-row chain', async () => {
+    // 10.8.x stored `{ baseUrl, model, apiKey }`. Anyone who updates keeps working.
+    stubStoredSettings({
+      vision: { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'k' },
     });
+    expect((await loadSettings()).vision).toEqual([
+      { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'k' },
+    ]);
+  });
+
+  it('keeps the rows in order and drops rows without an address', async () => {
+    stubStoredSettings({
+      vision: [
+        { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'k' },
+        { baseUrl: '', model: 'nope' },
+        { baseUrl: ' http://b.test/v1 ', model: '', apiKey: '' },
+      ],
+    });
+    expect((await loadSettings()).vision).toEqual([
+      { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'k' },
+      { baseUrl: 'http://b.test/v1', model: '', apiKey: '' },
+    ]);
+  });
+
+  it('ignores junk in the vision field instead of throwing', async () => {
+    stubStoredSettings({ vision: 'nope' });
+    expect((await loadSettings()).vision).toEqual([
+      { baseUrl: DEFAULT_VISION_BASE_URL, model: '', apiKey: '' },
+    ]);
   });
 });
 
@@ -107,36 +135,60 @@ describe('saveSettings — vision patches are merged', () => {
   type Stored = {
     serverUrl: string;
     username: string;
-    vision: { baseUrl: string; model: string; apiKey: string };
+    vision: { baseUrl: string; model: string; apiKey: string }[];
   };
 
-  it('keeps the other two vision fields when only the key is patched', async () => {
+  it('patches the MAIN gateway and keeps the backups behind it', async () => {
     const read = stubStore({
       serverUrl: 'https://x.test',
       username: 'u',
-      vision: { baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'old-key' },
+      vision: [
+        { baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'old-key' },
+        { baseUrl: 'http://10.0.0.9:8788/v1', model: '', apiKey: '' },
+      ],
     });
     const next = await saveSettings({ vision: { apiKey: 'new-key' } });
-    expect(next.vision).toEqual({ baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'new-key' });
-    expect((read() as Stored).vision.apiKey).toBe('new-key');
+    expect(next.vision).toEqual([
+      { baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'new-key' },
+      { baseUrl: 'http://10.0.0.9:8788/v1', model: '', apiKey: '' },
+    ]);
+    expect((read() as Stored).vision[0]!.apiKey).toBe('new-key');
+  });
+
+  it('replaces the whole chain when a list is saved', async () => {
+    // Removal has to be expressible: the Options page sends the list it shows.
+    const read = stubStore({
+      vision: [
+        { baseUrl: 'http://a.test/v1', model: '', apiKey: '' },
+        { baseUrl: 'http://b.test/v1', model: '', apiKey: '' },
+      ],
+    });
+    await saveSettings({ vision: [{ baseUrl: 'http://c.test/v1', model: 'm', apiKey: 'k' }] });
+    expect((read() as Stored).vision).toEqual([
+      { baseUrl: 'http://c.test/v1', model: 'm', apiKey: 'k' },
+    ]);
   });
 
   it('does not blank the account fields when only vision is saved', async () => {
     const read = stubStore({ serverUrl: 'https://x.test', username: 'seller', vision: {} });
-    await saveSettings({ vision: { baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' } });
+    await saveSettings({
+      vision: [{ baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' }],
+    });
     const stored = read() as Stored;
     expect(stored.serverUrl).toBe('https://x.test');
     expect(stored.username).toBe('seller');
-    expect(stored.vision).toEqual({ baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' });
+    expect(stored.vision).toEqual([
+      { baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' },
+    ]);
   });
 
-  it('trims what it stores and falls back to the default for an emptied key', async () => {
+  it('trims what it stores and keeps a blanked key blank', async () => {
+    // Storing the default key here would make the Options field lie about what the
+    // user typed; the default is applied per request instead.
     stubStore({ vision: { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'old' } });
     const next = await saveSettings({ vision: { baseUrl: '  http://b.test/v1  ', apiKey: '   ' } });
-    expect(next.vision).toEqual({
-      baseUrl: 'http://b.test/v1',
-      model: 'm',
-      apiKey: DEFAULT_VISION_API_KEY,
-    });
+    expect(next.vision).toEqual([
+      { baseUrl: 'http://b.test/v1', model: 'm', apiKey: '' },
+    ]);
   });
 });

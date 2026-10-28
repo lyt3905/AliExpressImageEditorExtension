@@ -854,6 +854,55 @@ button.primary:hover:not(:disabled) {
   margin: 0 0 8px;
 }
 
+/* ------------------------------------------------------------- vision chain */
+
+/* One gateway in the chain. Boxed so several rows read as separate configs
+   instead of one long list of nine inputs. */
+.vision-row {
+  padding: 10px 12px 2px;
+  margin: 0 0 10px;
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.vision-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.vision-row__note {
+  flex: 1;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.vision-row__remove {
+  padding: 0;
+  color: #b42318;
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.vision-row__remove:hover:not(:disabled) {
+  color: #7a1a12;
+}
+
+.vision-row__remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The boxes already bring their own padding; keep the fields from doubling it. */
+.vision-row .field {
+  margin-bottom: 8px;
+}
+
 /* ------------------------------------------------------------ text layer */
 
 .text-properties {

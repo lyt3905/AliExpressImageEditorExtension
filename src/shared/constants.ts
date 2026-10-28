@@ -156,6 +156,15 @@ export const VISION_THUMBNAIL_SIZE = 512;
 /** Vision round-trip budget. Generous: 4.5 s observed, cold model load can be slower. */
 export const VISION_TIMEOUT_MS = 30_000;
 
+/**
+ * How many gateways the vision chain may hold.
+ *
+ * Not a technical limit — it is a guard against a pasted-in list turning one
+ * binding into a two-minute walk through dead addresses. Three or four is the
+ * realistic case (local gateway, laptop's gateway, a cloud one).
+ */
+export const MAX_VISION_ENDPOINTS = 5;
+
 /** `max_size` parameter forwarded to the background-removal endpoint. */
 export const CUTOUT_MAX_SIZE = 1600;
 
@@ -172,6 +181,11 @@ export const STORAGE_KEYS = {
   codePlacement: 'aiee:code-placement',
   /** Per-brand logo placement: { [brandId]: { x, y, scale } }. */
   logoPlacement: 'aiee:logo-placement',
+  /**
+   * Base URL of the vision gateway that answered last, so the next call starts
+   * there instead of re-waiting out a timeout on a gateway known to be down.
+   */
+  visionPin: 'aiee:vision-pin',
   /** Brand registry: [{ id, name, aliases, keywords, logoBlobId, ... }]. */
   brands: 'aiee:brands',
   /** Sync bookkeeping for the remote brand catalog (version / last sync / mirror). */

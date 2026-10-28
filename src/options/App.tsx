@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_SERVER_URL, DEFAULT_VISION_BASE_URL, DEFAULT_VISION_MODEL, MAX_BRAND_LOGO_BYTES, MAX_WATERMARK_BYTES } from '../shared/constants';
+import { DEFAULT_SERVER_URL, DEFAULT_VISION_BASE_URL, DEFAULT_VISION_MODEL, MAX_BRAND_LOGO_BYTES, MAX_VISION_ENDPOINTS, MAX_WATERMARK_BYTES } from '../shared/constants';
 import { messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type { BrandMeta, WatermarkMeta } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
-import type { ExtensionSettings } from '../services/settings';
+import type { ExtensionSettings, VisionEndpoint } from '../services/settings';
 import {
   listBrands,
   loadBrandLogo,
@@ -59,14 +59,43 @@ function catalogMirrorLabel(baseUrl: string | null): string {
   }
 }
 
+/**
+ * The rows an empty chain falls back to: the built-in local gateway, with the
+ * model pre-filled and the key left blank so it inherits the build-time default.
+ */
+function defaultEndpointRows(): VisionEndpoint[] {
+  return [{ baseUrl: DEFAULT_VISION_BASE_URL, model: DEFAULT_VISION_MODEL, apiKey: '' }];
+}
+
+/**
+ * Rows as they go into storage.
+ *
+ * Blank addresses are dropped (a row with no address can never be tried, and
+ * keeping it would make the list claim a gateway that never fires). A blank
+ * `model` / `apiKey` is kept blank on purpose: blank means "inherit from the first
+ * row", and that resolution happens at call time, not here.
+ */
+function rowsForSave(rows: readonly VisionEndpoint[]): VisionEndpoint[] {
+  return rows
+    .map((row) => ({
+      baseUrl: row.baseUrl.trim(),
+      model: row.model.trim(),
+      apiKey: row.apiKey.trim(),
+    }))
+    .filter((row) => row.baseUrl.length > 0);
+}
+
 export function OptionsApp(): JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   // Vision gateway config: drives the "AI 识别素材角色" button in the editor.
-  const [visionBaseUrl, setVisionBaseUrl] = useState(DEFAULT_VISION_BASE_URL);
-  const [visionModel, setVisionModel] = useState(DEFAULT_VISION_MODEL);
-  const [visionApiKey, setVisionApiKey] = useState('');
+  /**
+   * The vision chain, as editable rows. Always at least one row so the section
+   * never renders empty; an emptied address field is dropped on save (a row with no
+   * address cannot be tried).
+   */
+  const [visionEndpoints, setVisionEndpoints] = useState<VisionEndpoint[]>(defaultEndpointRows);
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -140,11 +169,7 @@ export function OptionsApp(): JSX.Element {
         setServerUrl(response.data.serverUrl);
         setUsername(response.data.username);
         setCatalogUrl(response.data.brandCatalogUrl ?? '');
-        if (response.data.vision) {
-          setVisionBaseUrl(response.data.vision.baseUrl);
-          setVisionModel(response.data.vision.model);
-          setVisionApiKey(response.data.vision.apiKey);
-        }
+        setVisionEndpoints(response.data.vision.length > 0 ? response.data.vision : defaultEndpointRows());
       }
       const loggedIn = await refreshAuthState();
       setStatus(loggedIn ? '已登录' : '未登录（账号会保存在浏览器会话中，用于自动重新登录）');
@@ -353,7 +378,7 @@ export function OptionsApp(): JSX.Element {
           username,
           ...(password ? { password } : {}),
           brandCatalogUrl: catalogUrl.trim(),
-          vision: { baseUrl: visionBaseUrl, model: visionModel, apiKey: visionApiKey },
+          vision: rowsForSave(visionEndpoints),
         },
       });
       if (response?.ok) {
@@ -366,16 +391,15 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [password, serverUrl, username, visionApiKey, visionBaseUrl, visionModel, catalogUrl]);
+  }, [password, serverUrl, username, visionEndpoints, catalogUrl]);
 
   /**
-   * Save just the vision gateway block.
+   * Save just the vision gateway chain.
    *
    * Its own button because the shared「仅保存设置」sits under the *account*
-   * fields, and reads like an account action — the seller configuring a vision
-   * endpoint had no obvious way to commit the three inputs in front of them.
-   * Everything else (server URL, account) is sent unchanged so the same handler
-   * can serve both buttons.
+   * fields and reads like an account action — the seller configuring gateways had
+   * no obvious way to commit the rows in front of them. Everything else (server
+   * URL, account) is sent unchanged so the same handler can serve both buttons.
    */
   const handleSaveVision = useCallback(async () => {
     setBusy(true);
@@ -387,23 +411,22 @@ export function OptionsApp(): JSX.Element {
         payload: {
           serverUrl,
           username,
-          vision: {
-            baseUrl: visionBaseUrl.trim(),
-            model: visionModel.trim(),
-            apiKey: visionApiKey.trim(),
-          },
+          vision: rowsForSave(visionEndpoints),
         },
       });
       if (response?.ok) {
-        // Read back what the store kept: an empty base URL falls back to the
-        // default, and the inputs should show that rather than a blank box that
-        // looks unsaved.
-        if (response.data?.vision) {
-          setVisionBaseUrl(response.data.vision.baseUrl);
-          setVisionModel(response.data.vision.model);
-          setVisionApiKey(response.data.vision.apiKey);
-        }
-        setVisionStatus({ kind: 'ok', text: '视觉设置已保存' });
+        // Read back what the store kept: blank rows were dropped and an empty list
+        // falls back to the built-in gateway, so the rows should show what is
+        // actually configured rather than what was typed.
+        const saved = response.data?.vision ?? [];
+        setVisionEndpoints(saved.length > 0 ? saved : defaultEndpointRows());
+        setVisionStatus({
+          kind: 'ok',
+          text:
+            saved.length > 1
+              ? `视觉设置已保存（${saved.length} 个接口，按顺序尝试）`
+              : '视觉设置已保存',
+        });
       } else {
         setVisionStatus({ kind: 'bad', text: `保存失败：${response?.error?.message ?? '未知错误'}` });
       }
@@ -412,7 +435,25 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [serverUrl, username, visionApiKey, visionBaseUrl, visionModel]);
+  }, [serverUrl, username, visionEndpoints]);
+
+  const updateEndpoint = useCallback((index: number, patch: Partial<VisionEndpoint>) => {
+    setVisionEndpoints((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }, []);
+
+  const addEndpoint = useCallback(() => {
+    setVisionEndpoints((rows) =>
+      rows.length >= MAX_VISION_ENDPOINTS
+        ? rows
+        : [...rows, { baseUrl: '', model: '', apiKey: '' }],
+    );
+  }, []);
+
+  const removeEndpoint = useCallback((index: number) => {
+    // The last row stays: an empty chain is not a valid configuration, and a
+    // section with no rows would leave nothing to type into.
+    setVisionEndpoints((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== index)));
+  }, []);
 
   // ---- watermark management
 
@@ -612,55 +653,83 @@ export function OptionsApp(): JSX.Element {
 
       <h2>AI 视觉接口</h2>
       <p className="hint">
-        可选。编辑器里点「AI 识别素材角色」时，素材会以 512px 缩略图发给这个网关判断主图 / 包装盒；
-        不填或连不上就自动回退到标签匹配，不影响其他功能。
+        可选。编辑器里点「AI 识别素材角色」时，素材会以 512px 缩略图发给下面的网关判断主图 / 包装盒。
+        可以配多个网关：<strong>按顺序尝试，谁先答上就用谁</strong>；上一个连不上、超时、鉴权失败或返回不是
+        JSON 都算失败，自动换下一个。全部失败才回退到标签匹配，不影响其他功能。
       </p>
 
-      <div className="field">
-        <label htmlFor="vision-base-url">视觉接口地址</label>
-        <input
-          id="vision-base-url"
-          value={visionBaseUrl}
-          spellCheck={false}
-          onChange={(event) => setVisionBaseUrl(event.target.value)}
-          placeholder={DEFAULT_VISION_BASE_URL}
-        />
-        <small>
-          兼容 OpenAI 协议的本地网关（默认 {DEFAULT_VISION_BASE_URL}）。素材会以 512px 缩略图发给它，
-          用于「AI 识别素材角色」；不可用时自动回退到标签匹配。
-        </small>
-      </div>
+      {visionEndpoints.map((endpoint, index) => (
+        <div className="vision-row" key={index}>
+          <div className="vision-row__head">
+            <strong>{index === 0 ? '主接口' : `备用接口 ${index + 1}`}</strong>
+            {index === 0 ? (
+              <small className="vision-row__note">
+                下面两个备用接口留空的「模型 / Key」都继承这里
+              </small>
+            ) : null}
+            {visionEndpoints.length > 1 ? (
+              <button
+                type="button"
+                className="vision-row__remove"
+                disabled={busy}
+                onClick={() => removeEndpoint(index)}
+                title="从链里移除这个接口"
+              >
+                移除
+              </button>
+            ) : null}
+          </div>
 
-      <div className="field">
-        <label htmlFor="vision-model">视觉模型</label>
-        <input
-          id="vision-model"
-          value={visionModel}
-          spellCheck={false}
-          onChange={(event) => setVisionModel(event.target.value)}
-          placeholder={DEFAULT_VISION_MODEL}
-        />
-        <small>需要支持多图输入与 JSON 输出，默认 {DEFAULT_VISION_MODEL}。</small>
-      </div>
+          <div className="field">
+            <label htmlFor={`vision-base-url-${index}`}>接口地址</label>
+            <input
+              id={`vision-base-url-${index}`}
+              value={endpoint.baseUrl}
+              spellCheck={false}
+              onChange={(event) => updateEndpoint(index, { baseUrl: event.target.value })}
+              placeholder={index === 0 ? DEFAULT_VISION_BASE_URL : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'}
+            />
+          </div>
 
-      <div className="field">
-        <label htmlFor="vision-api-key">视觉接口 Key</label>
-        <input
-          id="vision-api-key"
-          type="password"
-          value={visionApiKey}
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(event) => setVisionApiKey(event.target.value)}
-          placeholder="留空 = 使用构建期内置的默认 Key"
-        />
-        <small>
-          本地构建时会从 gitignored 的 <code>.env.local</code> 预填（<code>VITE_VISION_API_KEY</code>），
-          这里保存的值会覆盖它；留空则继续用内置默认值，两者都没有时不发送 <code>Authorization</code> 头。
-        </small>
-      </div>
+          <div className="field">
+            <label htmlFor={`vision-model-${index}`}>视觉模型</label>
+            <input
+              id={`vision-model-${index}`}
+              value={endpoint.model}
+              spellCheck={false}
+              onChange={(event) => updateEndpoint(index, { model: event.target.value })}
+              placeholder={index === 0 ? DEFAULT_VISION_MODEL : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`}
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor={`vision-api-key-${index}`}>接口 Key</label>
+            <input
+              id={`vision-api-key-${index}`}
+              type="password"
+              value={endpoint.apiKey}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => updateEndpoint(index, { apiKey: event.target.value })}
+              placeholder={index === 0 ? '留空 = 使用构建期内置的默认 Key' : '留空 = 继承主接口的 Key'}
+            />
+          </div>
+        </div>
+      ))}
+
+      <p className="hint">
+        只填地址也能用：主接口留空「模型 / Key」就用构建期内置的默认值（本地开发时来自 gitignored 的{' '}
+        <code>.env.local</code> 里的 <code>VITE_VISION_API_KEY</code>）。需要多图输入与 JSON 输出的模型。
+      </p>
 
       <div className="row">
+        <button
+          type="button"
+          disabled={busy || visionEndpoints.length >= MAX_VISION_ENDPOINTS}
+          onClick={addEndpoint}
+        >
+          + 添加接口
+        </button>
         <button type="button" className="primary" disabled={busy} onClick={() => void handleSaveVision()}>
           保存视觉设置
         </button>

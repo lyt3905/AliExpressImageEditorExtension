@@ -9,16 +9,21 @@ import { ErrorCode, toAppError } from '../shared/errors';
 import { errorResponse, okResponse, type ExtensionMessage, type MessageResponse } from '../shared/messages';
 import type { ExportInput, PageFillInput, PageFillResult, SessionInput } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
-import type { ExtensionSettings, VisionSettings } from '../services/settings';
+import type { ExtensionSettings, VisionEndpoint } from '../services/settings';
 
-/** Settings payload from the Options page. `vision` is a partial patch, merged in `saveSettings`. */
+/**
+ * Settings payload from the Options page.
+ *
+ * `vision` is the whole chain when present — a list replaces the stored list,
+ * because removing a gateway has to be expressible. Omitted = leave unchanged.
+ */
 export type SaveSettingsPayload = {
   serverUrl: string;
   username: string;
   password?: string;
   /** Self-hosted catalog URL; `''` clears it. Omitted = leave unchanged. */
   brandCatalogUrl?: string;
-  vision?: Partial<VisionSettings>;
+  vision?: VisionEndpoint[];
 };
 
 export interface MessageHandlers {

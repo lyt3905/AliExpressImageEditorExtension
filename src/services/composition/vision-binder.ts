@@ -14,7 +14,8 @@
 
 import { VISION_MAX_CANDIDATES } from '../../shared/constants';
 import type { VisionSettings } from '../settings';
-import { askVisionJson, type FetchLike } from '../vision-client';
+import { askVisionWithFallback } from '../vision-endpoints';
+import type { FetchLike } from '../vision-client';
 import { PACKAGING_LABEL_PATTERN } from './bind-materials';
 
 export interface VisionCandidate {
@@ -123,7 +124,12 @@ export function parseBindingAnswer(
 }
 
 export interface VisionBindRequest {
-  config: VisionSettings;
+  /**
+   * Resolved gateways in priority order — the whole vision chain, not one entry.
+   * The binder hands it to `askVisionWithFallback`, so "gateway down" is handled
+   * here rather than by every caller.
+   */
+  configs: readonly VisionSettings[];
   candidates: VisionCandidate[];
   fetchImpl?: FetchLike;
   timeoutMs?: number;
@@ -147,8 +153,8 @@ export async function bindMaterialsWithVision(request: VisionBindRequest): Promi
     dataUrl: candidate.dataUrl,
   }));
 
-  const answer = await askVisionJson({
-    config: request.config,
+  const answer = await askVisionWithFallback({
+    configs: request.configs,
     prompt: buildBindingPrompt(keyed.map(({ key, label }) => ({ key, label }))),
     images: keyed.map(({ key, dataUrl }) => ({ label: `图 ${key}：`, dataUrl })),
     timeoutMs: request.timeoutMs,

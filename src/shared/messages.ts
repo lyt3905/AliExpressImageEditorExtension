@@ -74,8 +74,10 @@ export interface SaveSettingsMessage {
   type: 'SAVE_SETTINGS';
   requestId: string;
   /**
-   * `vision` is a partial patch: the Options page sends all three fields, but the
-   * editor may save only what it changed, and `saveSettings` merges field by field.
+   * `vision` is the whole gateway chain: a list replaces the stored list, because
+   * removing a gateway has to be expressible. Omitted leaves the chain unchanged.
+   * Rows may carry an empty `model` / `apiKey` — that means "inherit from the first
+   * row" and is resolved when a request is made, not here.
    */
   payload: {
     serverUrl: string;
@@ -83,7 +85,7 @@ export interface SaveSettingsMessage {
     password?: string;
     /** Self-hosted brand-catalog URL; `''` clears it, omitted leaves it unchanged. */
     brandCatalogUrl?: string;
-    vision?: { baseUrl?: string; model?: string; apiKey?: string };
+    vision?: { baseUrl: string; model: string; apiKey: string }[];
   };
 }
 
