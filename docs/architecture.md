@@ -1395,13 +1395,43 @@ snapshotOf({ serverUrl, username, catalogUrl, vision }) // JSON.stringify(trim +
 按钮/变量的全局基础。理由很直接：设置页的样式改一次就要动编辑器的样式表，两边互相影响。
 `main.tsx` 仍先引 `index.css`（`--border`、`button.primary` 等基础靠它），再引 `options.css`。
 
-### 15.8 测试边界
+### 15.8 错误记录：一条摘要 + 一份历史
+
+失败原来只写一个 `aiee:last-error`，后一次覆盖前一次。于是"同一个毛病又犯了"和"换了个毛病"
+在界面上长得一模一样，而卖家最想知道的恰恰是**这是不是老毛病**（比如每次点错标签页都会来一条
+`E_UNSUPPORTED_PAGE`，看到 `×7` 就知道不用管它，看到一条新的才需要处理）。
+
+现在的形状（`src/services/error-log.ts`）：
+
+| 位置 | 内容 |
+| --- | --- |
+| `aiee:error-log` | `[{ code, message, at, count }]`，新的在前，最多 `ERROR_LOG_MAX = 20` 类 |
+| `aiee:last-error` | 仍在写，形状不变 —— 老版本插件读的是它 |
+
+四条规则：
+
+1. **只和最新那条合并**。同一个 `code + message` 连续发生就 `count + 1`、刷新 `at`；
+   中间夹了别的错误则重开一条。「A、B、A」和「A 发生了两次」是两种现场，合并掉就丢了顺序。
+2. **20 类封顶**。够看出重复了；`chrome.storage.local` 每次写都要序列化整个值，
+   在"写失败"的那个时刻堆长文本没有好处。
+3. **读的时候兜底**。`parseErrorLog()` 丢掉没有 `message` 的条目、把非数字的 `at`/`count` 收成
+   合理值、按时间重排、截断到上限；存储里是垃圾就是一个空记录表，绝不让它把设置页弄崩。
+4. **写失败不算失败**。`appendError()` 里所有存储调用都 try/catch：记录本身不能变成第二个故障。
+
+界面上只露两个口：账号区顶部一张红色提示卡（最近一次，人话摘要 + 「查看详情」给 code/时间），
+以及下面折叠的「错误记录（N 类，共 M 次）」，展开是 `时间 · code · ×次数 · message` 的清单和
+「清空记录」。**只有一条时这个折叠块根本不渲染** —— 上面那张卡已经说完了，再加一块红色只是噪音。
+
+### 15.9 测试边界
 
 选项页**没有任何单测**，这次也没有为它新增：它的逻辑几乎全是"把值搬进消息里"，真正的分叉
 （`rowsForSave` / `endpointLabel` / `normalizeVisionEndpoints`）都在 `src/options/helpers.ts` 与
-`src/services/` 里，后者有测试。界面本身靠 `docs/manual-test.md` §5.90–5.100 手验。
+`src/services/` 里，后者有测试。界面本身靠 `docs/manual-test.md` §5.90–5.101 手验。
 
 `typecheck` 是这里的真实防线：四个 section 的 props 形状由 `interface` 钉住，改一个字段名
 会在这里先断，而不是在浏览器里变成 `undefined`。
+
+错误记录是例外：它的合并/兜底规则在 `tests/unit/error-log.test.ts`（18 例），因为它不是"搬值"，
+而是一小段有分支的逻辑。
 
 

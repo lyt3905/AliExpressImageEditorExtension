@@ -195,7 +195,22 @@ export const STORAGE_KEYS = {
    * which material set the AI already labelled, which composition is on disk.
    */
   composeCache: 'aiee:compose-cache',
+  /**
+   * 最近几次失败（新的在前）。`lastError` 只留最后一条，那个键保 10.11.1 及更早的版本还能读；
+   * 这里才是设置页真正展示的记录。
+   */
+  errorLog: 'aiee:error-log',
+  /** Last error only, kept for backwards compatibility with older builds. */
+  lastError: 'aiee:last-error',
 } as const;
+
+/**
+ * 错误记录保留多少条。
+ *
+ * 20 条足够看出"同一个问题反复出现"，多一点也只是把同一句话抄二十遍；而 `chrome.storage.local`
+ * 是每次写入都要序列化的，历史里堆长文本对写失败的那个时刻没有好处。
+ */
+export const ERROR_LOG_MAX = 20;
 
 export const DB_NAME = 'aliexpress-image-editor';
 export const DB_VERSION = 1;

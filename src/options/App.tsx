@@ -12,6 +12,7 @@ import type { AuthUser } from '../services/server-api';
 import type { ExtensionSettings, VisionEndpoint } from '../services/settings';
 import { askVisionJson } from '../services/vision-client';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
+import { clearErrorLog, loadErrorLog, type ErrorLogEntry } from '../services/error-log';
 import {
   listBrands,
   loadBrandLogo,
@@ -51,19 +52,12 @@ import {
   rowsForSave,
 } from './helpers';
 
-const LAST_ERROR_KEY = 'aiee:last-error';
 const ACCEPTED_TYPES = 'image/png,image/jpeg,image/webp';
 const SIZE_LIMIT_MB = Math.round(MAX_WATERMARK_BYTES / 1024 / 1024);
 const LOGO_SIZE_LIMIT_MB = Math.round(MAX_BRAND_LOGO_BYTES / 1024 / 1024);
 
 type StatusKind = 'ok' | 'bad' | 'idle';
 type TabId = 'account' | 'vision' | 'watermark' | 'brand';
-
-interface LastError {
-  code: string;
-  message: string;
-  at: number;
-}
 
 /**
  * 一份"可保存设置"的指纹，用来判断底部「保存更改」该不该亮。
@@ -105,7 +99,7 @@ export function OptionsApp(): JSX.Element {
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [lastError, setLastError] = useState<LastError | null>(null);
+  const [errorLog, setErrorLog] = useState<ErrorLogEntry[]>([]);
   const [busy, setBusy] = useState(false);
 
   /** 已保存设置的指纹；和当前值不等就说明有未保存改动。 */
@@ -220,13 +214,7 @@ export function OptionsApp(): JSX.Element {
       setStatusKind(loggedIn ? 'ok' : 'idle');
       // 已登录的人不需要再看账号/密码框。
       if (loggedIn) setLoginFormOpen(false);
-      try {
-        const stored = await chrome.storage.local.get(LAST_ERROR_KEY);
-        const value = stored?.[LAST_ERROR_KEY] as LastError | undefined;
-        if (value) setLastError(value);
-      } catch {
-        /* ignore */
-      }
+      setErrorLog(await loadErrorLog());
     })();
   }, [loadSettings, refreshAuthState]);
 
@@ -316,6 +304,12 @@ export function OptionsApp(): JSX.Element {
       setBusy(false);
     }
   }, [refreshAuthState]);
+
+  /** 清空错误记录：只清历史，不动登录态与设置。 */
+  const handleClearErrorLog = useCallback(async () => {
+    await clearErrorLog();
+    setErrorLog([]);
+  }, []);
 
   // ---- 保存
   /**
@@ -733,7 +727,8 @@ export function OptionsApp(): JSX.Element {
               onLogin={() => void handleLogin()}
               onLogout={() => void handleLogout()}
               onRefresh={() => void handleRefreshAuth()}
-              lastError={lastError}
+              errorLog={errorLog}
+              onClearErrorLog={() => void handleClearErrorLog()}
               serverUrlDirty={savedSnapshot !== '' && snapshotOf({ serverUrl, username, catalogUrl, vision: visionEndpoints }) !== savedSnapshot}
             />
           </div>

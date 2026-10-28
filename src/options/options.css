@@ -505,6 +505,63 @@
   overflow: auto;
 }
 
+/* ------------------------------------------------------------ error log */
+
+/* 错误历史：一行一次，时间是定位点、code 是给人搜的、message 是给人读的 */
+.opt-errorlog__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.opt-errorlog__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--opt-line);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.opt-errorlog__row:last-child {
+  border-bottom: none;
+}
+
+.opt-errorlog__time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.opt-errorlog__code {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--opt-sunken);
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.opt-errorlog__count {
+  flex: 0 0 auto;
+  color: #b42318;
+  font-size: 11px;
+}
+
+.opt-errorlog__message {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #374151;
+  word-break: break-word;
+}
+
 /* ------------------------------------------------------------ key/value */
 
 .opt-kv {

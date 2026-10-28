@@ -190,7 +190,10 @@ npm run check:dist
    回填本身要 5~25 秒、比 10 秒长，这时状态条显示「回填完成后将自动关闭编辑器」，回填一结束就关；
    不想被关就点「取消」。
 
-点击插件后若出错，工具栏图标会显示红色 `!` 徽标，鼠标悬停可看错误原因；最近一次错误也会显示在选项页。
+点击插件后若出错，工具栏图标会显示红色 `!` 徽标，鼠标悬停可看错误原因。选项页「账号连接」里会留
+**一份错误记录**：顶部红色提示卡是最近一次（人话摘要，点「查看详情」看错误码与时间），下面折叠的
+「错误记录（N 类，共 M 次）」是最近 20 类失败 —— 同一个错误连续发生只算一条并标 `×3`，所以
+「又犯了同一个毛病」和「换了个新毛病」一眼能分开。记录存在 `aiee:error-log`，可随时「清空记录」。
 
 ### 排错：悬停提示「当前页面不是 …」「读取不到当前标签页的地址」
 
@@ -671,7 +674,7 @@ AliExpressImageEditorExtension/
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页：App.tsx（外壳）· options.css · helpers.ts · components/（Tabs/Card/Drawer/Pager/SaveBar…）· sections/（账号/AI 视觉/水印/品牌）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / error-log / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
@@ -764,6 +767,8 @@ AliExpressImageEditorExtension/
   展开地址 / 模型 / Key；另有一个「测试」按钮真发一条最短请求，告诉你这条网关现在能不能用。
 - 水印与品牌：默认只显示数量与当前默认项，上传/改名/删除收在「管理水印」里，品牌编辑走右侧抽屉；
   两处列表都按每页 10 条分页，品牌另可按名称 / 关键词搜索。
+- 出错不再是"只有最后一条"：账号区顶部是最近一次失败的红色提示卡，下面折叠着「错误记录（N 类，
+  共 M 次）」—— 同一个错误连续发生合并成一条并标 `×N`，所以能分清"老毛病又犯了"和"换了个新毛病"。
 - 键盘可用：分类之间用方向键移动（`Home`/`End` 跳首尾），折叠面板是原生 `<details>`，抽屉可用 Esc 关闭。
 
 ---
@@ -884,7 +889,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（47 文件 / 735 测试，其中 730 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（48 文件 / 753 测试，其中 748 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -905,5 +910,6 @@ AliExpressImageEditorExtension/
 | 品牌只剩「名称 + 关键词」（10.10.0） | **仅自动化验证**（`brandTerms` / `matchBrandByTitle` 锁住「名称永不参与匹配」「没关键词的品牌永不命中」，注册表与目录两侧各 3 例覆盖旧 `aliases` 折进关键词且写回后不复现，`check:catalog` 对残留 `aliases` 只提示不失败。**真机对照**：换成旧版本装过的品牌列表，按原别名仍能识别，步骤见 manual-test 5.83–5.85） |
 | 选项页收起式界面（10.10.2–10.10.3） | **仅自动化验证**（`typecheck` + 735 测试不变，界面改动无新增断言；折叠状态是纯 UI 状态，不进存储也不进文档）。**真机必须看一眼**：视觉接口默认收起、品牌目录只占一行、品牌行点「编辑」才展开、保存/删除后收起、添加成功后表单折回，步骤见 manual-test 5.79、5.86–5.88 |
 | 设置页四分类改版（10.11.0） | **仅自动化验证**（`typecheck` 通过 + 735 测试不变；`src/options/` 仍无单测，脏标记、消息 payload 与四个 section 的 props 形状由类型钉住）。**真机必须走一遍**：一次只显示一个分类、切标签不丢草稿、底部保存栏的禁用/点亮/轻提示、未保存关页面被拦、账号区登录后收起、视觉抽屉与「测试」、水印/品牌分页与抽屉、键盘方向键切分类，步骤见 manual-test 5.90–5.100 |
+| 错误记录（10.11.2） | **仅自动化验证**（18 个单测：损坏/半截条目降级、按时间重排、20 类封顶、同一条连续失败合并 `×N` 且中间夹别的错误不合并、写失败不抛、清空两个键）。**真机对照**：连点三次非商品页看到 `×3`、换个失败原因变成 2 类、清空后刷新仍为空，步骤见 manual-test 5.101–5.102 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

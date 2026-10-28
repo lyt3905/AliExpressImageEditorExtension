@@ -24,10 +24,9 @@ import { fillPageImage } from './page-filler';
 import { buildSessionRecord, createSessionId, openEditorTab, readSessionMeta, saveSessionMeta } from './session-manager';
 import { putBlob, putSession } from '../services/indexed-db';
 import { downloadDataUrl } from '../services/downloader';
+import { appendError } from '../services/error-log';
 import { ServerApi, type AuthUser } from '../services/server-api';
 import { clearCredentials, loadCredentials, loadSettings, saveCredentials, saveSettings } from '../services/settings';
-
-const LAST_ERROR_KEY = 'aiee:last-error';
 
 // ---------------------------------------------------------------- badge feedback
 
@@ -44,13 +43,9 @@ async function setBadge(text: string, title: string, color = '#1a73e8'): Promise
 async function reportFailure(error: unknown): Promise<void> {
   const appError = toAppError(error, '处理失败');
   await setBadge('!', `${EXTENSION_TITLE}：${appError.message}`, '#d93025');
-  try {
-    await chrome.storage.local.set({
-      [LAST_ERROR_KEY]: { code: appError.code, message: appError.message, at: Date.now() },
-    });
-  } catch {
-    /* ignore */
-  }
+  // 记进历史而不是覆盖：同一个问题反复出现（比如连着点几个非商品页的标签）时，
+  // 只留最后一条就看不出它是"又来了"还是"另一个毛病"。
+  await appendError({ code: appError.code, message: appError.message, at: Date.now() });
   console.error('[AIEE]', appError.code, appError.message);
 }
 
