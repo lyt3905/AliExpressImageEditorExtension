@@ -250,16 +250,39 @@ export function brandTerms(brand: BrandMeta): string[] {
   return brand.keywords;
 }
 
+/** Which brand claimed a title, and the keyword that did it. */
+export interface BrandTitleMatch {
+  brand: BrandMeta;
+  /** The keyword that appears in the title (original spelling, not lower-cased). */
+  term: string;
+}
+
+/**
+ * First brand whose any term appears in the title (case-insensitive), plus the
+ * term that matched.
+ *
+ * The term matters: a substring match on a short keyword is easy to get wrong
+ * ("FT" / "MP" / "Doc" all sit inside ordinary figure titles), and "为什么这个
+ * 标题命中了这个品牌" is unanswerable from the brand name alone. Callers surface
+ * it so the seller can see — and fix — the keyword instead of guessing.
+ */
+export function matchBrandByTitleDetailed(
+  brands: readonly BrandMeta[],
+  title: string,
+): BrandTitleMatch | null {
+  const haystack = title.toLowerCase();
+  for (const brand of brands) {
+    for (const term of brandTerms(brand)) {
+      if (term && haystack.includes(term.toLowerCase())) return { brand, term };
+    }
+  }
+  return null;
+}
+
 /**
  * First brand whose any term appears in the title (case-insensitive).
  * `null` means "no opinion" — the editor then asks the user instead.
  */
 export function matchBrandByTitle(brands: readonly BrandMeta[], title: string): BrandMeta | null {
-  const haystack = title.toLowerCase();
-  for (const brand of brands) {
-    for (const term of brandTerms(brand)) {
-      if (term && haystack.includes(term.toLowerCase())) return brand;
-    }
-  }
-  return null;
+  return matchBrandByTitleDetailed(brands, title)?.brand ?? null;
 }

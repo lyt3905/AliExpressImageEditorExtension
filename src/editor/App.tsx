@@ -34,7 +34,7 @@ import {
   saveLogoPlacement,
   type LogoPlacementMap,
 } from '../services/logo-placement';
-import { listBrands, loadBrandLogo, matchBrandByTitle } from '../services/brand-store';
+import { listBrands, loadBrandLogo, matchBrandByTitleDetailed } from '../services/brand-store';
 import { syncBrandCatalog } from '../services/brand-catalog/sync';
 import { claimSilentSyncAttempt } from '../services/brand-catalog/silent-sync';
 import { putBlob, getBlob } from '../services/indexed-db';
@@ -627,11 +627,22 @@ export function App(): JSX.Element {
 
     const title = session?.productTitle ?? '';
     if (!title) return;
-    const matched = matchBrandByTitle(brands, title);
+    const matched = matchBrandByTitleDetailed(brands, title);
     if (!matched) return;
-    setActiveBrandId(matched.id);
+    setActiveBrandId(matched.brand.id);
+    /*
+      Say which keyword did it. A brand auto-appearing under a title that looks
+      unrelated is otherwise indistinguishable from a bug — the seller needs to
+      know it was a substring hit on a keyword they can edit.
+    */
+    showNotice({
+      kind: 'ok',
+      text: `已按标题识别品牌：${matched.brand.name}（命中关键词「${matched.term}」）`,
+    });
 
-    const material = brandMaterials.find((entry) => entry.id === `material-brand-${matched.id}`);
+    const material = brandMaterials.find(
+      (entry) => entry.id === `material-brand-${matched.brand.id}`,
+    );
     if (!material) return;
     const alreadyOnCanvas = document.layers.some(
       (layer) => layer.kind === 'brand' && layer.materialId === material.id,
@@ -642,7 +653,7 @@ export function App(): JSX.Element {
     // Appended last = top of the z-order; `EditorStage` keeps brand layers above
     // the album art, the watermark and the code no matter what the stack says.
     dispatch({ type: 'ADD_LAYER', layer: logoLayer });
-  }, [brands, brandMaterials, session, document, createLogoLayer]);
+  }, [brands, brandMaterials, session, document, createLogoLayer, showNotice]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
   useEffect(() => {

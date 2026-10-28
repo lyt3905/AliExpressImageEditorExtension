@@ -680,7 +680,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 46 文件 / 749 个单元测试（不联网）
+│  ├─ unit/                      # 46 文件 / 753 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -700,6 +700,9 @@ AliExpressImageEditorExtension/
   `keywords`（**唯一**参与标题匹配的列表，不区分大小写的子串判断）。名称不参与匹配 ——
   叫「魔方」的品牌不该因为标题里出现「魔方」就被认领，想让哪个叫法能命中就把它写进关键词。
   关键词留空 = 永不自动识别，只能在编辑器里手动选品牌。
+- **命中会说明是哪个关键词**：自动识别出品牌时，编辑器状态栏写「已按标题识别品牌：X（命中关键词「Y」）」。
+  子串匹配很容易出意外（`FT`、`MP` 这类两三个字母的词能钻过任何标题），没有这句话，
+  卖家只能看到「这个标题怎么认成了那个品牌」而无法判断该改哪个词。
 - 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」，也支持每个远程品牌单独关掉同步；
   **打开编辑器时**也会静默同步（24 小时内不重复请求；同一标签页最多试一次，失败不弹窗，只记录在选项页）。
 - 这一块在页面上只占**一行**：`品牌目录（GitHub）　已同步 v3 · 时间 · 镜像　[镜像设置] [立即同步]`。
@@ -891,7 +894,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（48 文件 / 754 测试，其中 749 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（48 文件 / 758 测试，其中 753 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |

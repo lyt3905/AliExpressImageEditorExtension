@@ -11,7 +11,12 @@
 
 import { describe, expect, it } from 'vitest';
 import type { BrandMeta } from '../../src/shared/types';
-import { brandTerms, matchBrandByTitle, parseBrandTerms } from '../../src/services/brand-store';
+import {
+  brandTerms,
+  matchBrandByTitle,
+  matchBrandByTitleDetailed,
+  parseBrandTerms,
+} from '../../src/services/brand-store';
 
 function brand(partial: Partial<BrandMeta> & { id: string }): BrandMeta {
   return {
@@ -82,5 +87,32 @@ describe('matchBrandByTitle', () => {
       brand({ id: 'y', name: 'Galaxy Toys', keywords: ['Galaxy Toys'] }),
     ];
     expect(matchBrandByTitle(overlapping, 'Galaxy Toys')?.id).toBe('x');
+  });
+});
+
+describe('matchBrandByTitleDetailed', () => {
+  it('reports the keyword that matched, leaving the hit explicable', () => {
+    const brands = [brand({ id: 'g', name: '银河玩具社', keywords: ['银河社', 'Galaxy Toys'] })];
+    const match = matchBrandByTitleDetailed(brands, 'Galaxy Toys FM-04 Ratchet');
+    expect(match?.brand.id).toBe('g');
+    expect(match?.term).toBe('Galaxy Toys');
+  });
+
+  it('reports the original spelling, not the lower-cased one', () => {
+    const brands = [brand({ id: 'm', name: '魔方', keywords: ['MS-TOYS'] })];
+    expect(matchBrandByTitleDetailed(brands, 'transformation ms-toys robot')?.term).toBe('MS-TOYS');
+  });
+
+  it('exposes substring hits on short keywords — the usual false positive', () => {
+    // This is the case a seller cannot explain from the brand name alone:
+    // "FT" as a keyword claims any title that contains those two letters.
+    const brands = [brand({ id: 'f', name: 'FansToys', keywords: ['FT'] })];
+    const title = 'Hot Sale Transformation FansToys MP FM-04 FM04 FT Ratchet Doc Action Figure';
+    const match = matchBrandByTitleDetailed(brands, title);
+    expect(match?.term).toBe('FT');
+  });
+
+  it('returns null when nothing matches', () => {
+    expect(matchBrandByTitleDetailed([brand({ id: 'a', keywords: ['银河社'] })], 'MP-44 Optimus')).toBeNull();
   });
 });
