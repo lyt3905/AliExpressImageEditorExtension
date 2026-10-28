@@ -905,6 +905,27 @@ button.primary:hover:not(:disabled) {
   color: #7a1a12;
 }
 
+/* Fold the row back up without touching anything. Sits next to 移除, so it is
+   deliberately quieter than it (grey, not red). */
+.vision-row__collapse {
+  padding: 0;
+  color: #4b5563;
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.vision-row__collapse:hover:not(:disabled) {
+  color: #1f2937;
+}
+
+.vision-row__collapse:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .vision-row__remove:disabled {
   opacity: 0.5;
   cursor: default;

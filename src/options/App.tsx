@@ -122,12 +122,16 @@ export function OptionsApp(): JSX.Element {
    */
   const [visionEndpoints, setVisionEndpoints] = useState<VisionEndpoint[]>(defaultEndpointRows);
   /**
-   * Which row the editor is showing. The chain is edited one gateway at a time
-   * behind a dropdown — flat rows meant six inputs on screen at once for the
-   * common case of a single gateway, and made it hard to tell which row you were
-   * typing into.
+   * Which gateway is expanded for editing, or `null` when the section is
+   * collapsed.
+   *
+   * Collapsed is the default: the chain is a piece of config you touch twice a
+   * year, and three always-visible inputs per gateway made the page read as a
+   * form you were supposed to fill in. The dropdown still lists the whole chain
+   * (order + host) in one line, so you can see the attempt order without opening
+   * anything.
    */
-  const [visionTab, setVisionTab] = useState(0);
+  const [visionTab, setVisionTab] = useState<number | null>(null);
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -449,6 +453,9 @@ export function OptionsApp(): JSX.Element {
         // actually configured rather than what was typed.
         const saved = response.data?.vision ?? [];
         setVisionEndpoints(saved.length > 0 ? saved : defaultEndpointRows());
+        // Saved and done — fold the section back up so the page returns to the
+        // compact summary instead of leaving one gateway's inputs hanging open.
+        setVisionTab(null);
         setVisionStatus({
           kind: 'ok',
           text:
@@ -471,8 +478,9 @@ export function OptionsApp(): JSX.Element {
   }, []);
 
   const addEndpoint = useCallback(() => {
-    // Jump to the row we just appended: adding a row behind a dropdown that stays
-    // on the old one looks like the button did nothing.
+    if (visionEndpoints.length >= MAX_VISION_ENDPOINTS) return;
+    // Expand the row we just appended: a new row added below while the section
+    // stays collapsed looks like the button did nothing.
     setVisionTab(visionEndpoints.length);
     setVisionEndpoints((rows) =>
       rows.length >= MAX_VISION_ENDPOINTS ? rows : [...rows, blankEndpoint()],
@@ -483,18 +491,15 @@ export function OptionsApp(): JSX.Element {
     // The last row stays: an empty chain is not a valid configuration, and a
     // section with no rows would leave nothing to type into.
     setVisionEndpoints((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== index)));
-    // Removing a row before the selected one shifts it; the render-time clamp
-    // covers removing the selected one when it was last.
-    setVisionTab((current) => (current > index ? current - 1 : current));
+    // Collapse: the row the editor was pointing at is gone, and silently sliding
+    // to the neighbour would show someone else's address under the same cursor.
+    setVisionTab(null);
   }, []);
 
-  // The dropdown index clamped to the current chain: loading settings or
-  // removing rows can leave it pointing past the end.
-  const activeVisionIndex = Math.min(
-    Math.max(visionTab, 0),
-    Math.max(visionEndpoints.length - 1, 0),
-  );
-  const activeVisionEndpoint = visionEndpoints[activeVisionIndex] ?? blankEndpoint();
+  // The expanded row, or null when collapsed (or when the index outlived its row).
+  const editingIndex =
+    visionTab !== null && visionTab >= 0 && visionTab < visionEndpoints.length ? visionTab : null;
+  const editingEndpoint = editingIndex === null ? null : visionEndpoints[editingIndex];
 
   // ---- watermark management
 
@@ -697,13 +702,18 @@ export function OptionsApp(): JSX.Element {
       </p>
 
       <div className="field vision-picker">
-        <label htmlFor="vision-picker">正在编辑的接口</label>
+        <label htmlFor="vision-picker">接口</label>
         <select
           id="vision-picker"
-          value={activeVisionIndex}
+          value={editingIndex === null ? '' : String(editingIndex)}
           disabled={busy}
-          onChange={(event) => setVisionTab(Number(event.target.value))}
+          onChange={(event) => {
+            const next = event.target.value;
+            // The placeholder option is how you fold the row back up again.
+            setVisionTab(next === '' ? null : Number(next));
+          }}
         >
+          <option value="">选择要编辑的接口…（点开才显示地址 / 模型 / Key）</option>
           {visionEndpoints.map((endpoint, index) => (
             <option key={index} value={index}>
               {endpointLabel(endpoint, index)}
@@ -711,82 +721,94 @@ export function OptionsApp(): JSX.Element {
           ))}
         </select>
         <small>
-          一共 {visionEndpoints.length} 个，按这个顺序尝试（上面的排前面）。下拉里换一个，
-          下面三个输入框就跟着换成那一个的设置。
+          一共 {visionEndpoints.length} 个，按这个顺序尝试：
+          {visionEndpoints.map((endpoint, index) => endpointLabel(endpoint, index)).join(' → ')}。
+          选中哪一个，下面才展开它的设置。
         </small>
       </div>
 
-      <div className="vision-row">
-        <div className="vision-row__head">
-          <strong>{endpointLabel(activeVisionEndpoint, activeVisionIndex)}</strong>
-          {activeVisionIndex === 0 ? (
-            <small className="vision-row__note">备用接口里留空的「模型 / Key」都继承这里</small>
-          ) : (
-            <small className="vision-row__note">「模型 / Key」留空 = 继承主接口</small>
-          )}
-          {visionEndpoints.length > 1 ? (
+      {editingIndex === null || editingEndpoint === null ? null : (
+        <div className="vision-row">
+          <div className="vision-row__head">
+            <strong>{endpointLabel(editingEndpoint, editingIndex)}</strong>
+            {editingIndex === 0 ? (
+              <small className="vision-row__note">备用接口里留空的「模型 / Key」都继承这里</small>
+            ) : (
+              <small className="vision-row__note">「模型 / Key」留空 = 继承主接口</small>
+            )}
             <button
               type="button"
-              className="vision-row__remove"
+              className="vision-row__collapse"
               disabled={busy}
-              onClick={() => removeEndpoint(activeVisionIndex)}
-              title="从链里移除这个接口"
+              onClick={() => setVisionTab(null)}
+              title="收起，不改动任何设置"
             >
-              移除这个接口
+              收起
             </button>
-          ) : null}
-        </div>
+            {visionEndpoints.length > 1 ? (
+              <button
+                type="button"
+                className="vision-row__remove"
+                disabled={busy}
+                onClick={() => removeEndpoint(editingIndex)}
+                title="从链里移除这个接口"
+              >
+                移除这个接口
+              </button>
+            ) : null}
+          </div>
 
-        <div className="field">
-          <label htmlFor="vision-base-url">接口地址</label>
-          <input
-            id="vision-base-url"
-            value={activeVisionEndpoint.baseUrl}
-            spellCheck={false}
-            onChange={(event) => updateEndpoint(activeVisionIndex, { baseUrl: event.target.value })}
-            placeholder={
-              activeVisionIndex === 0
-                ? DEFAULT_VISION_BASE_URL
-                : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'
-            }
-          />
-          {activeVisionEndpoint.baseUrl.trim().length === 0 ? (
-            <small>这个接口还没填地址，保存时会被丢掉。</small>
-          ) : null}
-        </div>
+          <div className="field">
+            <label htmlFor="vision-base-url">接口地址</label>
+            <input
+              id="vision-base-url"
+              value={editingEndpoint.baseUrl}
+              spellCheck={false}
+              onChange={(event) => updateEndpoint(editingIndex, { baseUrl: event.target.value })}
+              placeholder={
+                editingIndex === 0
+                  ? DEFAULT_VISION_BASE_URL
+                  : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'
+              }
+            />
+            {editingEndpoint.baseUrl.trim().length === 0 ? (
+              <small>这个接口还没填地址，保存时会被丢掉。</small>
+            ) : null}
+          </div>
 
-        <div className="field">
-          <label htmlFor="vision-model">视觉模型</label>
-          <input
-            id="vision-model"
-            value={activeVisionEndpoint.model}
-            spellCheck={false}
-            onChange={(event) => updateEndpoint(activeVisionIndex, { model: event.target.value })}
-            placeholder={
-              activeVisionIndex === 0
-                ? DEFAULT_VISION_MODEL
-                : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`
-            }
-          />
-        </div>
+          <div className="field">
+            <label htmlFor="vision-model">视觉模型</label>
+            <input
+              id="vision-model"
+              value={editingEndpoint.model}
+              spellCheck={false}
+              onChange={(event) => updateEndpoint(editingIndex, { model: event.target.value })}
+              placeholder={
+                editingIndex === 0
+                  ? DEFAULT_VISION_MODEL
+                  : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`
+              }
+            />
+          </div>
 
-        <div className="field">
-          <label htmlFor="vision-api-key">接口 Key</label>
-          <input
-            id="vision-api-key"
-            type="password"
-            value={activeVisionEndpoint.apiKey}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => updateEndpoint(activeVisionIndex, { apiKey: event.target.value })}
-            placeholder={
-              activeVisionIndex === 0
-                ? '留空 = 使用构建期内置的默认 Key'
-                : '留空 = 继承主接口的 Key'
-            }
-          />
+          <div className="field">
+            <label htmlFor="vision-api-key">接口 Key</label>
+            <input
+              id="vision-api-key"
+              type="password"
+              value={editingEndpoint.apiKey}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => updateEndpoint(editingIndex, { apiKey: event.target.value })}
+              placeholder={
+                editingIndex === 0
+                  ? '留空 = 使用构建期内置的默认 Key'
+                  : '留空 = 继承主接口的 Key'
+              }
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <p className="hint">
         只填地址也能用：主接口留空「模型 / Key」就用构建期内置的默认值（本地开发时来自 gitignored 的{' '}
