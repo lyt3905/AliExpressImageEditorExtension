@@ -85,6 +85,31 @@ function rowsForSave(rows: readonly VisionEndpoint[]): VisionEndpoint[] {
     .filter((row) => row.baseUrl.length > 0);
 }
 
+/**
+ * What the dropdown shows for one gateway: its place in the chain plus its host.
+ *
+ * The host is what actually tells two rows apart — three rows all reading
+ * 「备用接口」are indistinguishable until you open each one. Empty rows say so
+ * instead of showing nothing.
+ */
+function endpointLabel(endpoint: VisionEndpoint, index: number): string {
+  const name = index === 0 ? '主接口' : `备用接口 ${index + 1}`;
+  const raw = endpoint.baseUrl.trim();
+  if (raw.length === 0) return `${name} — 未填地址`;
+  try {
+    return `${name} — ${new URL(raw).host}`;
+  } catch {
+    return `${name} — ${raw}`;
+  }
+}
+
+/**
+ * A brand-new row: address blank, model/key blank so they inherit the main row.
+ */
+function blankEndpoint(): VisionEndpoint {
+  return { baseUrl: '', model: '', apiKey: '' };
+}
+
 export function OptionsApp(): JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [username, setUsername] = useState('');
@@ -96,6 +121,13 @@ export function OptionsApp(): JSX.Element {
    * address cannot be tried).
    */
   const [visionEndpoints, setVisionEndpoints] = useState<VisionEndpoint[]>(defaultEndpointRows);
+  /**
+   * Which row the editor is showing. The chain is edited one gateway at a time
+   * behind a dropdown — flat rows meant six inputs on screen at once for the
+   * common case of a single gateway, and made it hard to tell which row you were
+   * typing into.
+   */
+  const [visionTab, setVisionTab] = useState(0);
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -439,18 +471,30 @@ export function OptionsApp(): JSX.Element {
   }, []);
 
   const addEndpoint = useCallback(() => {
+    // Jump to the row we just appended: adding a row behind a dropdown that stays
+    // on the old one looks like the button did nothing.
+    setVisionTab(visionEndpoints.length);
     setVisionEndpoints((rows) =>
-      rows.length >= MAX_VISION_ENDPOINTS
-        ? rows
-        : [...rows, { baseUrl: '', model: '', apiKey: '' }],
+      rows.length >= MAX_VISION_ENDPOINTS ? rows : [...rows, blankEndpoint()],
     );
-  }, []);
+  }, [visionEndpoints.length]);
 
   const removeEndpoint = useCallback((index: number) => {
     // The last row stays: an empty chain is not a valid configuration, and a
     // section with no rows would leave nothing to type into.
     setVisionEndpoints((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== index)));
+    // Removing a row before the selected one shifts it; the render-time clamp
+    // covers removing the selected one when it was last.
+    setVisionTab((current) => (current > index ? current - 1 : current));
   }, []);
+
+  // The dropdown index clamped to the current chain: loading settings or
+  // removing rows can leave it pointing past the end.
+  const activeVisionIndex = Math.min(
+    Math.max(visionTab, 0),
+    Math.max(visionEndpoints.length - 1, 0),
+  );
+  const activeVisionEndpoint = visionEndpoints[activeVisionIndex] ?? blankEndpoint();
 
   // ---- watermark management
 
@@ -652,64 +696,97 @@ export function OptionsApp(): JSX.Element {
         JSON 都算失败，自动换下一个。全部失败才回退到标签匹配，不影响其他功能。
       </p>
 
-      {visionEndpoints.map((endpoint, index) => (
-        <div className="vision-row" key={index}>
-          <div className="vision-row__head">
-            <strong>{index === 0 ? '主接口' : `备用接口 ${index + 1}`}</strong>
-            {index === 0 ? (
-              <small className="vision-row__note">
-                下面两个备用接口留空的「模型 / Key」都继承这里
-              </small>
-            ) : null}
-            {visionEndpoints.length > 1 ? (
-              <button
-                type="button"
-                className="vision-row__remove"
-                disabled={busy}
-                onClick={() => removeEndpoint(index)}
-                title="从链里移除这个接口"
-              >
-                移除
-              </button>
-            ) : null}
-          </div>
+      <div className="field vision-picker">
+        <label htmlFor="vision-picker">正在编辑的接口</label>
+        <select
+          id="vision-picker"
+          value={activeVisionIndex}
+          disabled={busy}
+          onChange={(event) => setVisionTab(Number(event.target.value))}
+        >
+          {visionEndpoints.map((endpoint, index) => (
+            <option key={index} value={index}>
+              {endpointLabel(endpoint, index)}
+            </option>
+          ))}
+        </select>
+        <small>
+          一共 {visionEndpoints.length} 个，按这个顺序尝试（上面的排前面）。下拉里换一个，
+          下面三个输入框就跟着换成那一个的设置。
+        </small>
+      </div>
 
-          <div className="field">
-            <label htmlFor={`vision-base-url-${index}`}>接口地址</label>
-            <input
-              id={`vision-base-url-${index}`}
-              value={endpoint.baseUrl}
-              spellCheck={false}
-              onChange={(event) => updateEndpoint(index, { baseUrl: event.target.value })}
-              placeholder={index === 0 ? DEFAULT_VISION_BASE_URL : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'}
-            />
-          </div>
-
-          <div className="field">
-            <label htmlFor={`vision-model-${index}`}>视觉模型</label>
-            <input
-              id={`vision-model-${index}`}
-              value={endpoint.model}
-              spellCheck={false}
-              onChange={(event) => updateEndpoint(index, { model: event.target.value })}
-              placeholder={index === 0 ? DEFAULT_VISION_MODEL : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`}
-            />
-          </div>
-
-          <div className="field">
-            <label htmlFor={`vision-api-key-${index}`}>接口 Key</label>
-            <input
-              id={`vision-api-key-${index}`}
-              type="password"
-              value={endpoint.apiKey}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) => updateEndpoint(index, { apiKey: event.target.value })}
-              placeholder={index === 0 ? '留空 = 使用构建期内置的默认 Key' : '留空 = 继承主接口的 Key'}
-            />
-          </div>
+      <div className="vision-row">
+        <div className="vision-row__head">
+          <strong>{endpointLabel(activeVisionEndpoint, activeVisionIndex)}</strong>
+          {activeVisionIndex === 0 ? (
+            <small className="vision-row__note">备用接口里留空的「模型 / Key」都继承这里</small>
+          ) : (
+            <small className="vision-row__note">「模型 / Key」留空 = 继承主接口</small>
+          )}
+          {visionEndpoints.length > 1 ? (
+            <button
+              type="button"
+              className="vision-row__remove"
+              disabled={busy}
+              onClick={() => removeEndpoint(activeVisionIndex)}
+              title="从链里移除这个接口"
+            >
+              移除这个接口
+            </button>
+          ) : null}
         </div>
-      ))}
+
+        <div className="field">
+          <label htmlFor="vision-base-url">接口地址</label>
+          <input
+            id="vision-base-url"
+            value={activeVisionEndpoint.baseUrl}
+            spellCheck={false}
+            onChange={(event) => updateEndpoint(activeVisionIndex, { baseUrl: event.target.value })}
+            placeholder={
+              activeVisionIndex === 0
+                ? DEFAULT_VISION_BASE_URL
+                : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'
+            }
+          />
+          {activeVisionEndpoint.baseUrl.trim().length === 0 ? (
+            <small>这个接口还没填地址，保存时会被丢掉。</small>
+          ) : null}
+        </div>
+
+        <div className="field">
+          <label htmlFor="vision-model">视觉模型</label>
+          <input
+            id="vision-model"
+            value={activeVisionEndpoint.model}
+            spellCheck={false}
+            onChange={(event) => updateEndpoint(activeVisionIndex, { model: event.target.value })}
+            placeholder={
+              activeVisionIndex === 0
+                ? DEFAULT_VISION_MODEL
+                : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`
+            }
+          />
+        </div>
+
+        <div className="field">
+          <label htmlFor="vision-api-key">接口 Key</label>
+          <input
+            id="vision-api-key"
+            type="password"
+            value={activeVisionEndpoint.apiKey}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => updateEndpoint(activeVisionIndex, { apiKey: event.target.value })}
+            placeholder={
+              activeVisionIndex === 0
+                ? '留空 = 使用构建期内置的默认 Key'
+                : '留空 = 继承主接口的 Key'
+            }
+          />
+        </div>
+      </div>
 
       <p className="hint">
         只填地址也能用：主接口留空「模型 / Key」就用构建期内置的默认值（本地开发时来自 gitignored 的{' '}

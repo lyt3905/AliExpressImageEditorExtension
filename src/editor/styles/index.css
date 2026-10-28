@@ -669,7 +669,8 @@ button.primary:hover:not(:disabled) {
   font-weight: 600;
 }
 
-.field input {
+.field input,
+.field select {
   font: inherit;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -856,8 +857,19 @@ button.primary:hover:not(:disabled) {
 
 /* ------------------------------------------------------------- vision chain */
 
-/* One gateway in the chain. Boxed so several rows read as separate configs
-   instead of one long list of nine inputs. */
+/* One gateway in the chain, edited one at a time. Six inputs on screen for the
+   common single-gateway case made the section look like a form to fill in; the
+   dropdown keeps the chain visible in one line and the three fields below it
+   unambiguously belong to the selected gateway. */
+.vision-picker {
+  margin-bottom: 10px;
+}
+
+.vision-picker select {
+  max-width: 420px;
+}
+
+/* The boxed block below the picker. */
 .vision-row {
   padding: 10px 12px 2px;
   margin: 0 0 10px;
