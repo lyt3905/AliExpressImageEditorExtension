@@ -37,6 +37,7 @@ import type {
   Size,
   SlotFallback,
   SlotRole,
+  SlotSourceSelection,
   TemplateRules,
   TemplateSlot,
   TemplateStatus,
@@ -514,6 +515,36 @@ function parseFallbacks(raw: unknown, path: string, sink: Sink): SlotFallback[] 
   return fallbacks;
 }
 
+function parseSourceSelection(
+  raw: unknown,
+  path: string,
+  sink: Sink,
+): SlotSourceSelection | undefined {
+  if (raw === undefined) return undefined;
+  const record = readRecord(raw, path, sink);
+  if (!record) return undefined;
+
+  const strings = (value: unknown, at: string): string[] => {
+    const list = readArray(value, at, sink);
+    if (!list) return [];
+    const out: string[] = [];
+    list.forEach((entry, index) => {
+      const text = readString(entry, `${at}[${index}]`, sink);
+      if (text) out.push(text);
+    });
+    return out;
+  };
+
+  const expectedClass = record.expected_class === undefined ? undefined : readString(record.expected_class, `${path}.expected_class`, sink) ?? undefined;
+  return {
+    ...(expectedClass ? { expectedClass } : {}),
+    viewTypes: strings(record.view_type, `${path}.view_type`),
+    framing: strings(record.framing, `${path}.framing`),
+    prefer: strings(record.prefer, `${path}.prefer`),
+    exclude: strings(record.exclude, `${path}.exclude`),
+  };
+}
+
 function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSlot[] {
   const list = readArray(raw, 'slots', sink);
   if (!list) return [];
@@ -564,6 +595,7 @@ function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSl
     const variantsRaw = slot.variants;
     const variants = variantsRaw === undefined ? undefined : parseVariants(variantsRaw, `${path}.variants`, sink, canvas);
     const fallbacks = parseFallbacks(slot.fallbacks, `${path}.fallbacks`, sink);
+    const sourceSelection = parseSourceSelection(slot.source_selection, `${path}.source_selection`, sink);
 
     const hasCloseup = closeup !== undefined;
     const hasVariants = (variants?.length ?? 0) > 0;
@@ -577,7 +609,17 @@ function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSl
     }
 
     if (!id || !role || maxItems === null || zIndex === null) return;
-    slots.push({ id, role, required, maxItems, zIndex, closeup, variants, fallbacks });
+    slots.push({
+      id,
+      role,
+      required,
+      maxItems,
+      zIndex,
+      closeup,
+      variants,
+      fallbacks,
+      ...(sourceSelection ? { sourceSelection } : {}),
+    });
   });
 
   if (list.length > 0 && slots.length === 0) {
@@ -616,11 +658,19 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
     if (min !== null && target) heroDominance = { minCanvasOccupancy: min, targetCanvasOccupancy: target };
   }
 
-  const collisionRaw = readRecord(rules.collision, 'rules.collision', sink);
+  // Two spellings of the same rule: `collision.prevent_alpha_overlap` and
+  // `collage.allow_alpha_overlap` (the inverse). Both are accepted because the
+  // collage dialect states it the positive way —「允许重叠」— and rewriting a
+  // template just to flip a boolean invites getting the meaning wrong.
+  const collisionKey = rules.collision !== undefined ? 'rules.collision' : 'rules.collage';
+  const collisionRaw = readRecord(rules.collision ?? rules.collage, collisionKey, sink);
   let collision: CollisionRule | null = null;
   if (collisionRaw) {
-    const prevent = readBoolean(collisionRaw.prevent_alpha_overlap, 'rules.collision.prevent_alpha_overlap', sink, false);
-    const gap = readRange(collisionRaw.min_gap_px, 'rules.collision.min_gap_px', sink, 0, Number.MAX_SAFE_INTEGER);
+    const prevent =
+      collisionRaw.allow_alpha_overlap !== undefined
+        ? !readBoolean(collisionRaw.allow_alpha_overlap, `${collisionKey}.allow_alpha_overlap`, sink, true)
+        : readBoolean(collisionRaw.prevent_alpha_overlap, `${collisionKey}.prevent_alpha_overlap`, sink, false);
+    const gap = readRange(collisionRaw.min_gap_px, `${collisionKey}.min_gap_px`, sink, 0, Number.MAX_SAFE_INTEGER);
     if (gap !== null) collision = { preventAlphaOverlap: prevent, minGapPx: gap };
   }
 

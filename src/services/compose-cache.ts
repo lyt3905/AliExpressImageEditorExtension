@@ -188,6 +188,14 @@ export interface CachedBinding {
   /** Identity of the hero image, or '' when the answer named none. */
   hero: string;
   box: string | null;
+  /**
+   * Collage slots the model filled: `slotId -> image identity`.
+   *
+   * Identities, not material ids, for the same reason as `hero`/`box`: a material
+   * id points at nothing in the next session. Absent is normal — a two-slot
+   * template never produces any.
+   */
+  slots?: Record<string, string>;
   confidence: number;
   reason: string;
   at: number;
@@ -267,9 +275,17 @@ export function parseComposeCacheState(raw: unknown): ComposeCacheState {
       const hero = str(value.hero);
       const box = typeof value.box === 'string' ? value.box : null;
       if (!hero && !box) continue;
+      const slots: Record<string, string> = {};
+      if (isRecord(value.slots)) {
+        for (const [slotId, identity] of Object.entries(value.slots)) {
+          const trimmed = str(identity);
+          if (slotId && trimmed) slots[slotId] = trimmed;
+        }
+      }
       bindings[key] = {
         hero,
         box,
+        ...(Object.keys(slots).length > 0 ? { slots } : {}),
         confidence: num(value.confidence),
         reason: str(value.reason),
         at: num(value.at),

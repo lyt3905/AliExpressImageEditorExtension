@@ -1,0 +1,106 @@
+{
+  "id": "three_pose_figure_collage_white",
+  "version": "1.0",
+  "status": "draft",
+  "canvas": {
+    "width": 800,
+    "height": 800,
+    "background": "#FFFFFF",
+    "safe_margin": 0,
+    "reserved_zones": []
+  },
+  "text_zones": [],
+  "slots": [
+    {
+      "id": "rear_view_background",
+      "role": "secondary",
+      "required": true,
+      "max_items": 1,
+      "z_index": 10,
+      "source_selection": {
+        "expected_class": "figure",
+        "view_type": ["rear", "back"],
+        "framing": ["full", "three_quarter"],
+        "prefer": ["清晰的背部细节", "完整的身体轮廓", "尽可能完整的腿部", "清晰度最高的源图"],
+        "exclude": ["包装盒", "与其他槽位重复的源图", "只有背景而没有商品的图片"]
+      },
+      "closeup": {
+        "viewport": [160, 0, 610, 770],
+        "zoom": 1.0,
+        "anchor": "top_center",
+        "fit": "height",
+        "center_x": 380,
+        "clip_to_viewport": false
+      }
+    },
+    {
+      "id": "front_view_right",
+      "role": "secondary",
+      "required": true,
+      "max_items": 1,
+      "z_index": 20,
+      "source_selection": {
+        "expected_class": "figure",
+        "view_type": ["front", "front_three_quarter"],
+        "framing": ["full", "three_quarter"],
+        "prefer": ["正面或斜前方站姿", "能够辨认人物面部", "服装和主体配色清晰", "与背面图姿态明显不同"],
+        "exclude": ["与其他槽位重复的源图", "包装盒", "主体被严重遮挡的图片"]
+      },
+      "closeup": {
+        "viewport": [430, 40, 800, 800],
+        "zoom": 1.0,
+        "anchor": "top_center",
+        "fit": "height",
+        "center_x": 650,
+        "clip_to_viewport": false
+      }
+    },
+    {
+      "id": "action_pose_left_hero",
+      "role": "hero",
+      "required": true,
+      "max_items": 1,
+      "z_index": 30,
+      "source_selection": {
+        "expected_class": "figure",
+        "view_type": ["dynamic", "front_three_quarter", "action"],
+        "framing": ["closeup", "full", "three_quarter"],
+        "prefer": ["攻击或飞行动作", "具有明显透视感", "头部和上半身清晰", "能够形成强烈的视觉冲击"],
+        "exclude": ["与其他槽位重复的源图", "包装盒", "主体被文字遮挡严重的图片"]
+      },
+      "closeup": {
+        "viewport": [0, 80, 680, 800],
+        "zoom": 1.08,
+        "anchor": "top_center",
+        "fit": "height",
+        "center_x": 250,
+        "clip_to_viewport": false
+      }
+    }
+  ],
+  "rules": {
+    "hero_dominance": {
+      "min_canvas_occupancy": 0.28,
+      "target_canvas_occupancy": [0.35, 0.5]
+    },
+    "collage": {
+      "allow_alpha_overlap": true,
+      "min_gap_px": 0,
+      "clip_to_canvas": true
+    },
+    "shadow": {
+      "enabled": false,
+      "opacity": 40,
+      "blur": 5,
+      "offset": [4, 6]
+    },
+    "package_readability": {
+      "required": false,
+      "min_visible_ratio": 0
+    },
+    "text": {
+      "keep_clear_of_hero": true,
+      "prefer_black_on_white": true
+    }
+  }
+}

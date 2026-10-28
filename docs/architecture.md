@@ -910,7 +910,36 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
 （见上）。`Shape.intersects()` 用的是临时的 `stage.bufferHitCanvas`（每次自己 `clear()` 后只画自己，
 所以它一直准确）——记住这一点，以后若真要回到 alpha 命中，别再往共享命中画布上做破坏性合成。
 
-### 10.9 测试边界
+### 10.9 拼贴模板：三个图位各放一张不同的图
+
+`three_pose_figure_collage_white@1.0` 是第一个**图位比素材角色多**的模板：一个主体位（z30，动作姿态）、
+两个辅助位（z10 背面、z20 正面）。它和 `hero_closeup_package_backdrop` 的区别不是"再来一个 solve"，而是
+**不再求解**：
+
+- **辅助位只落位，不求解。** 每个槽位自带 `closeup`（`viewport` + `zoom` + `center_x`），
+  `buildCompositionPlan` 的 pass 3 直接调 `heroPlacement()` 换算中心点就放上去。设计师画好的构图，
+  再"优化"一遍只会得到另一个构图 —— 这正是拼贴和 hero/box 布局的分水岭（那边 zoom 是上限、
+  要躲碰撞，这边位置是结论）。
+- **谁放哪张图是判断题，几何层不猜。** `source_selection`（`view_type` / `framing` / `prefer` /
+  `exclude`）只是给视觉模型的提示，几何层一个字段都不读。真正的分配来自同一次视觉调用：prompt 里
+  追加"这些图位各挑一张互不相同的图"，答案多一个 `slots` 对象（`{"图位名":"C"}`），
+  `parseBindingAnswer` 校验后变成 `slotMaterialIds`。
+- **模型没答的用面积兜底，但绝不复用同一张。** `selectSupportMaterials()`：先吃模型的答案，
+  剩下的按面积从大到小填。拼贴模板关了 `prevent_alpha_overlap`，所以重复的图不会撞出碰撞警告 ——
+  它只会看起来像把同一张照片贴了两遍，那是最难被发现的一种错。
+- **缺图是警告，不是故障。** 槽位 `required` 但没分到素材 → `support_slot_empty` 警告（面板红色原因），
+  其余槽位照常落位；同一张图被分给两个槽位也按同样方式处理。
+- **缓存按图位记身份。** `CachedBinding.slots` 存的是 `slotId -> 图片身份`，不是 material id：
+  下次会话的 material id 全变了，身份还在（见 §12.3）。
+
+`rules.collage` 是 `rules.collision` 的另一种写法（`allow_alpha_overlap` 是 `prevent_alpha_overlap` 的反面），
+`parseRules` 两种都认 —— 让别人改一个模板只是为了把一个布尔取反，迟早会被改错。
+
+用户给的模板里另外两组字段落在别处，不在本仓库的模板方言里：`background_removal` / `figure_integrity`
+由既有抠图管线保证（只抠背景、不改商品像素、等比缩放），`fallback` / `hero_dominance.min_canvas_occupancy`
+之外的 `no_ai_redrawing` 之类是"生成式重绘"的约束，本工具从不重绘。
+
+### 10.10 测试边界
 
 - 求解器、模板校验、plan→图层：**node 下全可测**（`AlphaProfile` 与 `MeasureText` 都是注入端口）。
 - `probeAlphaProfile` / `blobToThumbnailDataUrl` 只能在浏览器跑 —— 所以它们的逻辑被压到 `alpha-scan.ts`
@@ -918,6 +947,9 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
 - `tests/live/vision.live.test.ts`：真网关契约测试，默认 skip（`AIEE_LIVE=1 AIEE_VISION_KEY=…`）。
   它用 node 现场生成的 PNG（蓝色立板 / 棕色双面箱体）跑真实 `VisionBinder`，断言角色判对 ——
   fixture 故意做得毫无歧义，所以判错意味着 prompt 或模型变了，而不是"模型今天心情不好"。
+- 拼贴模板另有一份 `tests/unit/composition-collage.test.ts`：模板解析（viewport 原值、`collage` 别名取反）、
+  `selectSupportMaterials`（用模型答案、面积兜底、绝不复用）、plan 三图 z 序、缺图/重复图的警告、
+  以及 `parseBindingAnswer` 对 `slots` 的过滤（未知图位、未知编号、重复、与 hero 撞车全部丢弃）。
 
 ## 11. 品牌目录：把 Logo 配置搬进仓库
 

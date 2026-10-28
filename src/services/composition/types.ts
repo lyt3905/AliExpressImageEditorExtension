@@ -88,6 +88,27 @@ export type SlotFallback =
   /** Leave the slot empty; the rest of the layout still applies. */
   | { kind: 'drop' };
 
+/**
+ * What kind of photo a slot wants — the part a vision model can actually act on.
+ *
+ * These are hints, not constraints: the geometry layer never reads them, and a
+ * missing hint must never block a slot. They exist so a multi-photo collage can
+ * ask for「背面」「正面」「动作」 and get three DIFFERENT shots instead of three
+ * crops of the same one.
+ */
+export interface SlotSourceSelection {
+  /** `figure` / `package` … free-form class hint. */
+  expectedClass?: string;
+  /** `rear` / `back` / `front` / `front_three_quarter` / `dynamic` / `action` … */
+  viewTypes: string[];
+  /** `full` / `three_quarter` / `closeup`. */
+  framing: string[];
+  /** Free-form「想要什么」，handed to the model as prose. */
+  prefer: string[];
+  /** Free-form「不要什么」. */
+  exclude: string[];
+}
+
 export interface TemplateSlot {
   id: string;
   role: SlotRole;
@@ -98,6 +119,7 @@ export interface TemplateSlot {
   closeup?: CloseupSpec;
   variants?: BoxVariant[];
   fallbacks?: SlotFallback[];
+  sourceSelection?: SlotSourceSelection;
 }
 
 export interface HeroDominanceRule {

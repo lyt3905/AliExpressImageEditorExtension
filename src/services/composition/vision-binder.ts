@@ -16,7 +16,7 @@ import { VISION_MAX_CANDIDATES } from '../../shared/constants';
 import type { VisionSettings } from '../settings';
 import { askVisionWithFallback } from '../vision-endpoints';
 import type { FetchLike } from '../vision-client';
-import { PACKAGING_LABEL_PATTERN } from './bind-materials';
+import { PACKAGING_LABEL_PATTERN, type SupportSlotRequest } from './bind-materials';
 
 export interface VisionCandidate {
   materialId: string;
@@ -29,6 +29,8 @@ export interface VisionCandidate {
 export interface VisionBinding {
   heroId: string | null;
   boxId: string | null;
+  /** Collage slots the model filled: `slotId -> materialId`. Empty for two-slot templates. */
+  slotMaterialIds: Record<string, string>;
   confidence: number;
   reason: string;
 }
@@ -67,21 +69,42 @@ export function selectVisionCandidates<T extends { label: string }>(
     .map((entry) => entry.candidate);
 }
 
-export function buildBindingPrompt(candidates: ReadonlyArray<{ key: string; label: string }>): string {
+export function buildBindingPrompt(
+  candidates: ReadonlyArray<{ key: string; label: string }>,
+  slots: readonly SupportSlotRequest[] = [],
+): string {
   const listing = candidates.map((candidate) => `${candidate.key}（${candidate.label}）`).join('、');
-  return [
+  const lines = [
     '你是电商主图排版助手。下面几张图是同一件商品的素材（都已抠图去背景），编号为：' + listing + '。',
     '',
     '请判断：',
     '- 哪一张适合做"特写主体"（hero）：单件商品、有清晰立面、适合放大裁切；',
     '- 哪一张是"包装盒"（package）：外包装、盒体、可见盒面。',
+  ];
+
+  if (slots.length > 0) {
+    lines.push(
+      '',
+      '另外还要为下面这些图位各挑一张**互不相同**的图（也不能和 hero 用同一张）：',
+      ...slots.map((slot) => {
+        const hints = slot.viewTypes?.length ? `（优先选：${slot.viewTypes.join(' / ')}）` : '';
+        return `- 图位 ${slot.slotId}${hints}`;
+      }),
+      '挑不出来就留空（把该图位填 null），不要拿同一张图凑数。',
+    );
+  }
+
+  lines.push(
     '',
     '只输出一个 JSON，不要解释，格式：',
-    '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"reason":"一句话"}',
+    slots.length > 0
+      ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"reason":"一句话"}'
+      : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"reason":"一句话"}',
     '',
     '如果没有任何一张是包装盒，package 填 null、package_found 填 false。',
     '不要把同一张图同时当作 hero 和 package。',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 function asKey(value: unknown): string | null {
@@ -100,6 +123,7 @@ function asKey(value: unknown): string | null {
 export function parseBindingAnswer(
   json: unknown,
   candidates: ReadonlyArray<{ key: string; materialId: string }>,
+  slots: readonly SupportSlotRequest[] = [],
 ): VisionBinding | null {
   if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
   const record = json as Record<string, unknown>;
@@ -114,13 +138,30 @@ export function parseBindingAnswer(
   const boxId =
     packageFound && packageKey && packageKey !== heroKey ? byKey.get(packageKey) ?? null : null;
 
+  // Collage slots: only keys the template asked for, only letters that exist, no
+  // repeats and never the hero — a duplicate would render as the same photo twice,
+  // which is the one thing a collage must not do.
+  const slotMaterialIds: Record<string, string> = {};
+  const rawSlots = record.slots;
+  if (slots.length > 0 && rawSlots && typeof rawSlots === 'object' && !Array.isArray(rawSlots)) {
+    const taken = new Set<string>([heroId]);
+    for (const slot of slots) {
+      const key = asKey((rawSlots as Record<string, unknown>)[slot.slotId]);
+      if (!key) continue;
+      const materialId = byKey.get(key);
+      if (!materialId || taken.has(materialId)) continue;
+      taken.add(materialId);
+      slotMaterialIds[slot.slotId] = materialId;
+    }
+  }
+
   const rawConfidence = typeof record.hero_confidence === 'number' ? record.hero_confidence : 0;
   const confidence = Number.isFinite(rawConfidence)
     ? Math.min(1, Math.max(0, rawConfidence))
     : 0;
 
   const reason = typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : '模型未给出理由';
-  return { heroId, boxId, confidence, reason };
+  return { heroId, boxId, slotMaterialIds, confidence, reason };
 }
 
 export interface VisionBindRequest {
@@ -131,6 +172,8 @@ export interface VisionBindRequest {
    */
   configs: readonly VisionSettings[];
   candidates: VisionCandidate[];
+  /** Collage picture slots to fill in the same answer; empty for two-slot layouts. */
+  slots?: readonly SupportSlotRequest[];
   fetchImpl?: FetchLike;
   timeoutMs?: number;
 }
@@ -155,11 +198,14 @@ export async function bindMaterialsWithVision(request: VisionBindRequest): Promi
 
   const answer = await askVisionWithFallback({
     configs: request.configs,
-    prompt: buildBindingPrompt(keyed.map(({ key, label }) => ({ key, label }))),
+    prompt: buildBindingPrompt(
+      keyed.map(({ key, label }) => ({ key, label })),
+      request.slots ?? [],
+    ),
     images: keyed.map(({ key, dataUrl }) => ({ label: `图 ${key}：`, dataUrl })),
     timeoutMs: request.timeoutMs,
     fetchImpl: request.fetchImpl,
   });
 
-  return parseBindingAnswer(answer.json, keyed);
+  return parseBindingAnswer(answer.json, keyed, request.slots ?? []);
 }

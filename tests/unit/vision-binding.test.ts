@@ -197,6 +197,7 @@ describe('parseBindingAnswer', () => {
     expect(binding).toEqual({
       heroId: 'm-hero',
       boxId: 'm-box',
+      slotMaterialIds: {},
       confidence: 0.9,
       reason: 'A 是主体',
     });

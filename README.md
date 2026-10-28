@@ -541,6 +541,22 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
 
 ### 版式模板
 
+**两份模板，下拉里自己选：**
+
+| 模板 | 长相 | 素材 |
+| --- | --- | --- |
+| `hero_closeup_package_backdrop@1.4` | 左侧超大特写 + 右上包装盒 + 左上型号 + 底部留白 | 主体图 + 包装图（无包装图时走兜底链） |
+| `three_pose_figure_collage_white@1.0` | 白底三姿态拼贴：背面（底板）+ 正面（右侧）+ 动作姿态（左侧主位） | **三张不同视角**的图，由 AI 从素材里挑 |
+
+`three_pose_figure_collage_white@1.0`（`src/services/composition/templates/three_pose_figure_collage_white.v1.0.json`）：
+
+- `slots`：`rear_view_background`（z10，取景框 160,0,610,770）、`front_view_right`（z20，430,40,800,800）、
+  `action_pose_left_hero`（hero，z30，0,80,680,800，zoom 1.08）
+- 每个槽位的 `source_selection` 是**给视觉模型的提示**（背面 / 正面 / 动作姿态、取景、偏好、排除），
+  几何层不读它；真正的分配来自 AI 那一次调用，它同时回答"哪张是主体、哪张是包装"和"哪个图位放哪张"
+- 拼贴槽位**只落位不求解**：位置就是模板写的，`zoom` 也直接生效；缺图 → `support_slot_empty` 警告 + 该位置留空
+- 同一张图**不会被放进两个图位**（宁可空着），因为拼贴关掉了重叠检测，重复只会在视觉上像贴错
+
 `src/services/composition/templates/hero_closeup_package_backdrop.v1.4.json`
 
 - `canvas`：800×800、白底、安全边距 16、底部 `store_footer` 保留区
@@ -680,7 +696,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 46 文件 / 753 个单元测试（不联网）
+│  ├─ unit/                      # 47 文件 / 767 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -847,8 +863,10 @@ AliExpressImageEditorExtension/
     单张上限 20MB（`MAX_UPLOAD_BYTES`）—— 抠图服务端本来就缩到 1600px，再大只是白等一次写盘。
 11. 镜像 / 旋转**只作用于当前选中的那一个图层**：不支持框选或多选后一起变换，也没有「整张画布转 90°」。
     角度归一化到 `[0, 360)`，所以左右各转 90° 转满一圈不会累积成 360°。
-12. AI 作图**只认模板里声明的版式**（当前一份 `hero_closeup_package_backdrop@1.4`，`status` 仍是 draft），
+12. AI 作图**只认模板里声明的版式**（当前两份：`hero_closeup_package_backdrop@1.4` 与
+    `three_pose_figure_collage_white@1.0`，`status` 都是 draft），
     不做自由构图，更不是"输入一句话就出图"。几何全部由确定性求解器算，同一商品同一素材必然是同一张。
+    拼贴模板的图位**不求解**，位置直接取自模板；图位没分到素材就留空并给一条红色原因，不会拿重复的图凑数。
 13. 视觉绑定一次最多送 **6 张**素材（512px 白底缩略图，实测 4 张 1663 token / 6 张 2395 token）。
     6 等于 AliExpress 图片区槽位数，正常商品不会超；若你额外上传到 6 张以上，截断时**优先保留标签像包装的
     候选**，其余按页面顺序补齐。判错时仍需在面板里手动改——不做自动重试或两轮确认。
@@ -894,7 +912,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（48 文件 / 758 测试，其中 753 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（49 文件 / 772 测试，其中 767 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -909,6 +927,7 @@ AliExpressImageEditorExtension/
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 | 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（29 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
+| 三姿态拼贴模板（10.13.0） | **仅自动化验证**（14 个单测：模板解析与 `collage` 别名取反、`source_selection` 只当提示、`selectSupportMaterials` 的三条规则、三图 z 序、缺图/重复图的警告、`parseBindingAnswer` 对 `slots` 的过滤。**三张图在画布上的实际观感未在真实 Chrome 里看过**，验收步骤见 manual-test 5.106–5.107） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 | 视觉接口三项保存（10.8.1 修复） | **仅自动化验证**（3 个单测：只补一个字段时其余两项保留、单独存视觉不动账号字段、空 Key 回落默认。修复前 `src/background/service-worker.ts` 的 `saveSettings` 处理器漏传 `vision`，值永远存不进去。真机对照步骤见 manual-test 5.78） |
 | 视觉接口多条配置 + 自动切换（10.9.0） | **仅自动化验证**（14 个单测：`resolveVisionConfigs` 的继承与默认回落、`orderByPin` 的三种情况、逐条回退、全挂时抛第一条错误并附其余原因、只 pin 成功者、pin 存储坏掉也照常返回答案、空链拒绝；另 13 个 `settings` 单测锁住「列表整体替换 / 单个对象只改主接口 / 旧对象升级成一条链」。**真网关的两次请求未在 Chrome 里连跑过**，步骤见 manual-test 5.79–5.81） |

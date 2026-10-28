@@ -86,3 +86,56 @@ export function pickSecondary(
     candidate.width * candidate.height > best.width * best.height ? candidate : best,
   );
 }
+
+/** One `secondary` / `accent` slot of a collage template. */
+export interface SupportSlotRequest {
+  slotId: string;
+  /** `view_type` hints from `source_selection` — only the vision model can use them. */
+  viewTypes?: readonly string[];
+}
+
+export interface SupportAssignment {
+  slotId: string;
+  materialId: string;
+}
+
+/**
+ * Hand each collage slot a DIFFERENT photo.
+ *
+ * `preference` is what the vision model answered (`slotId -> materialId`); it is
+ * the only source that can honour「背面」「正面」「动作」, because labels and aspect
+ * ratios cannot tell a rear shot from a front one. Everything it did not cover is
+ * filled by area, largest first — a heuristic that is at least never wrong about
+ * "is this an image".
+ *
+ * The rule that outranks both: **never use one photo twice.** `prevent_alpha_overlap`
+ * is off in a collage, so a duplicate would not collide — it would just look like
+ * the designer pasted the same picture in twice.
+ */
+export function selectSupportMaterials(input: {
+  slots: readonly SupportSlotRequest[];
+  candidates: readonly BindCandidate[];
+  usedIds: readonly (string | null | undefined)[];
+  preference?: Readonly<Record<string, string>>;
+}): SupportAssignment[] {
+  const used = new Set(input.usedIds.filter((id): id is string => Boolean(id)));
+  const byId = new Map(input.candidates.map((candidate) => [candidate.materialId, candidate]));
+  const byArea = [...input.candidates].sort(
+    (left, right) => right.width * right.height - left.width * left.height,
+  );
+
+  const assignments: SupportAssignment[] = [];
+  for (const slot of input.slots) {
+    const preferred = input.preference?.[slot.slotId];
+    if (preferred && byId.has(preferred) && !used.has(preferred)) {
+      used.add(preferred);
+      assignments.push({ slotId: slot.slotId, materialId: preferred });
+      continue;
+    }
+    const fallback = byArea.find((candidate) => !used.has(candidate.materialId));
+    if (!fallback) break;
+    used.add(fallback.materialId);
+    assignments.push({ slotId: slot.slotId, materialId: fallback.materialId });
+  }
+  return assignments;
+}

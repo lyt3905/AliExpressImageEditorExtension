@@ -112,6 +112,16 @@ export interface PlanRequest {
   box?: PlannerMaterial | null;
   /** Extra material for the `secondary_view` fallback rung. */
   secondary?: PlannerMaterial | null;
+  /**
+   * Materials for the template's remaining picture slots (`secondary` / `accent`
+   * slots that declare their own `closeup`).
+   *
+   * A three-photo collage needs three photos, and which one goes where is a
+   * decision the geometry layer cannot make — the binder (or the vision model)
+   * hands the answers over as data. A slot with no entry here is simply left
+   * empty; that is a warning, never a broken layout.
+   */
+  supports?: ReadonlyArray<{ slotId: string; material: PlannerMaterial }>;
   /** Model code for `model_code` text zones; absent = leave the zone empty. */
   modelCode?: string | null;
   /** Injected glyph measurement; required only when a text zone is filled. */
@@ -503,6 +513,46 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     const placed = placedFromMaterial(boxSource, boxSolution.placement, boxSlot!);
     images.push({ ...placed, visibleRatio: boxSolution.visibleRatio });
   }
+
+  // ---- pass 3: the remaining picture slots --------------------------------
+  //
+  // These are positioned literally: each slot's own `closeup` says where the
+  // photo goes, and there is no solver between the template and the canvas. That
+  // is the whole difference between a collage and the hero/package layout — a
+  // collage's value is the composition the designer drew, so "solving" it would
+  // only invent a different one.
+  const usedMaterialIds = new Set([hero.materialId, boxSource?.materialId ?? '']);
+  const supportSlots = [...template.slots]
+    .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
+    .sort((left, right) => left.zIndex - right.zIndex);
+
+  for (const slot of supportSlots) {
+    const assignment = request.supports?.find((entry) => entry.slotId === slot.id);
+    if (!assignment) {
+      if (slot.required) {
+        warnings.push(
+          warning('support_slot_empty', `槽位 ${slot.id} 需要一张素材，但没有分到，本次留空`, {
+            slotId: slot.id,
+          }),
+        );
+      }
+      continue;
+    }
+    if (usedMaterialIds.has(assignment.material.materialId)) {
+      // The same photo twice in one collage reads as a bug, not as a layout.
+      warnings.push(
+        warning('support_slot_empty', `槽位 ${slot.id} 分到的素材与其它槽位重复，本次留空`, {
+          slotId: slot.id,
+          materialId: assignment.material.materialId,
+        }),
+      );
+      continue;
+    }
+    usedMaterialIds.add(assignment.material.materialId);
+    const supportPlacement = heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom);
+    images.push(placedFromMaterial(assignment.material, supportPlacement, slot));
+  }
+
   images.sort((a, b) => a.zIndex - b.zIndex);
 
   const zone = modelCodeZone(template);

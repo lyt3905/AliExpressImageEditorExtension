@@ -41,7 +41,12 @@ import { putBlob, getBlob } from '../services/indexed-db';
 import type { BrandMeta } from '../shared/types';
 import { describeUploadOutcome } from '../services/upload-images';
 import { createAlphaProbeCache } from '../services/composition/alpha-probe';
-import { bindMaterialRoles, pickSecondary } from '../services/composition/bind-materials';
+import {
+  bindMaterialRoles,
+  pickSecondary,
+  selectSupportMaterials,
+  type SupportSlotRequest,
+} from '../services/composition/bind-materials';
 import {
   bindMaterialsWithVision,
   selectVisionCandidates,
@@ -57,7 +62,12 @@ import {
 } from '../services/compose-cache';
 import { loadSettings } from '../services/settings';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
-import { buildCompositionPlan, type CompositionPlan } from '../services/composition/planner';
+import {
+  buildCompositionPlan,
+  type CompositionPlan,
+  type PlannerMaterial,
+} from '../services/composition/planner';
+import type { LayoutTemplate } from '../services/composition/types';
 import {
   DEFAULT_TEMPLATE_KEY,
   listTemplateKeys,
@@ -121,7 +131,34 @@ function resolveCachedBinding(
   };
   const heroId = materialFor(cached.hero);
   if (!heroId) return null;
-  return { heroId, boxId: materialFor(cached.box), confidence: cached.confidence, reason: cached.reason };
+  const slotMaterialIds: Record<string, string> = {};
+  for (const [slotId, identity] of Object.entries(cached.slots ?? {})) {
+    const materialId = materialFor(identity);
+    // A slot we cannot point at simply stays empty: the planner warns, and the
+    // rest of the collage still lands. Never substitute a different photo here.
+    if (materialId) slotMaterialIds[slotId] = materialId;
+  }
+  return {
+    heroId,
+    boxId: materialFor(cached.box),
+    slotMaterialIds,
+    confidence: cached.confidence,
+    reason: cached.reason,
+  };
+}
+
+/**
+ * The template's collage slots: picture slots that are neither the hero nor the
+ * package and that say where they want their photo (`closeup`).
+ *
+ * Order is z, so slot 1 of the answer is the one drawn underneath. A two-slot
+ * template returns an empty list and the whole collage path stays switched off.
+ */
+function supportSlotsOf(template: LayoutTemplate): SupportSlotRequest[] {
+  return [...template.slots]
+    .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
+    .sort((left, right) => left.zIndex - right.zIndex)
+    .map((slot) => ({ slotId: slot.id, viewTypes: slot.sourceSelection?.viewTypes }));
 }
 
 export function App(): JSX.Element {
@@ -266,6 +303,14 @@ export function App(): JSX.Element {
   const [composeError, setComposeError] = useState<string | null>(null);
   const [visionBusy, setVisionBusy] = useState(false);
   const [bindNote, setBindNote] = useState<string | null>(null);
+  /**
+   * Collage slots the AI picked: `slotId -> materialId`.
+   *
+   * Kept beside `heroId`/`boxId` because they come from the same answer. Empty for
+   * every two-slot template; a collage uses it so the three photos are three
+   * different photos rather than whatever happened to be largest.
+   */
+  const [visionSlots, setVisionSlots] = useState<Record<string, string>>({});
   /**
    * Cache key of the composition that is on screen, waiting to be photographed.
    *
@@ -874,6 +919,39 @@ export function App(): JSX.Element {
         : null;
       const secondaryProfile = secondaryMaterial ? await profileFor(secondaryMaterial) : null;
 
+      /*
+        Collage slots: the template may want more photos than hero + package.
+
+        Which photo lands in「背面」is a judgement, so the AI's picks win and the
+        rest is filled by area (see `selectSupportMaterials`). Whatever is left over
+        is simply not placed — a missing slot is a red reason line, not a broken
+        layout, and never a duplicate photo.
+      */
+      const supportSlots = supportSlotsOf(parsed.template);
+      const supports: Array<{ slotId: string; material: PlannerMaterial }> = [];
+      if (supportSlots.length > 0) {
+        const assignments = selectSupportMaterials({
+          slots: supportSlots,
+          candidates: bindCandidates,
+          usedIds: [heroMaterialId, boxMaterialId],
+          preference: visionSlots,
+        });
+        for (const assignment of assignments) {
+          const material = cutouts.find((entry) => entry.id === assignment.materialId);
+          if (!material) continue;
+          supports.push({
+            slotId: assignment.slotId,
+            material: {
+              materialId: material.id,
+              blobId: material.blobId,
+              kind: 'cutout',
+              profile: await profileFor(material),
+              label: material.label,
+            },
+          });
+        }
+      }
+
       return buildCompositionPlan({
         template: parsed.template,
         hero: {
@@ -906,9 +984,10 @@ export function App(): JSX.Element {
         modelCode: session?.productCode ?? null,
         measure: measureTextWithCanvas(),
         seed: session?.productCode ?? sessionId ?? '',
+        ...(supports.length > 0 ? { supports } : {}),
       });
     },
-    [bindCandidates, cutouts, profileFor, session, sessionId, templateKey],
+    [bindCandidates, cutouts, profileFor, session, sessionId, templateKey, visionSlots],
   );
 
   /** One dispatch = one history entry, so a single Ctrl+Z restores the canvas. */
@@ -996,7 +1075,10 @@ export function App(): JSX.Element {
       if (!options?.force) {
         const cached = await composeCache.getBinding(bindingKey).catch(() => null);
         const resolved = cached ? resolveCachedBinding(cached, identityByMaterialId) : null;
-        if (resolved) return resolved;
+        if (resolved) {
+          setVisionSlots(resolved.slotMaterialIds);
+          return resolved;
+        }
       }
 
       const candidates: Array<{ materialId: string; label: string; dataUrl: string }> = [];
@@ -1013,21 +1095,38 @@ export function App(): JSX.Element {
       }
       if (candidates.length === 0) return null;
 
-      const binding = await bindMaterialsWithVision({ configs, candidates });
+      // The collage slots of the CURRENT template. Asking for them in the same
+      // request is what makes「背面 / 正面 / 动作」possible at all — no label or
+      // aspect ratio tells a rear shot from a front one.
+      const parsedTemplate = parseTemplateByKey(templateKey).template;
+      const slots = parsedTemplate ? supportSlotsOf(parsedTemplate) : [];
+
+      const binding = await bindMaterialsWithVision({
+        configs,
+        candidates,
+        ...(slots.length > 0 ? { slots } : {}),
+      });
       if (!binding) return null;
+      setVisionSlots(binding.slotMaterialIds);
       const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
+      const slotIdentities: Record<string, string> = {};
+      for (const [slotId, materialId] of Object.entries(binding.slotMaterialIds)) {
+        const identity = identityByMaterialId.get(materialId);
+        if (identity) slotIdentities[slotId] = identity;
+      }
       // Stored as identities, so the next session can point at its own materials.
       void composeCache
         .putBinding(bindingKey, {
           hero: heroIdentity,
           box: binding.boxId ? identityByMaterialId.get(binding.boxId) ?? null : null,
+          ...(Object.keys(slotIdentities).length > 0 ? { slots: slotIdentities } : {}),
           confidence: binding.confidence,
           reason: binding.reason,
         })
         .catch(() => undefined);
       return binding;
     },
-    [composeCache, cutouts, identityByMaterialId, session],
+    [composeCache, cutouts, identityByMaterialId, session, templateKey],
   );
 
   /** Manual trigger: bind, then leave the result in the panel for review. */
