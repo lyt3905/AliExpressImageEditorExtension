@@ -111,21 +111,36 @@ describe('cache keys', () => {
     expect(resultBlobIdFor('abc123')).toBe(`${COMPOSE_RESULT_PREFIX}abc123`);
   });
 
-  it('ignores material order but not the set itself', () => {
-    const base = { productCode: 'P1', model: 'm', baseUrl: 'u' };
+  it('never keys on a blob: url — those are per-tab object urls', () => {
+    // Same file, two sessions: the object url differs, the identity must not.
+    const first = imageIdentity({ url: 'blob:chrome-extension://abc/1', label: 'a.png', bytes: 100, width: 10, height: 20 });
+    const second = imageIdentity({ url: 'blob:chrome-extension://abc/2', label: 'a.png', bytes: 100, width: 10, height: 20 });
+    expect(first).toBe(second);
+    expect(first).toBe('local:a.png|100|10x20');
+  });
+
+  it('ignores material order and the set when the product code is known', () => {
+    const base = { productCode: 'P1', model: 'm' };
     expect(bindingKeyFor({ ...base, identities: ['url:a', 'url:b'] })).toBe(
       bindingKeyFor({ ...base, identities: ['url:b', 'url:a'] }),
     );
-    expect(bindingKeyFor({ ...base, identities: ['url:a'] })).not.toBe(
+    // One photo more (a failed cut-out yesterday, an extra photo today) is the
+    // same listing: the answer the model gave about it still stands.
+    expect(bindingKeyFor({ ...base, identities: ['url:a'] })).toBe(
       bindingKeyFor({ ...base, identities: ['url:a', 'url:b'] }),
+    );
+    // A different listing is not.
+    expect(bindingKeyFor({ ...base, productCode: 'P2', identities: ['url:a'] })).not.toBe(
+      bindingKeyFor({ ...base, productCode: 'P1', identities: ['url:a'] }),
     );
   });
 
-  it('drops duplicate identities', () => {
-    const input = { productCode: 'P1', identities: ['url:a', 'url:a', 'url:b'] };
-    expect(bindingKeyFor(input)).toBe(
-      bindingKeyFor({ productCode: 'P1', identities: ['url:a', 'url:b'] }),
+  it('falls back to the photo set when there is no product code', () => {
+    const base = { productCode: null, identities: ['url:a'] };
+    expect(bindingKeyFor({ ...base, identities: ['url:a', 'url:b'] })).not.toBe(
+      bindingKeyFor(base),
     );
+    expect(bindingKeyFor({ ...base, identities: ['url:a', 'url:a'] })).toBe(bindingKeyFor(base));
   });
 
   it('changes with the vision model — a new model must not reuse the old answer', () => {
@@ -133,17 +148,14 @@ describe('cache keys', () => {
     expect(bindingKeyFor({ identities, model: 'gpt-a' })).not.toBe(
       bindingKeyFor({ identities, model: 'gpt-b' }),
     );
-    expect(bindingKeyFor({ identities, baseUrl: 'x' })).not.toBe(
-      bindingKeyFor({ identities, baseUrl: 'y' }),
-    );
   });
 
-  it('changes the result key when the template, the hero or a photo changes', () => {
-    const base = { productCode: 'P1', identities: ['url:a', 'url:b'], templateKey: 't@1', heroIdentity: 'url:a', boxIdentity: 'url:b' };
+  it('changes the result key when the template, the hero or the box changes', () => {
+    const base = { productCode: 'P1', templateKey: 't@1', heroIdentity: 'url:a', boxIdentity: 'url:b' };
     expect(resultKeyFor({ ...base, templateKey: 't@2' })).not.toBe(resultKeyFor(base));
     expect(resultKeyFor({ ...base, heroIdentity: 'url:b' })).not.toBe(resultKeyFor(base));
     expect(resultKeyFor({ ...base, boxIdentity: null })).not.toBe(resultKeyFor(base));
-    expect(resultKeyFor({ ...base, identities: ['url:a'] })).not.toBe(resultKeyFor(base));
+    expect(resultKeyFor({ ...base, productCode: 'P2' })).not.toBe(resultKeyFor(base));
   });
 });
 

@@ -680,7 +680,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 45 文件 / 730 个单元测试（不联网）
+│  ├─ unit/                      # 46 文件 / 749 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -861,8 +861,10 @@ AliExpressImageEditorExtension/
     自填的地址如果换了域名，还需要在 `host_permissions` 里放行（10.8.0 未做动态授权）。
     本地注册表是真相源 —— 同名手工品牌、你在选项页改过的远程品牌、被取消勾选的品牌都不会被覆盖，
     目录里删掉的品牌只移除条目、已下载的图片仍保留。
-18. 本地缓存**没有 TTL**，失效只靠「素材变了」：加图/删图/换图会让 key 变掉，但**同一张图在后台被
-    原地替换、CDN url 没变时不会失效**（跟图片下载器是同一个「url 即内容」的假设），出口是面板上的
+18. 本地缓存**没有 TTL**，失效只靠「什么变了」。两个键的范围不一样（10.12.0 起）：AI 识别结论按
+    **商品编号 + 模型**记（同一个 listing 只问一次，多一张/少一张图不作废，换网关不作废），成品图按
+    **商品编号 + 模板 + 主体图 + 包装盒图**记；抠图按单张源图身份记。但**同一张图在后台被原地替换、
+    CDN url 没变时不会失效**（跟图片下载器是同一个「url 即内容」的假设），出口是面板上的
     「清除本地缓存」。上限：抠图 40 条 / AI 识别结论 16 条 / 成品图 12 条，按最旧先丢。
     缓存的成品图**只能下载**，不会被自动放回画布 —— 画布仍是会话级的，刷新后靠文档恢复。
 19. 品牌 Logo 的锁定只挡**画布上的误操作**（点不中、拖不动），不挡删除：锁着的 Logo 仍可在图层面板点 ✕
@@ -889,7 +891,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（48 文件 / 753 测试，其中 748 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（48 文件 / 754 测试，其中 749 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -903,7 +905,7 @@ AliExpressImageEditorExtension/
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
-| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
+| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（29 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 | 视觉接口三项保存（10.8.1 修复） | **仅自动化验证**（3 个单测：只补一个字段时其余两项保留、单独存视觉不动账号字段、空 Key 回落默认。修复前 `src/background/service-worker.ts` 的 `saveSettings` 处理器漏传 `vision`，值永远存不进去。真机对照步骤见 manual-test 5.78） |
 | 视觉接口多条配置 + 自动切换（10.9.0） | **仅自动化验证**（14 个单测：`resolveVisionConfigs` 的继承与默认回落、`orderByPin` 的三种情况、逐条回退、全挂时抛第一条错误并附其余原因、只 pin 成功者、pin 存储坏掉也照常返回答案、空链拒绝；另 13 个 `settings` 单测锁住「列表整体替换 / 单个对象只改主接口 / 旧对象升级成一条链」。**真网关的两次请求未在 Chrome 里连跑过**，步骤见 manual-test 5.79–5.81） |
@@ -911,5 +913,6 @@ AliExpressImageEditorExtension/
 | 选项页收起式界面（10.10.2–10.10.3） | **仅自动化验证**（`typecheck` + 735 测试不变，界面改动无新增断言；折叠状态是纯 UI 状态，不进存储也不进文档）。**真机必须看一眼**：视觉接口默认收起、品牌目录只占一行、品牌行点「编辑」才展开、保存/删除后收起、添加成功后表单折回，步骤见 manual-test 5.79、5.86–5.88 |
 | 设置页四分类改版（10.11.0） | **仅自动化验证**（`typecheck` 通过 + 735 测试不变；`src/options/` 仍无单测，脏标记、消息 payload 与四个 section 的 props 形状由类型钉住）。**真机必须走一遍**：一次只显示一个分类、切标签不丢草稿、底部保存栏的禁用/点亮/轻提示、未保存关页面被拦、账号区登录后收起、视觉抽屉与「测试」、水印/品牌分页与抽屉、键盘方向键切分类，步骤见 manual-test 5.90–5.100 |
 | 错误记录（10.11.2） | **仅自动化验证**（18 个单测：损坏/半截条目降级、按时间重排、20 类封顶、同一条连续失败合并 `×N` 且中间夹别的错误不合并、写失败不抛、清空两个键）。**真机对照**：连点三次非商品页看到 `×3`、换个失败原因变成 2 类、清空后刷新仍为空，步骤见 manual-test 5.101–5.102 |
+| 品牌下拉可选 + 缓存键范围（10.12.0 修复） | **仅自动化验证**（`typecheck` + 29 个缓存单测；两个 bug 都是"路径根本没走到"，没有可以断言的新函数：① 编辑器启动流程在"目录已最新"时提前 `return`，`loadBrandMaterials()` 从未执行 → 工具栏品牌下拉永远是空的；② 缓存键把整组抠图身份都算进去，多一张/少一张图就整份作废 → 看着像"有的商品不缓存、下次还重新生成"。**真机对照**：打开任一商品页，品牌下拉里应列出目录里的品牌并能手工选中；同一商品第二次打开，面板应出现「已复用上次的抠图 n 张」，Network 里不应再有视觉模型请求，步骤见 manual-test 5.103–5.104） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

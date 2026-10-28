@@ -82,7 +82,14 @@ export interface CacheableImage {
  */
 export function imageIdentity(image: CacheableImage): string {
   const url = (image.url ?? '').trim();
-  if (url) return `url:${url}`;
+  /*
+    `blob:` urls are object urls this tab made; they look stable and are not —
+    the same photo gets a different one in the next session, so keying on them
+    silently disables reuse for the image (10.12.0: this is why pasted/uploaded
+    pictures never hit). Fall through to the file-name form instead, which is
+    what those images actually have.
+  */
+  if (url && !url.startsWith('blob:')) return `url:${url}`;
 
   const bytes = Number.isFinite(image.bytes) ? Math.round(image.bytes as number) : 0;
   if (bytes > 0) {
@@ -121,41 +128,48 @@ export function resultBlobIdFor(key: string): string {
 }
 
 /**
- * Key of an AI binding: which material set was judged, by which model.
+ * Key of an AI binding: which listing was judged, by which model.
+ *
+ * The product code is the identity that matters: it is one listing, and the same
+ * listing judged again should hit the cache even if one extra photo appeared (or
+ * one cut-out failed) in between. Keying on the whole photo set instead meant
+ * every small change to the set re-asked the model — which is most of the
+ * "cached yesterday, regenerated today" reports.
  *
  * The model is part of the key on purpose — swapping the vision model is exactly
- * the case where the previous answer should not be reused.
+ * the case where the previous answer should not be reused. The endpoint is not:
+ * moving to a backup gateway judges the same photos, so the answer still stands.
  */
 export function bindingKeyFor(input: {
   productCode?: string | null;
   identities: readonly string[];
   model?: string;
-  baseUrl?: string;
 }): string {
-  return hashKey([
-    'binding',
-    input.productCode ?? '',
-    input.model ?? '',
-    input.baseUrl ?? '',
-    ...sortedUnique(input.identities),
-  ]);
+  const code = (input.productCode ?? '').trim();
+  const scope = code
+    ? [`code:${code}`]
+    : sortedUnique(input.identities).map((identity) => `img:${identity}`);
+  return hashKey(['binding', ...scope, input.model ?? '']);
 }
 
-/** Key of a finished composite: the material set plus everything that shapes it. */
+/**
+ * Key of a finished composite: what actually appears in the picture.
+ *
+ * Only the hero photo, the packaging photo and the template are in it — the PNG
+ * does not contain the other cut-outs, so their presence must not invalidate it.
+ */
 export function resultKeyFor(input: {
   productCode?: string | null;
-  identities: readonly string[];
   templateKey: string;
   heroIdentity?: string | null;
   boxIdentity?: string | null;
 }): string {
   return hashKey([
     'result',
-    input.productCode ?? '',
+    (input.productCode ?? '').trim(),
     input.templateKey,
     input.heroIdentity ?? '',
     input.boxIdentity ?? '',
-    ...sortedUnique(input.identities),
   ]);
 }
 

@@ -181,24 +181,28 @@ export function App(): JSX.Element {
     let cancelled = false;
     void (async () => {
       /*
-        Sync the catalog first, then read the registry — but never let the sync
-        delay the first paint for long. It gets one shot per tab
+        Sync the catalog first, then **always** read the registry — but never let
+        the sync delay the first paint for long. It gets one shot per tab
         (`claimSilentSyncAttempt`); if the catalog is already fresh the 24h TTL
         makes this a single storage read, and if GitHub is unreachable the 15s
         timeout ends in the catch below. Either way the editor renders with
         whatever the local registry already holds.
+
+        Do not turn "the sync added nothing" into an early return. That shortcut
+        used to skip `loadBrandMaterials()` whenever the catalog was current —
+        which is the normal case — so the brand list stayed empty and the toolbar
+        select rendered disabled ("不使用品牌" and nothing to pick). The registry
+        is the source of truth here; the sync is only one of the things that can
+        change it.
       */
       if (claimSilentSyncAttempt()) {
         try {
           const settings = await loadSettings();
-          const outcome = await syncBrandCatalog(
+          await syncBrandCatalog(
             settings.brandCatalogUrl ? { extraBaseUrls: [settings.brandCatalogUrl] } : {},
           );
           // Failures are already recorded in `lastError` for the Options page; a
           // background toast for "GitHub unreachable" would only worry the seller.
-          if (outcome.ok && outcome.result.added.length === 0) {
-            return; // nothing new — keep the (already loaded) list, skip the reload
-          }
         } catch {
           /* silent: see comment above */
         }
@@ -765,8 +769,10 @@ export function App(): JSX.Element {
    * Cache key for the composed PNG of one (hero, box) pair, or null when the
    * materials cannot be identified — then there is nothing to key a cache on.
    *
-   * The key covers the whole material set, not just the two chosen ones: changing
-   * any picture is supposed to invalidate the result ("素材变了就失效").
+   * The key covers what ends up in the picture: the hero photo, the packaging
+   * photo, the template and the listing. It deliberately does NOT cover the whole
+   * cut-out set — the other photos are not in the PNG, and including them meant a
+   * single failed cut-out (or one extra photo) threw away yesterday's result.
    */
   const resultKeyForCompose = useCallback(
     (heroMaterialId: string | null, boxMaterialId: string | null): string | null => {
@@ -775,7 +781,6 @@ export function App(): JSX.Element {
       const boxIdentity = boxMaterialId ? identityByMaterialId.get(boxMaterialId) ?? null : null;
       return resultKeyFor({
         productCode: session?.productCode ?? null,
-        identities: [...identityByMaterialId.values()],
         templateKey,
         heroIdentity,
         boxIdentity,
@@ -969,14 +974,12 @@ export function App(): JSX.Element {
       const bindingKey = bindingKeyFor({
         productCode: session?.productCode ?? null,
         identities: [...identityByMaterialId.values()],
-        model: configs[0]?.model ?? '',
         /*
-          The whole chain, not whichever gateway ends up answering. The answer is a
-          function of (photos, model); keying on the answering host would throw the
-          cache away the first time a fallback fires, even though the model that
-          produced the answer was the same.
+          The model, not the endpoint: moving to a backup gateway judges the same
+          photos, so yesterday's answer still stands. Only the model that produced
+          the answer is allowed to invalidate it.
         */
-        baseUrl: configs.map((config) => config.baseUrl).join(','),
+        model: configs[0]?.model ?? '',
       });
 
       if (!options?.force) {
@@ -1500,8 +1503,13 @@ export function App(): JSX.Element {
         if (!composed) return;
         await composeCache.putResult(key, composed.blob);
         setResultCachedAt(Date.now());
-      } catch {
-        /* best effort */
+      } catch (error) {
+        /*
+          Best effort — but not silent: "some products never cache" is impossible
+          to diagnose from a seller's screen otherwise, and this line costs
+          nothing when it never fires.
+        */
+        console.warn('[AIEE] 成品图没写进本地缓存：', error);
       }
     })();
   }, [composeCache, composePng, document.layers, imageForLayer, pendingResultKey, state.exporting]);
