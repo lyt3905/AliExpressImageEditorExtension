@@ -656,13 +656,13 @@ AliExpressImageEditorExtension/
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页（登录 + 视觉接口 + 水印框 + 品牌）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 41 文件 / 684 个单元测试（不联网）
+│  ├─ unit/                      # 42 文件 / 695 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -704,6 +704,21 @@ AliExpressImageEditorExtension/
   没有 TTL，需要强制重算就点「清除本地缓存」。
 - 存储不改 IndexedDB schema：blob 仍进 `blobs` 表（确定性 id），索引只占 `chrome.storage.local` 的一个键
   `aiee:compose-cache`；读坏或写不进时一律当成"没有缓存"，编辑器照常跑。
+
+---
+
+## 品牌 Logo（压在最上层、默认锁定）
+
+从工具栏选品牌后，Logo 作为**文档图层**进入画布，但行为像一枚印章：
+
+- **永远压在最上层**：绘制顺序是「商品图层 → 水印 → 编号 → 品牌 Logo」，所以它盖过商品图、水印和编号文字。
+  改图层顺序也改变不了这一点（面板里这一行干脆没有 ↑/↓）。
+- **默认锁定**：画布上点不中、拖不动，点击会穿透到下面那层，不会误抓。
+- **可解锁**：图层面板里该行的「解锁」按钮。解锁后可以自由拖动、缩放，锁上则收回。
+- **记住位置和缩放**：松手就把这个品牌摆好的位置与大小写进 `aiee:logo-placement`，
+  **每个品牌各记一份**（不同 Logo 长宽比差很多），下次再选这个品牌直接落到原处。
+- **生成主图不会抹掉它**：排版只替换商品图、衬板和编号；品牌章原样留下、位置不变。
+- 没摆过的品牌默认落在右下角、留 32px 边距、最长边约为画布的 26%。
 
 ---
 
@@ -798,6 +813,9 @@ AliExpressImageEditorExtension/
     原地替换、CDN url 没变时不会失效**（跟图片下载器是同一个「url 即内容」的假设），出口是面板上的
     「清除本地缓存」。上限：抠图 40 条 / AI 识别结论 16 条 / 成品图 12 条，按最旧先丢。
     缓存的成品图**只能下载**，不会被自动放回画布 —— 画布仍是会话级的，刷新后靠文档恢复。
+19. 品牌 Logo 的锁定只挡**画布上的误操作**（点不中、拖不动），不挡删除：锁着的 Logo 仍可在图层面板点 ✕
+    删掉，切品牌也会先删掉旧 Logo。位置记忆按品牌存在 `aiee:logo-placement`，没有"恢复默认位置"的按钮 ——
+    拖歪了只能自己拖回去（清了这条存储就会回到右下角默认位）。
 
 ---
 
@@ -806,7 +824,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（43 文件 / 689 测试，其中 684 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（44 文件 / 700 测试，其中 695 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -820,6 +838,7 @@ AliExpressImageEditorExtension/
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则，共 35 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
-| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.63） |
+| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
+| 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

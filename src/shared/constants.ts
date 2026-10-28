@@ -170,6 +170,8 @@ export const STORAGE_KEYS = {
   textDefaults: 'aiee:text-defaults',
   /** Last committed position/scale of the auto-added product-code text layer. */
   codePlacement: 'aiee:code-placement',
+  /** Per-brand logo placement: { [brandId]: { x, y, scale } }. */
+  logoPlacement: 'aiee:logo-placement',
   /** Brand registry: [{ id, name, aliases, keywords, logoBlobId, ... }]. */
   brands: 'aiee:brands',
   /** Sync bookkeeping for the remote brand catalog (version / last sync / mirror). */
@@ -196,6 +198,24 @@ export const WATERMARK_LAYER_ID = 'watermark-frame';
 
 /** Reject oversized uploads before they reach IndexedDB. */
 export const MAX_WATERMARK_BYTES = 8 * 1024 * 1024;
+
+// ---------------------------------------------------------------- brand logo
+
+/** Gap between a default-placed brand logo and the canvas corner, in canvas px. */
+export const LOGO_MARGIN = 32;
+
+/**
+ * Longest side of a default-placed brand logo, as a fraction of the canvas.
+ *
+ * A logo is a stamp in a corner, not a picture: 26% keeps it readable at 800px
+ * without covering the product. Once the seller drags it, the remembered
+ * placement (scale included) wins and this never applies again for that brand.
+ */
+export const LOGO_DEFAULT_LONGEST_RATIO = 0.26;
+
+/** Scale bounds for a remembered logo placement (reject a corrupt / silly value). */
+export const LOGO_MIN_SCALE = 0.02;
+export const LOGO_MAX_SCALE = 8;
 
 /** Accepted watermark mime types. */
 export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;

@@ -28,6 +28,12 @@ import {
   saveTextDefaults,
 } from '../services/text-defaults';
 import { loadCodePlacement, saveCodePlacement, type CodePlacement } from '../services/code-placement';
+import {
+  defaultLogoPlacement,
+  loadLogoPlacements,
+  saveLogoPlacement,
+  type LogoPlacementMap,
+} from '../services/logo-placement';
 import { listBrands, loadBrandLogo, matchBrandByTitle } from '../services/brand-store';
 import { putBlob, getBlob } from '../services/indexed-db';
 import type { BrandMeta } from '../shared/types';
@@ -407,6 +413,8 @@ export function App(): JSX.Element {
   const codePlacementRef = useRef<CodePlacement>({ x: 400, y: 48, scale: 1 });
   /** Id of the code layer this session auto-added; commits to it update the memory. */
   const codeLayerIdRef = useRef<string | null>(null);
+  /** Per-brand remembered logo placement (see logo-placement.ts). */
+  const logoPlacementsRef = useRef<LogoPlacementMap>({});
   /**
    * Layers this editor added by itself (product code, auto brand logo).
    *
@@ -427,6 +435,10 @@ export function App(): JSX.Element {
     void loadCodePlacement().then((placement) => {
       if (cancelled) return;
       codePlacementRef.current = placement;
+    });
+    void loadLogoPlacements().then((placements) => {
+      if (cancelled) return;
+      logoPlacementsRef.current = placements;
     });
     return () => {
       cancelled = true;
@@ -522,9 +534,9 @@ export function App(): JSX.Element {
   /**
    * The product-code text layer's id, or null when this session has no code.
    *
-   * Brand logos are inserted directly below it (`ADD_LAYER_BELOW`) so the code
-   * stays the topmost auto-added layer. Returns null — meaning "append" — when
-   * the code was never extracted or the user has deleted it.
+   * Only the code's hydrate path needs this now: brand logos are appended to the
+   * very top of the stack (they carry `locked` and are painted above everything),
+   * so they no longer need a "below the code" anchor.
    */
   const findCodeLayerId = useCallback((): string | null => {
     const code = session?.productCode;
@@ -532,12 +544,37 @@ export function App(): JSX.Element {
     return document.layers.find((layer) => layer.kind === 'text' && layer.text.trim() === code)?.id ?? null;
   }, [document, session]);
 
+  /** `material-brand-<brandId>` → `<brandId>`; the placement memory is keyed by it. */
+  const brandIdOf = useCallback((materialId: string): string | null => {
+    const prefix = 'material-brand-';
+    return materialId.startsWith(prefix) ? materialId.slice(prefix.length) : null;
+  }, []);
+
+  /**
+   * Build a brand-logo layer: locked, and placed where this brand's logo was last
+   * left (bottom-right corner the first time).
+   *
+   * Locked by default on purpose — a logo is a stamp the seller puts on once and
+   * expects to stay put; grabbing it by accident while dragging the product out of
+   * the way was the annoying part. The layer panel offers the unlock.
+   */
+  const createLogoLayer = useCallback(
+    (material: EditorMaterial): ImageLayer => {
+      const base = createLayerFromMaterial(material);
+      const brandId = brandIdOf(material.id);
+      const remembered = brandId ? logoPlacementsRef.current[brandId] : undefined;
+      const placement = remembered ?? defaultLogoPlacement(base.sourceWidth, base.sourceHeight);
+      return { ...base, ...placement, locked: true };
+    },
+    [brandIdOf],
+  );
+
   // ---- brand auto-detect
   //
   // Runs once per session, after the document is hydrated AND the brand logos
   // are loaded (they arrive asynchronously). The title is matched against
-  // every brand's name / aliases / keywords; the logo goes UNDER the code
-  // text so the code keeps the topmost slot.
+  // every brand's name / aliases / keywords; the logo is appended on top and
+  // locked (see `createLogoLayer`).
   const brandAutoAppliedRef = useRef(false);
   useEffect(() => {
     if (!hydratedRef.current || brandAutoAppliedRef.current) return;
@@ -556,12 +593,12 @@ export function App(): JSX.Element {
       (layer) => layer.kind === 'brand' && layer.materialId === material.id,
     );
     if (alreadyOnCanvas) return;
-    // The logo lands BELOW the product-code text, so the code keeps the top
-    // slot it was given at hydrate time.
-    const logoLayer = createLayerFromMaterial(material);
+    const logoLayer = createLogoLayer(material);
     autoAddedLayerIdsRef.current.add(logoLayer.id);
-    dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: logoLayer });
-  }, [brands, brandMaterials, session, document, findCodeLayerId]);
+    // Appended last = top of the z-order; `EditorStage` keeps brand layers above
+    // the album art, the watermark and the code no matter what the stack says.
+    dispatch({ type: 'ADD_LAYER', layer: logoLayer });
+  }, [brands, brandMaterials, session, document, createLogoLayer]);
 
   // ---- persist the composition (small JSON, chrome.storage.local is fine)
   useEffect(() => {
@@ -613,13 +650,12 @@ export function App(): JSX.Element {
       if (!brandId) return;
       const material = brandMaterials.find((entry) => entry.id === `material-brand-${brandId}`);
       if (!material) return;
-      // Manual pick keeps the same invariant as auto-detect: the logo goes
-      // under the product-code text.
-      const logoLayer = createLayerFromMaterial(material);
+      // Same path as auto-detect: appended on top, locked, remembered placement.
+      const logoLayer = createLogoLayer(material);
       autoAddedLayerIdsRef.current.add(logoLayer.id);
-      dispatch({ type: 'ADD_LAYER_BELOW', belowLayerId: findCodeLayerId(), layer: logoLayer });
+      dispatch({ type: 'ADD_LAYER', layer: logoLayer });
     },
-    [brandMaterials, document, findCodeLayerId],
+    [brandMaterials, createLogoLayer, document],
   );
 
   /** Text layers enter through the very same ADD_LAYER path as pictures. */
@@ -821,7 +857,17 @@ export function App(): JSX.Element {
 
   /** One dispatch = one history entry, so a single Ctrl+Z restores the canvas. */
   const applyComposedPlan = useCallback((plan: CompositionPlan) => {
-    const layers = planToLayers(plan);
+    const planLayers = planToLayers(plan);
+    /*
+      Brand logos survive the replacement, like the watermark does.
+
+      They are document layers (unlike the watermark, they can be unlocked and
+      moved), so the only way to keep them is to carry them across: the compose
+      replaces the product picture, the backdrop plate and the code text; a logo
+      the seller put in place is not "part of the layout" and must not vanish.
+    */
+    const brandLayers = document.layers.filter((layer) => layer.kind === 'brand');
+    const layers = [...planLayers, ...brandLayers];
     /*
       Select the hero on the way in, so the transformer lands on the subject instead
       of on nothing or on the backdrop plate — with nothing selected, the first drag
@@ -832,13 +878,13 @@ export function App(): JSX.Element {
       selection would take over the first gesture no matter what the user pressed
       (that is the 10.3.4 complaint). Priority is earned by selecting by hand.
     */
-    const hero = [...layers]
+    const hero = [...planLayers]
       .reverse()
       .find((layer) => layer.kind !== 'text' && layer.kind !== 'plate');
     dispatch({ type: 'APPLY_PLAN', layers, selectLayerId: hero?.id ?? null });
     setSelectionIsExplicit(false);
     setComposePlan(plan);
-  }, []);
+  }, [document]);
 
   const handleCompose = useCallback(async () => {
     setComposeBusy(true);
@@ -1191,8 +1237,51 @@ export function App(): JSX.Element {
           void saveCodePlacement(codePlacementRef.current);
         }
       }
+
+      // Same for a brand logo: once the seller unlocks it and drags / resizes it
+      // somewhere, that spot is remembered for this brand alone.
+      const moved = patch.x !== undefined || patch.y !== undefined || patch.scale !== undefined;
+      if (moved) {
+        const layer = findLayer(document, layerId);
+        if (layer && layer.kind === 'brand') {
+          const brandId = brandIdOf(layer.materialId);
+          if (brandId) {
+            const placement = {
+              x: patch.x ?? layer.x,
+              y: patch.y ?? layer.y,
+              scale: patch.scale ?? layer.scale,
+            };
+            logoPlacementsRef.current[brandId] = placement;
+            void saveLogoPlacement(brandId, placement);
+          }
+        }
+      }
     },
-    [document, rememberTextStyle],
+    [brandIdOf, document, rememberTextStyle],
+  );
+
+  /**
+   * Lock / unlock a layer from the layer panel.
+   *
+   * Unlocking selects the logo, so the transformer lands on it and the very next
+   * gesture is the one the seller just asked for; locking the selection away also
+   * drops the handles so nothing lingers on a layer that cannot move.
+   */
+  const handleToggleLock = useCallback(
+    (layerId: string) => {
+      const layer = findLayer(document, layerId);
+      if (!layer || layer.kind === 'text' || layer.kind === 'plate') return;
+      const nextLocked = !layer.locked;
+      dispatch({ type: 'COMMIT_LAYER', layerId, patch: { locked: nextLocked } });
+      if (nextLocked && state.selectedLayerId === layerId) {
+        dispatch({ type: 'SELECT_LAYER', layerId: null });
+        setSelectionIsExplicit(false);
+      } else if (!nextLocked) {
+        dispatch({ type: 'SELECT_LAYER', layerId });
+        setSelectionIsExplicit(true);
+      }
+    },
+    [document, state.selectedLayerId],
   );
 
   /** Back to the factory style: the current layer *and* the stored preference. */
@@ -1718,6 +1807,7 @@ export function App(): JSX.Element {
           onSelect={handleSelect}
           onMove={handleMoveLayer}
           onDelete={handleDeleteLayer}
+          onToggleLock={handleToggleLock}
           onMoveEnd={() => undefined}
           onCommitText={handleCommitLayer}
           onResetTextStyle={handleResetTextStyle}

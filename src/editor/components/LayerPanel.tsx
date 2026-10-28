@@ -15,6 +15,8 @@ export interface LayerPanelProps {
   onSelect: (layerId: string | null) => void;
   onMove: (layerId: string, direction: 'up' | 'down') => void;
   onDelete: (layerId: string) => void;
+  /** Lock / unlock a picture layer (brand logos start locked). */
+  onToggleLock: (layerId: string) => void;
   onMoveEnd: () => void;
   onCommitText: (layerId: string, patch: LayerPatch) => void;
   /** Reset the selected text layer to the factory style and forget the preference. */
@@ -69,6 +71,7 @@ export function LayerPanel({
   onSelect,
   onMove,
   onDelete,
+  onToggleLock,
   onMoveEnd,
   onCommitText,
   onResetTextStyle,
@@ -146,60 +149,90 @@ export function LayerPanel({
             <div className="empty">画布为空，点击左侧素材加入</div>
           )
         ) : (
-          ordered.map((layer) => (
-            <div
-              key={layer.id}
-              ref={(node) => {
-                if (node) rowRefs.current.set(layer.id, node);
-                else rowRefs.current.delete(layer.id);
-              }}
-              className={`layer-row${layer.id === selectedLayerId ? ' layer-row--selected' : ''}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(layer.id)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') onSelect(layer.id);
-              }}
-            >
-              <span className="layer-row__name" title={layerTitle(layer)}>
-                {layerLabel(layer, layers.indexOf(layer))}
-              </span>
-              <div className="layer-row__actions">
-                <button
-                  type="button"
-                  title="上移一层"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onMove(layer.id, 'up');
-                    onMoveEnd();
-                  }}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  title="下移一层"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onMove(layer.id, 'down');
-                    onMoveEnd();
-                  }}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  title="删除图层"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDelete(layer.id);
-                  }}
-                >
-                  ✕
-                </button>
+          ordered.map((layer) => {
+            /*
+              Brand logos are always painted on top (see `EditorStage`), so the
+              stack arrows would be lying; and while locked the layer cannot move
+              on the canvas either. Both are surfaced rather than hidden silently.
+            */
+            const isBrand = layer.kind === 'brand';
+            const locked = !isBrand && layer.kind !== 'text' && layer.kind !== 'plate'
+              ? Boolean(layer.locked)
+              : false;
+            return (
+              <div
+                key={layer.id}
+                ref={(node) => {
+                  if (node) rowRefs.current.set(layer.id, node);
+                  else rowRefs.current.delete(layer.id);
+                }}
+                className={`layer-row${layer.id === selectedLayerId ? ' layer-row--selected' : ''}${
+                  locked ? ' layer-row--locked' : ''
+                }`}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(layer.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') onSelect(layer.id);
+                }}
+              >
+                <span className="layer-row__name" title={layerTitle(layer)}>
+                  {layerLabel(layer, layers.indexOf(layer))}
+                </span>
+                {locked ? <span className="layer-row__lock">锁定</span> : null}
+                <div className="layer-row__actions">
+                  {isBrand ? null : (
+                    <>
+                      <button
+                        type="button"
+                        title="上移一层"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onMove(layer.id, 'up');
+                          onMoveEnd();
+                        }}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        title="下移一层"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onMove(layer.id, 'down');
+                          onMoveEnd();
+                        }}
+                      >
+                        ↓
+                      </button>
+                    </>
+                  )}
+                  {layer.kind === 'text' || layer.kind === 'plate' ? null : (
+                    <button
+                      type="button"
+                      title={locked ? '解锁后可移动 / 缩放' : '锁定后在画布上点不中、拖不动'}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleLock(layer.id);
+                      }}
+                    >
+                      {locked ? '解锁' : '锁定'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    title="删除图层"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(layer.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </aside>

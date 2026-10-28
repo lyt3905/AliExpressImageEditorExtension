@@ -156,8 +156,18 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
       return;
     }
     const node = stage.findOne<Konva.Node>(`#${selectedLayerId}`);
-    // Belt and braces: the watermark is locked, so it never gets handles.
-    const selectable = node && node.name() !== WATERMARK_LAYER_ID ? node : null;
+    /*
+      Belt and braces, two reasons a node never gets handles: the watermark is
+      structurally locked, and a locked picture layer (a brand logo the seller has
+      not unlocked yet) may still be selected from the layer panel.
+    */
+    const selectedLayer = layers.find((layer) => layer.id === selectedLayerId);
+    const lockedSelection = Boolean(
+      selectedLayer && selectedLayer.kind !== 'text' && selectedLayer.kind !== 'plate'
+        ? selectedLayer.locked
+        : false,
+    );
+    const selectable = node && node.name() !== WATERMARK_LAYER_ID && !lockedSelection ? node : null;
     if (selectable) {
       /*
         Text layers get SIDE anchors only: dragging them is a wrap-width change
@@ -273,15 +283,21 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
 
   /**
    * Paint order, front to back: the whole user stack, then the locked
-   * watermark, then the foreground layer (product code) so it stays on top of
-   * the watermark while still being selectable and draggable.
+   * watermark, then the foreground layer (product code), then brand logos.
+   *
+   * Brand logos are painted last on purpose — a logo is a stamp the seller wants
+   * on top of everything (product, watermark, code), which is what "和一样水印"
+   * asked for. They are still document layers (a locked one can be unlocked and
+   * moved), so they are re-ordered here rather than given a separate draw slot.
    */
   type DrawItem = EditorLayer | { watermark: true };
   const watermarkItem: DrawItem = { watermark: true };
+  const brandLayers = layers.filter((layer) => layer.kind === 'brand');
   const drawItems: DrawItem[] = [
-    ...layers.filter((layer) => layer.id !== foregroundLayerId),
+    ...layers.filter((layer) => layer.id !== foregroundLayerId && layer.kind !== 'brand'),
     ...(watermark && watermarkImage ? [watermarkItem] : []),
     ...layers.filter((layer) => layer.id === foregroundLayerId),
+    ...brandLayers,
   ];
 
   return (
@@ -518,6 +534,13 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
 
             const image = imageForLayer(layer);
             if (!image) return null;
+            /*
+              A locked picture (a brand logo before it is unlocked) must not react
+              to the pointer at all: it is a stamp, and every click on it should go
+              to whatever sits under it instead of selecting the logo. The layer
+              panel still lists it, which is where the unlock lives.
+            */
+            const locked = Boolean(layer.locked);
             return (
               <KonvaImage
                 key={layer.id}
@@ -530,7 +553,8 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                 scaleX={axisScale(layer, 'x')}
                 scaleY={axisScale(layer, 'y')}
                 rotation={layer.rotation}
-                draggable
+                listening={!locked}
+                draggable={!locked}
                 /*
                   No `hitFunc`: a picture is grabbable over its whole box, exactly
                   like a plain photo. An alpha-accurate hit area (only the opaque

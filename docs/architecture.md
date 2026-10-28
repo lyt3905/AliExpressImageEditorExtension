@@ -1086,5 +1086,53 @@ id 是确定性的（`cutout-cache-<hash>` / `compose-result-<key>`），索引�
 - 存储用注入端口（`ComposeCachePorts`）模拟，仓库里没有 fake IndexedDB，缓存也不值得为它加一个。
 - 真 IndexedDB 的往返仍靠手动测试（`docs/manual-test.md` §5.6x）。
 
+## 13. 品牌 Logo：压在一切之上，默认锁定
+
+### 13.1 为什么它不像水印那样"不在文档里"
+
+水印（§2 那套 `useWatermark`）刻意活在 `EditorDocument` 之外：它必须扛过撤销 / 重做 / 清空，
+把它放在文档里就得给每条 reducer 分支加豁免。品牌 Logo 有相反的需求 —— **它可以被解锁、拖动、
+缩放**，也就是必须能进 undo 栈、能被 `COMMIT_LAYER` 改。
+
+所以它是**普通文档图层**（`ImageLayer`，`kind: 'brand'`），只是多了一个 `locked?: boolean`。
+"和一样水印"落实成三个画布行为，而不是一个存储位置：
+
+1. **永远最后绘制**：`EditorStage` 的 `drawItems` 顺序是
+   `用户图层 → 水印 → 编号 → 品牌 Logo`，所以 Logo 压过商品图、水印和编号文字（用户明确选了
+   「Logo 压过一切」，否决了"编号仍最上"）。它不靠数组顺序保证这一点 —— 就算在层板里改顺序，
+   也是最后画。
+2. **默认锁定**：`createLogoLayer()` 产出 `locked: true`。锁定的图片节点 `listening={false}` +
+   `draggable={false}`，画布上点不中、拖不动，点击穿透给下面那一层；Transformer 也不往它身上挂
+   （`selectable` 里判 `lockedSelection`）。
+3. **可解锁**：出口只有一个 —— 图层面板里那一行的「锁定 / 解锁」按钮（`handleToggleLock`）。
+   解锁会顺手选中它，让手柄直接出现；锁上则把选中清掉，避免手柄留在动不了的图层上。
+
+### 13.2 每个品牌各记一份位置
+
+`src/services/logo-placement.ts`，存 `chrome.storage.local` 的 `aiee:logo-placement`
+（`Record<brandId, {x, y, scale}>`）。
+
+- **按品牌分开**，不共用一个位置：词标是 5:1、吉祥物是 1:1，共用一份会把其中一个摆到画布外。
+- **默认位置**（`defaultLogoPlacement`）：右下角、留 `LOGO_MARGIN = 32`，最长边压到画布的
+  `LOGO_DEFAULT_LONGEST_RATIO = 0.26`。右下角是卖家放品牌章的惯例，也躲开顶部的编号和居中的水印。
+- **写入时机**：`handleCommitLayer` 里，patch 带 x/y/scale 且图层是 `brand` 时，`brandIdOf(materialId)`
+  反推品牌 id 再写回。和 `codePlacement` 同一套做法（只在松手时写，拖动过程不碰存储）。
+- **读改写的代价**：`saveLogoPlacement` 每次都先读回整张表再合入自己这一条，而不是拿着内存里的旧表直接覆盖 ——
+  两个标签页各开一个商品页时，否则会互相抹掉对方的品牌。这一步多一点 IO，但只有一次写入、且不阻塞 UI。
+
+### 13.3 生成主图时它不消失
+
+`applyComposedPlan` 在 `planToLayers(plan)` 之后把当前文档里所有 `kind === 'brand'` 的图层原样追加上去。
+排版替换的是商品图、衬板、编号文字；品牌章不是"排版的一部分"，不该被生成动作抹掉 —— 和水印一样要留下。
+（`APPLY_PLAN` 依旧是**一个** history 条目，所以一次 Ctrl+Z 能整体退回。）
+
+### 13.4 测试边界
+
+- `tests/unit/logo-placement.test.ts`（9 例）：默认位置的角落 / 26% 比例 / 未知尺寸回落、`parseLogoPlacementMap`
+  对垃圾输入的降级、缺字段条目被丢弃、scale 夹紧、空 brandId 被忽略。
+- `tests/unit/editor-reducer.test.ts` 里两条 `layer lock`：`COMMIT_LAYER { locked }` 能进文档、是一个可撤销步骤、
+  撤销能恢复锁，且不改变图层身份。
+- 画布上的真实手感（点不中 / 解锁后能拖 / 记忆生效）只能手动验（`docs/manual-test.md` §5.7x）。
+
 
 

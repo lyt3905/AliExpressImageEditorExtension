@@ -122,6 +122,15 @@ export interface ImagePayload {
 export interface ImageLayer extends BaseLayer, ImagePayload {
   kind: 'original' | 'cutout' | 'brand';
   scale: number;
+  /**
+   * Layer cannot be grabbed, selected or transformed on the canvas.
+   *
+   * Brand logos arrive locked (a stamp that sits on top of everything and must
+   * not be dragged by accident while arranging products); the layer panel offers
+   * the unlock. Persisted with the document, so an unlocked logo stays unlocked
+   * across a refresh.
+   */
+  locked?: boolean;
 }
 
 /**
@@ -202,6 +211,8 @@ export interface LayerPatch {
   rotation?: number;
   flipX?: boolean;
   flipY?: boolean;
+  /** Picture layers only: lock / unlock the layer from the layer panel. */
+  locked?: boolean;
   text?: string;
   width?: number;
   fontSize?: number;

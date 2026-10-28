@@ -226,3 +226,29 @@ describe('editorReducer history', () => {
     expect(state.history.past).toHaveLength(0);
   });
 });
+
+describe('layer lock', () => {
+  it('toggles `locked` through a COMMIT_LAYER patch and leaves it in the document', () => {
+    let state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('logo', { kind: 'brand', locked: true }) },
+    ]);
+    expect((state.history.present.layers[0] as ImageLayer).locked).toBe(true);
+
+    state = editorReducer(state, { type: 'COMMIT_LAYER', layerId: 'logo', patch: { locked: false } });
+    expect((state.history.present.layers[0] as ImageLayer).locked).toBe(false);
+    // A real toggle is one undoable step, and undo brings the lock back.
+    expect(state.history.past).toHaveLength(2);
+    state = editorReducer(state, { type: 'UNDO' });
+    expect((state.history.present.layers[0] as ImageLayer).locked).toBe(true);
+  });
+
+  it('does not let a lock patch change the identity of the layer', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('logo', { kind: 'brand', locked: true }) },
+      { type: 'COMMIT_LAYER', layerId: 'logo', patch: { locked: false } },
+    ]);
+    const layer = state.history.present.layers[0] as ImageLayer;
+    expect(layer.id).toBe('logo');
+    expect(layer.kind).toBe('brand');
+  });
+});
