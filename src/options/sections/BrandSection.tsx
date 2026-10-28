@@ -7,7 +7,6 @@ import { Drawer } from '../components/Drawer';
 import { Notice } from '../components/Notice';
 import { Pager } from '../components/Pager';
 import { SearchField } from '../components/SearchField';
-import { StatusBadge } from '../components/StatusBadge';
 import { catalogMirrorLabel, formatTimestamp } from '../helpers';
 
 const PAGE_SIZE = 10;
@@ -213,14 +212,25 @@ export function BrandSection({
                       : `${keywords.length} 个关键词 · ${keywords.join('、')}`}
                   </span>
                 </div>
-                <span className="opt-brand__tag">
-                  <StatusBadge
-                    kind={meta.source === 'remote' ? 'info' : 'idle'}
-                    label={meta.source === 'remote' ? '目录' : '本地'}
-                    title={meta.source === 'remote' ? '来自仓库的品牌目录' : '手工上传'}
-                  />
+                {/* 来源标签是"这个品牌从哪来"，不是提示，所以不带图标 */}
+                <span
+                  className="opt-brand__tag"
+                  title={
+                    meta.source === 'remote'
+                      ? '来自仓库的 catalog/brands.json，跟随目录同步'
+                      : '你手工上传的，目录同步不会覆盖或删除它'
+                  }
+                >
+                  {meta.source === 'remote' ? '来自目录' : '手工上传'}
                 </span>
-                {skipped ? <StatusBadge kind="warn" label="已暂停同步" /> : null}
+                {skipped ? (
+                  <span
+                    className="opt-brand__tag opt-brand__tag--warn"
+                    title="你取消勾选了「跟随目录同步」：同步既不覆盖也不删除它"
+                  >
+                    已暂停同步
+                  </span>
+                ) : null}
                 <button type="button" disabled={busy} onClick={() => edit.onOpen(meta.id)}>
                   编辑
                 </button>

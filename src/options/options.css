@@ -893,6 +893,21 @@
   flex: 1 1 220px;
 }
 
+/* 来源标签：回答"这个品牌从哪来"，不是状态提示，所以是纯文字、没有图标 */
 .opt-brand__tag {
   flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--opt-line);
+  border-radius: 999px;
+  background: var(--opt-sunken);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.opt-brand__tag--warn {
+  border-color: #f0c36d;
+  background: #fdf6e3;
+  color: #8a6100;
 }
