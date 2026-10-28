@@ -103,6 +103,8 @@ export function OptionsApp(): JSX.Element {
   const [catalogStatus, setCatalogStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   /** Draft for the self-hosted catalog URL; `''` = use the built-in mirrors only. */
   const [catalogUrl, setCatalogUrl] = useState('');
+  /** Result of the "保存视觉设置" button — kept apart from the login status line. */
+  const [visionStatus, setVisionStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
 
   const refreshAuthState = useCallback(async () => {
     try {
@@ -366,6 +368,52 @@ export function OptionsApp(): JSX.Element {
     }
   }, [password, serverUrl, username, visionApiKey, visionBaseUrl, visionModel, catalogUrl]);
 
+  /**
+   * Save just the vision gateway block.
+   *
+   * Its own button because the shared「仅保存设置」sits under the *account*
+   * fields, and reads like an account action — the seller configuring a vision
+   * endpoint had no obvious way to commit the three inputs in front of them.
+   * Everything else (server URL, account) is sent unchanged so the same handler
+   * can serve both buttons.
+   */
+  const handleSaveVision = useCallback(async () => {
+    setBusy(true);
+    setVisionStatus({ kind: 'idle', text: '正在保存…' });
+    try {
+      const response = await sendToBackground<ExtensionSettings>({
+        type: 'SAVE_SETTINGS',
+        requestId: createRequestId('save-vision'),
+        payload: {
+          serverUrl,
+          username,
+          vision: {
+            baseUrl: visionBaseUrl.trim(),
+            model: visionModel.trim(),
+            apiKey: visionApiKey.trim(),
+          },
+        },
+      });
+      if (response?.ok) {
+        // Read back what the store kept: an empty base URL falls back to the
+        // default, and the inputs should show that rather than a blank box that
+        // looks unsaved.
+        if (response.data?.vision) {
+          setVisionBaseUrl(response.data.vision.baseUrl);
+          setVisionModel(response.data.vision.model);
+          setVisionApiKey(response.data.vision.apiKey);
+        }
+        setVisionStatus({ kind: 'ok', text: '视觉设置已保存' });
+      } else {
+        setVisionStatus({ kind: 'bad', text: `保存失败：${response?.error?.message ?? '未知错误'}` });
+      }
+    } catch (error) {
+      setVisionStatus({ kind: 'bad', text: `保存失败：${messageOf(error)}` });
+    } finally {
+      setBusy(false);
+    }
+  }, [serverUrl, username, visionApiKey, visionBaseUrl, visionModel]);
+
   // ---- watermark management
 
   const handleAddWatermark = useCallback(
@@ -530,6 +578,44 @@ export function OptionsApp(): JSX.Element {
         />
       </div>
 
+      <div className="row">
+        <button type="button" className="primary" disabled={busy || !username || !password} onClick={() => void handleLogin()}>
+          登录并保存
+        </button>
+        <button type="button" disabled={busy} onClick={() => void handleSave()}>
+          仅保存设置
+        </button>
+        <button type="button" disabled={busy} onClick={() => void refreshAuthState()}>
+          刷新登录状态
+        </button>
+        <button type="button" disabled={busy} onClick={() => void handleLogout()}>
+          退出登录
+        </button>
+      </div>
+
+      <div className="status-line">
+        <div>
+          登录状态：
+          <strong className={statusKind === 'ok' ? 'status-ok' : statusKind === 'bad' ? 'status-bad' : ''}>
+            {user ? `${user.username}${user.role ? ` · ${user.role}` : ''}` : status || '未登录'}
+          </strong>
+        </div>
+        {user ? null : <div>{status}</div>}
+        {lastError ? (
+          <div>
+            最近一次错误：<span className="status-bad">[{lastError.code}] {lastError.message}</span>
+          </div>
+        ) : null}
+      </div>
+
+      <hr className="section-divider" />
+
+      <h2>AI 视觉接口</h2>
+      <p className="hint">
+        可选。编辑器里点「AI 识别素材角色」时，素材会以 512px 缩略图发给这个网关判断主图 / 包装盒；
+        不填或连不上就自动回退到标签匹配，不影响其他功能。
+      </p>
+
       <div className="field">
         <label htmlFor="vision-base-url">视觉接口地址</label>
         <input
@@ -575,34 +661,18 @@ export function OptionsApp(): JSX.Element {
       </div>
 
       <div className="row">
-        <button type="button" className="primary" disabled={busy || !username || !password} onClick={() => void handleLogin()}>
-          登录并保存
-        </button>
-        <button type="button" disabled={busy} onClick={() => void handleSave()}>
-          仅保存设置
-        </button>
-        <button type="button" disabled={busy} onClick={() => void refreshAuthState()}>
-          刷新登录状态
-        </button>
-        <button type="button" disabled={busy} onClick={() => void handleLogout()}>
-          退出登录
+        <button type="button" className="primary" disabled={busy} onClick={() => void handleSaveVision()}>
+          保存视觉设置
         </button>
       </div>
 
-      <div className="status-line">
-        <div>
-          登录状态：
-          <strong className={statusKind === 'ok' ? 'status-ok' : statusKind === 'bad' ? 'status-bad' : ''}>
-            {user ? `${user.username}${user.role ? ` · ${user.role}` : ''}` : status || '未登录'}
-          </strong>
+      {visionStatus ? (
+        <div
+          className={`status-line status-line--tight${visionStatus.kind === 'bad' ? ' status-bad' : ''}`}
+        >
+          {visionStatus.text}
         </div>
-        {user ? null : <div>{status}</div>}
-        {lastError ? (
-          <div>
-            最近一次错误：<span className="status-bad">[{lastError.code}] {lastError.message}</span>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       <hr className="section-divider" />
 

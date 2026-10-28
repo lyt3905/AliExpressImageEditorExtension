@@ -284,6 +284,14 @@ const handlers: MessageHandlers = {
       username: payload.username,
       // Omitted (undefined) = leave the stored mirror alone; `''` clears it.
       ...(payload.brandCatalogUrl !== undefined ? { brandCatalogUrl: payload.brandCatalogUrl } : {}),
+      /*
+        `vision` used to be dropped right here. The Options page sent it, the
+        handler never forwarded it, and `saveSettings` therefore kept the old
+        value — the fields looked editable but every save silently reverted them
+        on the next page load. Field-by-field merge happens inside `saveSettings`,
+        so a partial patch is exactly what it wants.
+      */
+      ...(payload.vision ? { vision: payload.vision } : {}),
     });
     if (payload.password) {
       await saveCredentials({ serverUrl: next.serverUrl, username: next.username, password: payload.password });

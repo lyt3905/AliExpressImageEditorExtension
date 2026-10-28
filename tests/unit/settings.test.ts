@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_VISION_API_KEY, DEFAULT_VISION_MODEL, STORAGE_KEYS } from '../../src/shared/constants';
-import { loadSettings } from '../../src/services/settings';
+import { loadSettings, saveSettings } from '../../src/services/settings';
 
 /**
  * `loadSettings` reads `chrome.storage.local`; only that one call is stubbed, so
@@ -64,8 +64,7 @@ describe('loadSettings — vision block', () => {
   });
 });
 
-describe('loadSettings — the storage key stays put', () => {
-  it('reads exactly the key the rest of the extension writes', async () => {
+describe('loadSettings — the storage key stays put', () => {  it('reads exactly the key the rest of the extension writes', async () => {
     let asked = '';
     (globalThis as unknown as { chrome: unknown }).chrome = {
       storage: {
@@ -79,5 +78,65 @@ describe('loadSettings — the storage key stays put', () => {
     };
     await loadSettings();
     expect(asked).toBe(STORAGE_KEYS.settings);
+  });
+});
+
+/**
+ * The bug these pin: the Options page has always sent `vision` with every save,
+ * but the background handler dropped it before calling `saveSettings`, so the
+ * three inputs looked editable and silently reverted on the next page load.
+ * These cases fix the contract the handler must keep — a `vision` patch is
+ * merged into what is stored, never used to blank the sibling fields.
+ */
+describe('saveSettings — vision patches are merged', () => {
+  function stubStore(initial: unknown): () => unknown {
+    let stored: unknown = initial;
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      storage: {
+        local: {
+          get: async (key: string) => (stored === undefined ? {} : { [key]: stored }),
+          set: async (values: Record<string, unknown>) => {
+            stored = values[STORAGE_KEYS.settings];
+          },
+        },
+      },
+    };
+    return () => stored;
+  }
+
+  type Stored = {
+    serverUrl: string;
+    username: string;
+    vision: { baseUrl: string; model: string; apiKey: string };
+  };
+
+  it('keeps the other two vision fields when only the key is patched', async () => {
+    const read = stubStore({
+      serverUrl: 'https://x.test',
+      username: 'u',
+      vision: { baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'old-key' },
+    });
+    const next = await saveSettings({ vision: { apiKey: 'new-key' } });
+    expect(next.vision).toEqual({ baseUrl: 'http://10.0.0.5:8788/v1', model: 'm-1', apiKey: 'new-key' });
+    expect((read() as Stored).vision.apiKey).toBe('new-key');
+  });
+
+  it('does not blank the account fields when only vision is saved', async () => {
+    const read = stubStore({ serverUrl: 'https://x.test', username: 'seller', vision: {} });
+    await saveSettings({ vision: { baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' } });
+    const stored = read() as Stored;
+    expect(stored.serverUrl).toBe('https://x.test');
+    expect(stored.username).toBe('seller');
+    expect(stored.vision).toEqual({ baseUrl: 'http://127.0.0.1:8788/v1', model: 'qwen-vl', apiKey: 'k' });
+  });
+
+  it('trims what it stores and falls back to the default for an emptied key', async () => {
+    stubStore({ vision: { baseUrl: 'http://a.test/v1', model: 'm', apiKey: 'old' } });
+    const next = await saveSettings({ vision: { baseUrl: '  http://b.test/v1  ', apiKey: '   ' } });
+    expect(next.vision).toEqual({
+      baseUrl: 'http://b.test/v1',
+      model: 'm',
+      apiKey: DEFAULT_VISION_API_KEY,
+    });
   });
 });

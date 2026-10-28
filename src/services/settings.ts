@@ -94,7 +94,16 @@ export async function loadSettings(): Promise<ExtensionSettings> {
   }
 }
 
-export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<ExtensionSettings> {
+/**
+ * Every field is optional, and `vision` itself is a partial: the Options page
+ * saves the vision block on its own, and a partial there means "keep what is
+ * stored for the fields I did not send".
+ */
+export type SettingsPatch = Partial<Omit<ExtensionSettings, 'vision'>> & {
+  vision?: Partial<VisionSettings>;
+};
+
+export async function saveSettings(settings: SettingsPatch): Promise<ExtensionSettings> {
   const current = await loadSettings();
   const next: ExtensionSettings = {
     serverUrl: settings.serverUrl?.trim() || current.serverUrl,

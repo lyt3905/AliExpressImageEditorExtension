@@ -509,6 +509,10 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
 | 视觉模型 | `glm-5.3` |
 | 视觉接口 Key | 构建期从 `.env.local` 的 `VITE_VISION_API_KEY` 预填；没有则空（不发 `Authorization`） |
 
+三项在选项页独立成「AI 视觉接口」一节，改完点该节下方的**保存视觉设置**（10.8.1 之前的版本里，
+这三项跟着账号区的「仅保存设置」一起提交，而后台处理函数漏传了 `vision` 字段 —— 看起来能改，
+刷新就变回旧值。看到这个症状先确认版本 ≥ 10.8.1）。
+
 素材会以 **512px 白底缩略图**发给该网关，一次请求最多 **6 张**（= AliExpress 图片区槽位数）。
 实测：4 张 1663 token / 6 张 2395 token，单次耗时 4–10 秒（网关冷启动时更久），判对率不变。
 超过 6 张时优先保留标签像包装的候选，而不是简单丢掉列表尾部。网关不可用时自动回退到标签匹配，
@@ -662,7 +666,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 42 文件 / 695 个单元测试（不联网）
+│  ├─ unit/                      # 46 文件 / 712 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -829,7 +833,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（46 文件 / 709 测试，其中 704 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（46 文件 / 712 测试，其中 707 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -845,5 +849,6 @@ AliExpressImageEditorExtension/
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 自填镜像排序去重 / 静默同步按标签页限一次，共 42 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 | 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（28 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
+| 视觉接口三项保存（10.8.1 修复） | **仅自动化验证**（3 个单测：只补一个字段时其余两项保留、单独存视觉不动账号字段、空 Key 回落默认。修复前 `src/background/service-worker.ts` 的 `saveSettings` 处理器漏传 `vision`，值永远存不进去。真机对照步骤见 manual-test 5.78） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。
