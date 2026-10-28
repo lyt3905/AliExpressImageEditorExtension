@@ -560,6 +560,12 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
   —— 不会为了避裁切自动缩小人物，也没有防重叠规则把三个人物分开
 - 缺图 → `support_slot_empty` 警告 + 该位置留空；只有两张素材时就是两图拼贴
 - 同一张图**不会被放进两个图位**（宁可空着），因为拼贴关掉了重叠检测，重复只会在视觉上像贴错
+- **AI 还能决定"这块占多大"**（10.15.0）：视觉答案多一个 `size`（占画布面积 0.05–0.85）。
+  只决定大小、不决定位置 —— 位置仍由模板的 `viewport` / `center_x` / `anchor` 定，缩放由
+  `solveSupportFill()` 二分到目标占比（搜索范围 `nominal × 0.45–2.2`），hero 位则借
+  `dominanceForFill()` 收窄偏好区间（地板仍是模板的 `hero_dominance`，上限仍是模板的 `zoom`）。
+  做不到时报警而不是假装做到：`support_fill_clamped`（撞了缩放上下限）、`hero_fill_unmet`
+  （实际占比和目标差超过 4%），`plan.diagnostics.fills` 里能看到每个图位的 `target` / `achieved`
 - 这个模板**不写** `shadow` / `package_readability` / `text`：这三条属于"主图 + 包装盒"布局，缺省时
   按不投影 / 不要求包装可见 / 文字不压主体处理（并各留一条警告）
 
@@ -575,6 +581,11 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
 
 模板里出现的 `zoom` 是**上限**而不是起点：素材实心偏宽时求解器只会往下调（靠裁切凑占用率是反的），
 并且每次让步都会记 warning。设计细节见 [`docs/architecture.md`](docs/architecture.md) §10。
+
+**AI 能影响哪一件、不能影响哪一件**（10.15.0 起）：它只回答"每个图位放第几张图"和"这张图该占多大面积"
+（`size`，0.05–0.85）。位置永远是模板的 `viewport` / `center_x` / `anchor`，缩放由求解器把占比翻译成数字；
+hero 位的偏好区间会被 `size` 收窄，但地板（`hero_dominance.min_canvas_occupancy`）和天花板（模板 `zoom`）不动。
+达不到时发 `support_fill_clamped` / `hero_fill_unmet` 警告，`plan.diagnostics.fills` 里留 `target` / `achieved` 对账。
 
 ### 没有包装盒时
 
@@ -702,7 +713,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 47 文件 / 776 个单元测试（不联网）
+│  ├─ unit/                      # 50 文件 / 788 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -872,7 +883,9 @@ AliExpressImageEditorExtension/
 12. AI 作图**只认模板里声明的版式**（当前两份：`hero_closeup_package_backdrop@1.4` 与
     `three_pose_figure_collage_white@1.0`，`status` 都是 draft），
     不做自由构图，更不是"输入一句话就出图"。几何全部由确定性求解器算，同一商品同一素材必然是同一张。
-    拼贴模板的图位**不求解**，位置直接取自模板（每个图位自己的 `viewport` / `center_x` / `zoom`）；
+    拼贴模板的图位**不求解位置**，位置直接取自模板（每个图位自己的 `viewport` / `center_x` / `anchor`）；
+    大小则可以被 AI 的 `size` 调整（10.15.0 起，`solveSupportFill()` 二分到目标占比，范围
+    `nominal × 0.45–2.2`），撞了上下限会发 `support_fill_clamped` 而不是悄悄偏移。
     图位没分到素材就留空并给一条红色原因，不会拿重复的图凑数。
     绘制顺序由模板的 `rules.collage.render_order` 决定（没有它才退回 `z_index`），落地时会重编号 z-index。
 13. 视觉绑定一次最多送 **6 张**素材（512px 白底缩略图，实测 4 张 1663 token / 6 张 2395 token）。
@@ -912,6 +925,10 @@ AliExpressImageEditorExtension/
 23. 设置页的四个面板**同时挂载**（非活动的只是 `hidden`），所以切分类不会丢草稿；代价是这些面板的
     effect 一直活着 —— 目前它们都不发网络请求，唯一的副作用是缩略图的 object URL 池。
     品牌与水印列表固定**每页 10 条**，不分页大小可选。
+24. AI 给的 `size` 是**建议值**，不是保证：support 图位的搜索范围是 `nominal × 0.45–2.2`，
+    hero 位的上限仍是模板 `zoom`（为了凑百分比把主体放大到被裁掉是更糟的错）。
+    出了范围就发警告并如实报告实际占比，面板不会假装"已按你要求生成"。
+    另外 `size` 只影响**大小**，不影响位置、不改变 z 序、也不参与去重判断。
 
 ---
 
@@ -920,7 +937,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（49 文件 / 781 测试，其中 776 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（50 文件 / 793 测试，其中 788 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -944,5 +961,6 @@ AliExpressImageEditorExtension/
 | 设置页四分类改版（10.11.0） | **仅自动化验证**（`typecheck` 通过 + 735 测试不变；`src/options/` 仍无单测，脏标记、消息 payload 与四个 section 的 props 形状由类型钉住）。**真机必须走一遍**：一次只显示一个分类、切标签不丢草稿、底部保存栏的禁用/点亮/轻提示、未保存关页面被拦、账号区登录后收起、视觉抽屉与「测试」、水印/品牌分页与抽屉、键盘方向键切分类，步骤见 manual-test 5.90–5.100 |
 | 错误记录（10.11.2） | **仅自动化验证**（18 个单测：损坏/半截条目降级、按时间重排、20 类封顶、同一条连续失败合并 `×N` 且中间夹别的错误不合并、写失败不抛、清空两个键）。**真机对照**：连点三次非商品页看到 `×3`、换个失败原因变成 2 类、清空后刷新仍为空，步骤见 manual-test 5.101–5.102 |
 | 品牌下拉可选 + 缓存键范围（10.12.0 修复） | **仅自动化验证**（`typecheck` + 29 个缓存单测；两个 bug 都是"路径根本没走到"，没有可以断言的新函数：① 编辑器启动流程在"目录已最新"时提前 `return`，`loadBrandMaterials()` 从未执行 → 工具栏品牌下拉永远是空的；② 缓存键把整组抠图身份都算进去，多一张/少一张图就整份作废 → 看着像"有的商品不缓存、下次还重新生成"。**真机对照**：打开任一商品页，品牌下拉里应列出目录里的品牌并能手工选中；同一商品第二次打开，面板应出现「已复用上次的抠图 n 张」，Network 里不应再有视觉模型请求，步骤见 manual-test 5.103–5.104） |
+| AI 决定每张图的占比（10.15.0） | **仅自动化验证**（12 个单测：`solveSupportFill` 的二分收敛、撞地板/天花板时 `clamped` 为真、目标变小缩放单调变小；planner 在有/无 `size` 时的缩放关系与只改大小不改水平位置；hero hint 可达时不报警、不可达时报 `hero_fill_unmet`；`parseFills` 只收模板点名的槽位并夹到 0.05–0.85）。**画布上的观感未在真实 Chrome 里看过** —— 三张图大小是否真的拉开了、`diagnostics.fills` 的 target/achieved 是否肉眼一致，步骤见 manual-test 5.108） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

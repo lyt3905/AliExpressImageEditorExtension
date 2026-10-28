@@ -196,6 +196,14 @@ export interface CachedBinding {
    * template never produces any.
    */
   slots?: Record<string, string>;
+  /**
+   * How much of the canvas each picture slot should cover: `slotId -> 0-1`.
+   *
+   * Cached with the binding because it is part of the same answer: re-asking the
+   * model would cost a request and could come back with different sizes, which
+   * would make the same photos lay out differently on every open.
+   */
+  fills?: Record<string, number>;
   confidence: number;
   reason: string;
   at: number;
@@ -282,10 +290,24 @@ export function parseComposeCacheState(raw: unknown): ComposeCacheState {
           if (slotId && trimmed) slots[slotId] = trimmed;
         }
       }
+      /*
+        Sizes survive the remap untouched: they belong to the SLOT ("the back view
+        takes a fifth of the frame"), not to whichever photo happened to fill it.
+        Values outside 0-1 are dropped rather than clamped — a stored 40 means the
+        record is corrupt, and a 4000 % figure is not a layout anyone can use.
+      */
+      const fills: Record<string, number> = {};
+      if (isRecord(value.fills)) {
+        for (const [slotId, size] of Object.entries(value.fills)) {
+          if (!slotId || typeof size !== 'number' || !Number.isFinite(size)) continue;
+          if (size > 0 && size < 1) fills[slotId] = size;
+        }
+      }
       bindings[key] = {
         hero,
         box,
         ...(Object.keys(slots).length > 0 ? { slots } : {}),
+        ...(Object.keys(fills).length > 0 ? { fills } : {}),
         confidence: num(value.confidence),
         reason: str(value.reason),
         at: num(value.at),

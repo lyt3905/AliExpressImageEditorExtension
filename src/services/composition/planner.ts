@@ -28,9 +28,10 @@ import {
 } from './coverage';
 import { heroPlacement, solveHero } from './solve-hero';
 import { solveBox, type BoxSolution } from './solve-box';
+import { FILL_MIN_ZOOM_FACTOR, solveSupportFill } from './solve-fill';
 import { fitTextToBox, parseFontStyleSpec, textLayerGeometry, type MeasureText } from './text-fit';
 import { round, warning, type CompositionWarning } from './warnings';
-import type { LayoutTemplate, Rect, SlotRole, TemplateSlot, TextZone } from './types';
+import type { HeroDominanceRule, LayoutTemplate, Rect, SlotRole, TemplateSlot, TextZone } from './types';
 
 export type MaterialKind = 'cutout' | 'original' | 'brand';
 
@@ -102,6 +103,13 @@ export interface CompositionPlan {
     boxVisibleRatio: number | null;
     boxVariantIndex: number | null;
     boxFallback: 'none' | 'secondary_view' | 'plate' | 'drop';
+    /**
+     * Occupancy the model asked for vs. what the geometry could deliver, per slot.
+     *
+     * Only the slots the model sized: a template that carries no `fill` hints keeps
+     * its authored zoom and shows up nowhere here.
+     */
+    fills?: Record<string, { target: number; achieved: number }>;
   };
 }
 
@@ -122,6 +130,16 @@ export interface PlanRequest {
    * empty; that is a warning, never a broken layout.
    */
   supports?: ReadonlyArray<{ slotId: string; material: PlannerMaterial }>;
+  /**
+   * Target occupancy per picture slot, as a fraction of the canvas (0-1).
+   *
+   * This is the one part of the layout the vision model is allowed to influence:
+   * picking the photos is judgement, and so is "the action pose should read bigger
+   * than the back view". Everything else — where the content sits, how it is
+   * anchored, what gets clipped — stays the template's call, so the same answer
+   * always produces the same picture. Slots missing here keep their authored zoom.
+   */
+  fills?: Readonly<Record<string, number>>;
   /** Model code for `model_code` text zones; absent = leave the zone empty. */
   modelCode?: string | null;
   /** Injected glyph measurement; required only when a text zone is filled. */
@@ -146,9 +164,28 @@ export const TEXT_Z_INDEX = 1000;
  */
 const Z_INDEX_STEP = 10;
 
+/** Gap between what the model asked for and what was delivered that earns a warning. */
+const FILL_REPORT_TOLERANCE = 0.04;
+
 /** Padding inside a plate before its caption is fitted. */
 const PLATE_TEXT_PADDING_RATIO = 0.08;
 const PLATE_TEXT_PADDING_MAX = 28;
+
+/**
+ * Band the hero solver aims at when the model suggested an occupancy.
+ *
+ * The template's floor stays a floor: it encodes "below this the product is not
+ * recognisable", which is a readability rule, not a composition opinion. Only the
+ * preferred band moves — one notch either side of the suggestion — so a model answer
+ * nudges the hero size instead of overriding the template's own trade-off.
+ */
+function dominanceForFill(base: HeroDominanceRule, fill: number): HeroDominanceRule {
+  const target = Math.min(0.8, Math.max(base.minCanvasOccupancy, fill));
+  return {
+    minCanvasOccupancy: base.minCanvasOccupancy,
+    targetCanvasOccupancy: [target * 0.95, target * 1.05],
+  };
+}
 const PLATE_TEXT_MIN_FONT = 12;
 const PLATE_TEXT_MAX_FONT = 120;
 const PLATE_TEXT_MAX_LINES = 3;
@@ -345,6 +382,7 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     hero,
     box = null,
     secondary = null,
+    fills,
     modelCode = null,
     measure,
     seed = '',
@@ -356,6 +394,8 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   const images: PlacedImage[] = [];
   const plates: PlacedPlate[] = [];
   const texts: PlacedText[] = [];
+  /** Model-requested vs. delivered occupancy, per sized slot. */
+  const fillReport: Record<string, { target: number; achieved: number }> = {};
   /** Set when the code ended up on a plate instead of in the text zone. */
   let plateCarriesCode = false;
 
@@ -364,13 +404,25 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     throw new Error(`模板 ${template.id}@${template.version} 缺少 hero 槽位或 closeup 规则`);
   }
   const closeup = heroSlot.closeup;
+  const heroFill = fills?.[heroSlot.id];
 
   // ---- pass 1: dominance -------------------------------------------------
   const heroSolution = solveHero({
     profile: hero.profile,
     closeup,
     canvas,
-    dominance: template.rules.heroDominance,
+    dominance:
+      heroFill === undefined
+        ? template.rules.heroDominance
+        : dominanceForFill(template.rules.heroDominance, heroFill),
+    /*
+      A size hint widens the search downward so "the subject should read smaller"
+      is reachable at all: `solveHero` otherwise starts at the fitted size and can
+      only ever grow. The ceiling stays the template's nominal zoom — raising it
+      would cut the product away to satisfy a percentage, which is the trade the
+      solver's own comment rejects.
+    */
+    ...(heroFill === undefined ? {} : { minZoom: Math.min(1, closeup.zoom * FILL_MIN_ZOOM_FACTOR) }),
   });
   warnings.push(...heroSolution.warnings);
 
@@ -532,6 +584,24 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   // only invent a different one.
   const usedMaterialIds = new Set([hero.materialId, boxSource?.materialId ?? '']);
 
+  /*
+    Hero occupancy is only final now: the box pass above may have stepped the zoom
+    down to keep the package readable, and reporting the pre-negotiation number
+    would tell the caller the model's request was honoured when it was not.
+  */
+  if (heroFill !== undefined) {
+    fillReport[heroSlot.id] = { target: round(heroFill, 4), achieved: round(occupancy, 4) };
+    if (Math.abs(occupancy - heroFill) > FILL_REPORT_TOLERANCE) {
+      warnings.push(
+        warning(
+          'hero_fill_unmet',
+          `模型希望主体占画布 ${round(heroFill * 100, 1)}%，实际 ${round(occupancy * 100, 1)}%（受模板的下限与包装盒可读性约束）`,
+          { slotId: heroSlot.id, target: round(heroFill, 4), achieved: round(occupancy, 4) },
+        ),
+      );
+    }
+  }
+
   /**
    * Paint order of a picture slot: `render_order` position when the template has
    * one, else its `z_index`. Both are ascending — back to front.
@@ -571,8 +641,36 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       continue;
     }
     usedMaterialIds.add(assignment.material.materialId);
-    const supportPlacement = heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom);
-    images.push(placedFromMaterial(assignment.material, supportPlacement, slot));
+    /*
+      With a `fill` hint the template's authored zoom becomes a starting point
+      instead of the answer: the solver moves the zoom until the content covers the
+      requested share of the canvas. Without one, nothing changes — a template that
+      never asks the model for sizes stays exactly as authored.
+    */
+    const fill = fills?.[slot.id];
+    if (fill === undefined) {
+      const supportPlacement = heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom);
+      images.push(placedFromMaterial(assignment.material, supportPlacement, slot));
+      continue;
+    }
+
+    const solved = solveSupportFill({
+      profile: assignment.material.profile,
+      closeup: slot.closeup!,
+      canvas,
+      target: fill,
+    });
+    fillReport[slot.id] = { target: round(fill, 4), achieved: round(solved.occupancy, 4) };
+    if (solved.clamped) {
+      warnings.push(
+        warning(
+          'support_fill_clamped',
+          `图位 ${slot.id} 想要占画布 ${round(fill * 100, 1)}%，缩放上限只允许到 ${round(solved.occupancy * 100, 1)}%`,
+          { slotId: slot.id, target: round(fill, 4), achieved: round(solved.occupancy, 4) },
+        ),
+      );
+    }
+    images.push(placedFromMaterial(assignment.material, solved.placement, slot));
   }
 
   /*
@@ -617,6 +715,7 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       boxVisibleRatio: boxSolution ? round(boxSolution.visibleRatio, 4) : null,
       boxVariantIndex: boxSolution ? boxSolution.variantIndex : null,
       boxFallback,
+      ...(Object.keys(fillReport).length > 0 ? { fills: fillReport } : {}),
     },
   };
 }

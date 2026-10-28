@@ -961,6 +961,39 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
 "两图降级"由"缺图是警告 + 绝不复用"实现；`no_ai_redrawing` 之类是"生成式重绘"的约束，本工具从不重绘。
 型号文字/店铺水印框/底部横幅不进模板 —— 水印走编辑器既有的后处理图层。
 
+### 10.9.1 占比：模型可以说"这块该多大"
+
+第一版拼贴模板上线后的实际效果是"三张都满高、叠成一团"。原因不是模型判错了，而是**没人负责大小**：
+模板的 `zoom` 是设计师按理想素材画的，`fit: height` 又把内容拉到视口高度，于是三张图各自几乎顶满
+770–800px，重叠区域必糊。视觉模型当时只回答"哪张是主体、哪张是包装盒、每个图位放第几张"，
+`hero_dominance` 的占用率约束只作用于 hero 位，support 位连那层约束都不走。
+
+修法是让模型多答一件事 —— **`size`：这张图应该占画布面积的多少**（0.05–0.85）—— 但只让它决定
+"多大"，不决定"在哪"：
+
+- **prompt 只在有图位时才问 `size`。** 单个 hero/box 布局问"三张图各占多大"没有意义（那种布局的大小
+  由 `hero_dominance` 与包装盒可读性决定）。所以 `buildBindingPrompt()` 里 "给每张进画面的图一个 size"
+  这一段，只有 `slots` 非空时才拼进去（hero 的 slotId 有则附带，让主体也能被指认大小）。
+- **答案只收模板点过名的槽位。** `parseFills()` 用 slotId 白名单过滤、只认有限数字、夹到
+  `[FILL_MIN, FILL_MAX]`。模型凭空编一个 `"product":0.6` 不会被采纳。
+- **support 位用二分求解缩放。** `solveSupportFill()`：`occupancyAt(zoom)` = `heroPlacement()` 落位后
+  裁剪到画布内的可见面积占比，二分 22 步逼近目标；搜索范围是 `nominal × [0.45, 2.2]`。
+  超范围直接返回端点并标 `clamped`，planner 据此发 `support_fill_clamped` 警告 —— **说了做不到就要说出来，
+  不能让面板显示"已按 30% 生成"实际是 45%**。
+- **hero 位只放宽下限，不放宽上限。** 目标占用率进 `dominanceForFill()`：地板仍是模板的
+  `min_canvas_occupancy`（那是"主体必须看得清"），偏好区间按模型给的数收窄。麻烦的是 `solveHero()`
+  默认 `minZoom = 1`（从贴合尺寸起搜、只允许往上），于是"主体应该更小"永远不可达 —— 所以有 size hint 时
+  传 `minZoom = min(1, nominal × 0.45)`。**上限仍钉在模板的 `zoom`**：为了凑一个百分比放大 hero
+  会把商品裁掉，那是这个仓库明确拒绝的取舍。
+- **目标与实际的差都要记账。** `plan.diagnostics.fills` 记 `{target, achieved}`，
+  `|achieved − target| > 0.04` 时发 `hero_fill_unmet`。占位比是二分出来的近似值，没有这条记录，
+  "为什么这次主体偏小"就无从查起。
+- **缓存要带上它。** `CachedBinding.fills` 与 `slots` 一起存（两者同源同寿命：一次视觉调用的两个答案），
+  解析时只留 `0 < size < 1` 的有限数字 —— 存下来的 `40` 说明记录坏了，不该被当成 40% 用。
+
+一句话：**模型决定"占多大"，模板决定"在哪"，求解器把前者翻译成后者坐标系里的缩放，做不到就报警。**
+几何仍然是确定性的，同输入同输出。
+
 ### 10.10 测试边界
 
 - 求解器、模板校验、plan→图层：**node 下全可测**（`AlphaProfile` 与 `MeasureText` 都是注入端口）。
@@ -975,6 +1008,10 @@ CI 产物里都没有密钥。错误消息只带 endpoint 与 HTTP 状态码，�
   （三个姿态的 x/y 互不相同）、`selectSupportMaterials`（用模型答案、面积兜底、绝不复用）、
   plan 三图 z 序、缺图/重复图的警告、`buildBindingPrompt` 把五个提示字段写进图位段落、
   以及 `parseBindingAnswer` 对 `slots` 的过滤（未知图位、未知编号、重复、与 hero 撞车全部丢弃）。
+- `tests/unit/composition-fill.test.ts` 专门盯"占比"这条新链路：`solveSupportFill` 撞地板/天花板时
+  `clamped` 是不是真的为真（有符号差 bug 就是它抓到的）、目标变小是否单调变小、planner 有/无 `fills`
+  时的缩放关系、只改大小不改水平位置、hero hint 可达时不发警告、不可达时发 `hero_fill_unmet`、
+  以及 `parseFills` 的白名单与夹紧。
 
 ## 11. 品牌目录：把 Logo 配置搬进仓库
 

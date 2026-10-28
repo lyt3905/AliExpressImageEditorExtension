@@ -17,6 +17,7 @@ import type { VisionSettings } from '../settings';
 import { askVisionWithFallback } from '../vision-endpoints';
 import type { FetchLike } from '../vision-client';
 import { PACKAGING_LABEL_PATTERN, type SupportSlotRequest } from './bind-materials';
+import { FILL_MAX, FILL_MIN } from './solve-fill';
 
 export interface VisionCandidate {
   materialId: string;
@@ -31,6 +32,15 @@ export interface VisionBinding {
   boxId: string | null;
   /** Collage slots the model filled: `slotId -> materialId`. Empty for two-slot templates. */
   slotMaterialIds: Record<string, string>;
+  /**
+   * How much of the canvas each picture slot should cover: `slotId -> 0-1`.
+   *
+   * The model is the only party that sees all the photos side by side, so it is the
+   * only one that can say "the action pose reads as the subject, the back view is
+   * scenery". Geometry stays deterministic: this number goes to `solveSupportFill` /
+   * the hero dominance band, never to a pixel coordinate.
+   */
+  fills: Record<string, number>;
   confidence: number;
   reason: string;
 }
@@ -72,6 +82,7 @@ export function selectVisionCandidates<T extends { label: string }>(
 export function buildBindingPrompt(
   candidates: ReadonlyArray<{ key: string; label: string }>,
   slots: readonly SupportSlotRequest[] = [],
+  heroSlotId?: string,
 ): string {
   const listing = candidates.map((candidate) => `${candidate.key}（${candidate.label}）`).join('、');
   const lines = [
@@ -99,11 +110,32 @@ export function buildBindingPrompt(
     );
   }
 
+  /*
+    Occupancy is the one composition decision the model is asked for. It is cheap —
+    one extra object in the same answer, no second request — and it is the only way
+    to break the "three figures all the same size" look that the fixed template
+    zooms produce when the supplier's photos happen to be similar.
+
+    Only asked for alongside a collage: a two-slot hero/package template keeps the
+    prompt (and therefore the behaviour) it has always had.
+  */
+  const sized = slots.length > 0 ? [...slots.map((slot) => slot.slotId), ...(heroSlotId ? [heroSlotId] : [])] : [];
+  if (sized.length > 0) {
+    lines.push(
+      '',
+      '再给每张进画面的图一个 size（占画布面积的份额，0.05–0.85）：' + sized.join('、') + '。',
+      '- 主角最大、后景最小，不要给两个一样大的数；',
+      '- 这是"这图案应该占多大一块"，不是裁切范围，位置由模板决定。',
+    );
+  }
+
   lines.push(
     '',
     '只输出一个 JSON，不要解释，格式：',
     slots.length > 0
-      ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"reason":"一句话"}'
+      ? heroSlotId
+        ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"size":{"图位名":0.18},"reason":"一句话"}'
+        : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"reason":"一句话"}'
       : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"reason":"一句话"}',
     '',
     '如果没有任何一张是包装盒，package 填 null、package_found 填 false。',
@@ -129,6 +161,7 @@ export function parseBindingAnswer(
   json: unknown,
   candidates: ReadonlyArray<{ key: string; materialId: string }>,
   slots: readonly SupportSlotRequest[] = [],
+  heroSlotId?: string,
 ): VisionBinding | null {
   if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
   const record = json as Record<string, unknown>;
@@ -166,7 +199,32 @@ export function parseBindingAnswer(
     : 0;
 
   const reason = typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : '模型未给出理由';
-  return { heroId, boxId, slotMaterialIds, confidence, reason };
+  return { heroId, boxId, slotMaterialIds, fills: parseFills(record.size, slots, heroSlotId), confidence, reason };
+}
+
+/**
+ * Occupancy hints (`size` in the answer): only slots the template asked about, only
+ * finite numbers, clamped to a range that can actually be drawn.
+ *
+ * Dropping unknown keys matters more than it looks: a model that invents a slot id
+ * would otherwise be sizing nothing, and a `size` of 40 (it meant percent) would
+ * otherwise ask for a 40× canvas.
+ */
+function parseFills(
+  raw: unknown,
+  slots: readonly SupportSlotRequest[],
+  heroSlotId?: string,
+): Record<string, number> {
+  const fills: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fills;
+  const allowed = new Set<string>([...slots.map((slot) => slot.slotId), ...(heroSlotId ? [heroSlotId] : [])]);
+  for (const [slotId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!allowed.has(slotId)) continue;
+    const number = typeof value === 'number' ? value : Number.NaN;
+    if (!Number.isFinite(number)) continue;
+    fills[slotId] = Math.min(FILL_MAX, Math.max(FILL_MIN, number));
+  }
+  return fills;
 }
 
 export interface VisionBindRequest {
@@ -179,6 +237,14 @@ export interface VisionBindRequest {
   candidates: VisionCandidate[];
   /** Collage picture slots to fill in the same answer; empty for two-slot layouts. */
   slots?: readonly SupportSlotRequest[];
+  /**
+   * The hero slot's id, when the template wants a size hint for it too.
+   *
+   * Without it the model would be told to size "图位 X" for the collage slots and
+   * nothing about the subject — and the subject is the figure whose size matters
+   * most on a 主图.
+   */
+  heroSlotId?: string;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
 }
@@ -206,11 +272,12 @@ export async function bindMaterialsWithVision(request: VisionBindRequest): Promi
     prompt: buildBindingPrompt(
       keyed.map(({ key, label }) => ({ key, label })),
       request.slots ?? [],
+      request.heroSlotId,
     ),
     images: keyed.map(({ key, dataUrl }) => ({ label: `图 ${key}：`, dataUrl })),
     timeoutMs: request.timeoutMs,
     fetchImpl: request.fetchImpl,
   });
 
-  return parseBindingAnswer(answer.json, keyed, request.slots ?? []);
+  return parseBindingAnswer(answer.json, keyed, request.slots ?? [], request.heroSlotId);
 }

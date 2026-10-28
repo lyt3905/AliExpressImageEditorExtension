@@ -29,7 +29,11 @@ export type CompositionWarningCode =
   /** No material could fill the box slot, so a fallback was used. */
   | 'box_material_missing'
   /** A collage slot (`secondary` / `accent` with its own `closeup`) got no usable material. */
-  | 'support_slot_empty';
+  | 'support_slot_empty'
+  /** A slot's model-requested occupancy could not be reached inside the zoom bounds. */
+  | 'support_fill_clamped'
+  /** The hero's model-requested occupancy lost to the template floor or the package rule. */
+  | 'hero_fill_unmet';
 
 export interface CompositionWarning {
   code: CompositionWarningCode;

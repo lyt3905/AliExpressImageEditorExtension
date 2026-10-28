@@ -142,6 +142,8 @@ function resolveCachedBinding(
     heroId,
     boxId: materialFor(cached.box),
     slotMaterialIds,
+    // Sizes are per SLOT, not per photo, so they survive the identity remap as-is.
+    fills: cached.fills ?? {},
     confidence: cached.confidence,
     reason: cached.reason,
   };
@@ -323,6 +325,13 @@ export function App(): JSX.Element {
    * different photos rather than whatever happened to be largest.
    */
   const [visionSlots, setVisionSlots] = useState<Record<string, string>>({});
+  /**
+   * Model-suggested occupancy per picture slot (`slotId -> 0-1`).
+   *
+   * Kept next to `visionSlots` because it comes from the same answer and shares its
+   * lifetime: a re-bind replaces both, and a cached binding restores both.
+   */
+  const [visionFills, setVisionFills] = useState<Record<string, number>>({});
   /**
    * Cache key of the composition that is on screen, waiting to be photographed.
    *
@@ -997,9 +1006,10 @@ export function App(): JSX.Element {
         measure: measureTextWithCanvas(),
         seed: session?.productCode ?? sessionId ?? '',
         ...(supports.length > 0 ? { supports } : {}),
+        ...(Object.keys(visionFills).length > 0 ? { fills: visionFills } : {}),
       });
     },
-    [bindCandidates, cutouts, profileFor, session, sessionId, templateKey, visionSlots],
+    [bindCandidates, cutouts, profileFor, session, sessionId, templateKey, visionFills, visionSlots],
   );
 
   /** One dispatch = one history entry, so a single Ctrl+Z restores the canvas. */
@@ -1089,6 +1099,7 @@ export function App(): JSX.Element {
         const resolved = cached ? resolveCachedBinding(cached, identityByMaterialId) : null;
         if (resolved) {
           setVisionSlots(resolved.slotMaterialIds);
+          setVisionFills(resolved.fills);
           return resolved;
         }
       }
@@ -1112,14 +1123,17 @@ export function App(): JSX.Element {
       // aspect ratio tells a rear shot from a front one.
       const parsedTemplate = parseTemplateByKey(templateKey).template;
       const slots = parsedTemplate ? supportSlotsOf(parsedTemplate) : [];
+      const heroSlotId = parsedTemplate?.slots.find((slot) => slot.role === 'hero')?.id;
 
       const binding = await bindMaterialsWithVision({
         configs,
         candidates,
         ...(slots.length > 0 ? { slots } : {}),
+        ...(heroSlotId ? { heroSlotId } : {}),
       });
       if (!binding) return null;
       setVisionSlots(binding.slotMaterialIds);
+      setVisionFills(binding.fills);
       const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
       const slotIdentities: Record<string, string> = {};
       for (const [slotId, materialId] of Object.entries(binding.slotMaterialIds)) {
@@ -1132,6 +1146,7 @@ export function App(): JSX.Element {
           hero: heroIdentity,
           box: binding.boxId ? identityByMaterialId.get(binding.boxId) ?? null : null,
           ...(Object.keys(slotIdentities).length > 0 ? { slots: slotIdentities } : {}),
+          ...(Object.keys(binding.fills).length > 0 ? { fills: binding.fills } : {}),
           confidence: binding.confidence,
           reason: binding.reason,
         })

@@ -198,6 +198,7 @@ describe('parseBindingAnswer', () => {
       heroId: 'm-hero',
       boxId: 'm-box',
       slotMaterialIds: {},
+      fills: {},
       confidence: 0.9,
       reason: 'A 是主体',
     });
