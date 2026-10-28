@@ -670,7 +670,7 @@ AliExpressImageEditorExtension/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager / page-filler
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
-│  ├─ options/                   # 设置页（登录 + 视觉接口 + 水印框 + 品牌）
+│  ├─ options/                   # 设置页：App.tsx（外壳）· options.css · helpers.ts · components/（Tabs/Card/Drawer/Pager/SaveBar…）· sections/（账号/AI 视觉/水印/品牌）
 │  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
@@ -681,7 +681,7 @@ AliExpressImageEditorExtension/
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
-   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）、§11 品牌目录同步、§12 本地缓存
+   ├─ architecture.md            # 含 §10 AI 作图（模板 / 求解器 / 兜底链 / 视觉绑定）、§11 品牌目录同步、§12 本地缓存、§13 品牌 Logo、§14 视觉接口链、§15 设置页
    └─ manual-test.md
 ```
 
@@ -745,6 +745,26 @@ AliExpressImageEditorExtension/
   **每个品牌各记一份**（不同 Logo 长宽比差很多），下次再选这个品牌直接落到原处。
 - **生成主图不会抹掉它**：排版只替换商品图、衬板和编号；品牌章原样留下、位置不变。
 - 没摆过的品牌默认落在右下角、留 32px 边距、最长边约为画布的 26%。
+
+---
+
+## 设置页：四个分类，一次保存
+
+选项页（`chrome://extensions` → 详情 → 扩展程序选项）以前是一列到底，现在分成**账号连接 / AI 视觉 /
+水印 / 品牌商标**四块，宽屏时左侧导航、窄屏时顶部标签，**一次只显示一块**：
+
+- 页头只有「标题 · 一句说明 · 连接状态 · 账号名·角色」。接口路径、SESSION Cookie、错误详情都在
+  各分区底部的「技术说明 / 使用说明」折叠面板里，默认关闭。
+- **切换分类不丢未保存的草稿**（四个面板一直挂载，非活动的只是隐藏）。
+- 底部固定一条「保存更改」：没有改动时是灰的，改了才亮；保存成功给一行轻提示；失败保留已填内容并
+  给出可执行的错误。关页面前若有未保存改动，浏览器会拦一下。点「放弃修改」回到上次保存的值。
+- 账号区：登录成功后**收起**账号/密码表单，只留服务地址、账号、角色、连接状态 + 「刷新状态 /
+  重新登录 / 退出登录」；密码不回显（它只存活在 `chrome.storage.session` 里）。
+- AI 视觉：每个接口一行摘要（主/备 + 地址 host + 模型 + 上次测试结论），点「编辑」才在右侧抽屉里
+  展开地址 / 模型 / Key；另有一个「测试」按钮真发一条最短请求，告诉你这条网关现在能不能用。
+- 水印与品牌：默认只显示数量与当前默认项，上传/改名/删除收在「管理水印」里，品牌编辑走右侧抽屉；
+  两处列表都按每页 10 条分页，品牌另可按名称 / 关键词搜索。
+- 键盘可用：分类之间用方向键移动（`Home`/`End` 跳首尾），折叠面板是原生 `<details>`，抽屉可用 Esc 关闭。
 
 ---
 
@@ -851,6 +871,11 @@ AliExpressImageEditorExtension/
     代价是主接口真出问题时先看到的仍是第一条的错误，其余原因附在括号里。
     每条都是**串行**发的，5 条全挂就是最多 5 次超时（默认 15 秒）——这是「AI 识别素材角色」那一下的
     等待，不阻塞画布。上次成功的接口记在 `aiee:vision-pin`，删掉这条存储就回到"按你写的顺序"。
+22. 设置页的「测试」按钮会**真的发一次请求**（不带图、只要一个 JSON），所以会消耗一次 token 与几秒钟。
+    它测的是"这条网关现在能不能答上"，不代表图生图/视觉绑定一定判得准。
+23. 设置页的四个面板**同时挂载**（非活动的只是 `hidden`），所以切分类不会丢草稿；代价是这些面板的
+    effect 一直活着 —— 目前它们都不发网络请求，唯一的副作用是缩略图的 object URL 池。
+    品牌与水印列表固定**每页 10 条**，不分页大小可选。
 
 ---
 
@@ -879,5 +904,6 @@ AliExpressImageEditorExtension/
 | 视觉接口多条配置 + 自动切换（10.9.0） | **仅自动化验证**（14 个单测：`resolveVisionConfigs` 的继承与默认回落、`orderByPin` 的三种情况、逐条回退、全挂时抛第一条错误并附其余原因、只 pin 成功者、pin 存储坏掉也照常返回答案、空链拒绝；另 13 个 `settings` 单测锁住「列表整体替换 / 单个对象只改主接口 / 旧对象升级成一条链」。**真网关的两次请求未在 Chrome 里连跑过**，步骤见 manual-test 5.79–5.81） |
 | 品牌只剩「名称 + 关键词」（10.10.0） | **仅自动化验证**（`brandTerms` / `matchBrandByTitle` 锁住「名称永不参与匹配」「没关键词的品牌永不命中」，注册表与目录两侧各 3 例覆盖旧 `aliases` 折进关键词且写回后不复现，`check:catalog` 对残留 `aliases` 只提示不失败。**真机对照**：换成旧版本装过的品牌列表，按原别名仍能识别，步骤见 manual-test 5.83–5.85） |
 | 选项页收起式界面（10.10.2–10.10.3） | **仅自动化验证**（`typecheck` + 735 测试不变，界面改动无新增断言；折叠状态是纯 UI 状态，不进存储也不进文档）。**真机必须看一眼**：视觉接口默认收起、品牌目录只占一行、品牌行点「编辑」才展开、保存/删除后收起、添加成功后表单折回，步骤见 manual-test 5.79、5.86–5.88 |
+| 设置页四分类改版（10.11.0） | **仅自动化验证**（`typecheck` 通过 + 735 测试不变；`src/options/` 仍无单测，脏标记、消息 payload 与四个 section 的 props 形状由类型钉住）。**真机必须走一遍**：一次只显示一个分类、切标签不丢草稿、底部保存栏的禁用/点亮/轻提示、未保存关页面被拦、账号区登录后收起、视觉抽屉与「测试」、水印/品牌分页与抽屉、键盘方向键切分类，步骤见 manual-test 5.90–5.100 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

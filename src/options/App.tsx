@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_SERVER_URL, DEFAULT_VISION_BASE_URL, DEFAULT_VISION_MODEL, MAX_BRAND_LOGO_BYTES, MAX_VISION_ENDPOINTS, MAX_WATERMARK_BYTES } from '../shared/constants';
+import {
+  DEFAULT_SERVER_URL,
+  MAX_BRAND_LOGO_BYTES,
+  MAX_VISION_ENDPOINTS,
+  MAX_WATERMARK_BYTES,
+} from '../shared/constants';
 import { messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type { BrandMeta, WatermarkMeta } from '../shared/types';
 import type { AuthUser } from '../services/server-api';
 import type { ExtensionSettings, VisionEndpoint } from '../services/settings';
+import { askVisionJson } from '../services/vision-client';
+import { resolveVisionConfigs } from '../services/vision-endpoints';
 import {
   listBrands,
   loadBrandLogo,
@@ -27,11 +34,30 @@ import {
   type BrandCatalogState,
 } from '../services/brand-catalog/state';
 import { syncBrandCatalog } from '../services/brand-catalog/sync';
+import { SaveBar } from './components/SaveBar';
+import type { SaveBarStatus } from './components/SaveBar';
+import { StatusBadge } from './components/StatusBadge';
+import { Tabs } from './components/Tabs';
+import type { TabItem } from './components/Tabs';
+import { AccountSection } from './sections/AccountSection';
+import { VisionSection } from './sections/VisionSection';
+import type { VisionTestResult } from './sections/VisionSection';
+import { WatermarkSection } from './sections/WatermarkSection';
+import { BrandSection } from './sections/BrandSection';
+import {
+  blankEndpoint,
+  defaultEndpointRows,
+  endpointLabel,
+  rowsForSave,
+} from './helpers';
 
 const LAST_ERROR_KEY = 'aiee:last-error';
 const ACCEPTED_TYPES = 'image/png,image/jpeg,image/webp';
 const SIZE_LIMIT_MB = Math.round(MAX_WATERMARK_BYTES / 1024 / 1024);
 const LOGO_SIZE_LIMIT_MB = Math.round(MAX_BRAND_LOGO_BYTES / 1024 / 1024);
+
+type StatusKind = 'ok' | 'bad' | 'idle';
+type TabId = 'account' | 'vision' | 'watermark' | 'brand';
 
 interface LastError {
   code: string;
@@ -39,151 +65,92 @@ interface LastError {
   at: number;
 }
 
-type StatusKind = 'ok' | 'bad' | 'idle';
-
-function formatTimestamp(at: number): string {
-  const date = new Date(at);
-  const pad = (value: number): string => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function catalogMirrorLabel(baseUrl: string | null): string {
-  if (!baseUrl) return '';
-  if (baseUrl.includes('jsdelivr')) return 'jsDelivr 镜像';
-  if (baseUrl.includes('raw.githubusercontent.com')) return 'raw.githubusercontent.com';
-  // A URL the seller typed in themselves — show its host, not "raw.github…".
-  try {
-    return `${new URL(baseUrl).host}（自填）`;
-  } catch {
-    return baseUrl;
-  }
-}
-
 /**
- * The rows an empty chain falls back to: the built-in local gateway, with the
- * model pre-filled and the key left blank so it inherits the build-time default.
- */
-function defaultEndpointRows(): VisionEndpoint[] {
-  return [{ baseUrl: DEFAULT_VISION_BASE_URL, model: DEFAULT_VISION_MODEL, apiKey: '' }];
-}
-
-/**
- * Rows as they go into storage.
+ * 一份"可保存设置"的指纹，用来判断底部「保存更改」该不该亮。
  *
- * Blank addresses are dropped (a row with no address can never be tried, and
- * keeping it would make the list claim a gateway that never fires). A blank
- * `model` / `apiKey` is kept blank on purpose: blank means "inherit from the first
- * row", and that resolution happens at call time, not here.
+ * 只算真正会被 SAVE_SETTINGS 写进去的东西；密码不算（它只活在会话里，而且保存后被清空），
+ * 账号/密码表单的展开状态、列表翻页、搜索词这些界面状态当然也不算——它们不该让按钮变蓝。
  */
-function rowsForSave(rows: readonly VisionEndpoint[]): VisionEndpoint[] {
-  return rows
-    .map((row) => ({
-      baseUrl: row.baseUrl.trim(),
-      model: row.model.trim(),
-      apiKey: row.apiKey.trim(),
-    }))
-    .filter((row) => row.baseUrl.length > 0);
+function snapshotOf(input: {
+  serverUrl: string;
+  username: string;
+  catalogUrl: string;
+  vision: readonly VisionEndpoint[];
+  editingIndex?: number | null;
+}): string {
+  return JSON.stringify({
+    serverUrl: input.serverUrl.trim(),
+    username: input.username.trim(),
+    catalogUrl: input.catalogUrl.trim(),
+    vision: rowsForSave(input.vision),
+  });
 }
 
 /**
- * What the dropdown shows for one gateway: its place in the chain plus its host.
+ * 设置页外壳。
  *
- * The host is what actually tells two rows apart — three rows all reading
- * 「备用接口」are indistinguishable until you open each one. Empty rows say so
- * instead of showing nothing.
+ * 结构：页头（只放"我是谁、连上没有"）+ 四个分类（同时挂载，非活动的 `hidden`）+
+ * 底部统一保存栏。**一次只显示一个分类**，但四个面板都留在 DOM 里——切换标签不卸载，
+ * 未保存的草稿自然就保住了，不需要额外的"暂存"逻辑。
+ *
+ * 所有数据与副作用都在这里；`sections/` 下的四个组件只负责渲染，不自己读存储。
  */
-function endpointLabel(endpoint: VisionEndpoint, index: number): string {
-  const name = index === 0 ? '主接口' : `备用接口 ${index + 1}`;
-  const raw = endpoint.baseUrl.trim();
-  if (raw.length === 0) return `${name} — 未填地址`;
-  try {
-    return `${name} — ${new URL(raw).host}`;
-  } catch {
-    return `${name} — ${raw}`;
-  }
-}
-
-/**
- * A brand-new row: address blank, model/key blank so they inherit the main row.
- */
-function blankEndpoint(): VisionEndpoint {
-  return { baseUrl: '', model: '', apiKey: '' };
-}
-
 export function OptionsApp(): JSX.Element {
+  const [activeTab, setActiveTab] = useState<TabId>('account');
+
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  // Vision gateway config: drives the "AI 识别素材角色" button in the editor.
-  /**
-   * The vision chain, as editable rows. Always at least one row so the section
-   * never renders empty; an emptied address field is dropped on save (a row with no
-   * address cannot be tried).
-   */
   const [visionEndpoints, setVisionEndpoints] = useState<VisionEndpoint[]>(defaultEndpointRows);
-  /**
-   * Which gateway is expanded for editing, or `null` when the section is
-   * collapsed.
-   *
-   * Collapsed is the default: the chain is a piece of config you touch twice a
-   * year, and three always-visible inputs per gateway made the page read as a
-   * form you were supposed to fill in. The dropdown still lists the whole chain
-   * (order + host) in one line, so you can see the attempt order without opening
-   * anything.
-   */
-  const [visionTab, setVisionTab] = useState<number | null>(null);
   const [status, setStatus] = useState<string>('');
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [lastError, setLastError] = useState<LastError | null>(null);
   const [busy, setBusy] = useState(false);
 
+  /** 已保存设置的指纹；和当前值不等就说明有未保存改动。 */
+  const [savedSnapshot, setSavedSnapshot] = useState<string>('');
+  const [saveStatus, setSaveStatus] = useState<SaveBarStatus | null>(null);
+  /** 登录表单是否展开：登录成功后收起，点「重新登录」再放出来。 */
+  const [loginFormOpen, setLoginFormOpen] = useState(false);
+
+  // ---- vision editing
+  const [editingEndpoint, setEditingEndpoint] = useState<number | null>(null);
+  const [testingIndex, setTestingIndex] = useState<number | null>(null);
+  const [visionTestResults, setVisionTestResults] = useState<Record<number, VisionTestResult>>({});
+  const [visionStatus, setVisionStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
+
+  // ---- watermark
   const [watermarks, setWatermarks] = useState<WatermarkMeta[]>([]);
   const [watermarkNames, setWatermarkNames] = useState<Record<string, string>>({});
   const [watermarkThumbs, setWatermarkThumbs] = useState<Record<string, string>>({});
   const [watermarkStatus, setWatermarkStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   const [watermarkBusy, setWatermarkBusy] = useState(false);
+  const watermarkFileRef = useRef<HTMLInputElement>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const thumbUrlsRef = useRef<Record<string, string>>({});
-
-  // ---- brand registry state
+  // ---- brand
   const [brands, setBrands] = useState<BrandMeta[]>([]);
   const [brandDraftNames, setBrandDraftNames] = useState<Record<string, string>>({});
   const [brandDraftKeywords, setBrandDraftKeywords] = useState<Record<string, string>>({});
   const [brandThumbs, setBrandThumbs] = useState<Record<string, string>>({});
   const [brandStatus, setBrandStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
   const [brandBusy, setBrandBusy] = useState(false);
-  /**
-   * Which brand row is expanded for editing, or `null` when every row is
-   * collapsed.
-   *
-   * The list is read far more often than it is edited — a collapsed row still
-   * shows the logo, the name and the keywords, which is everything you need to
-   * answer "is this brand registered correctly?". Expanding one row at a time
-   * keeps the nine-inputs-per-brand look out of the page.
-   */
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
-  /** The "add brand" form is collapsed behind one button, same reason. */
   const [brandFormOpen, setBrandFormOpen] = useState(false);
-  /** Draft for the "add brand" form. */
   const [newBrandName, setNewBrandName] = useState('');
   const [newBrandKeywords, setNewBrandKeywords] = useState('');
   const [newBrandFile, setNewBrandFile] = useState<File | null>(null);
   const brandFileInputRef = useRef<HTMLInputElement>(null);
 
-  // ---- catalog sync state (the catalog itself lives in the repo, not here)
+  // ---- catalog sync
   const [catalogState, setCatalogState] = useState<BrandCatalogState | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogStatus, setCatalogStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
-  /** Draft for the self-hosted catalog URL; `''` = use the built-in mirrors only. */
   const [catalogUrl, setCatalogUrl] = useState('');
-  /** Mirror override + explanation, collapsed into the catalog block's head row. */
-  const [catalogOpen, setCatalogOpen] = useState(false);
-  /** Result of the "保存视觉设置" button — kept apart from the login status line. */
-  const [visionStatus, setVisionStatus] = useState<{ kind: StatusKind; text: string } | null>(null);
 
-  const refreshAuthState = useCallback(async () => {
+  const thumbUrlsRef = useRef<Record<string, string>>({});
+
+  const refreshAuthState = useCallback(async (): Promise<boolean> => {
     try {
       const response = await sendToBackground<{ loggedIn: boolean; user: AuthUser | null }>({
         type: 'GET_AUTH_STATE',
@@ -207,38 +174,6 @@ export function OptionsApp(): JSX.Element {
     return list;
   }, []);
 
-  useEffect(() => {
-    void (async () => {
-      const response = await sendToBackground<ExtensionSettings>({
-        type: 'GET_SETTINGS',
-        requestId: createRequestId('settings'),
-      });
-      if (response?.ok && response.data) {
-        setServerUrl(response.data.serverUrl);
-        setUsername(response.data.username);
-        setCatalogUrl(response.data.brandCatalogUrl ?? '');
-        setVisionEndpoints(response.data.vision.length > 0 ? response.data.vision : defaultEndpointRows());
-      }
-      const loggedIn = await refreshAuthState();
-      setStatus(loggedIn ? '已登录' : '未登录（账号会保存在浏览器会话中，用于自动重新登录）');
-      setStatusKind(loggedIn ? 'ok' : 'idle');
-
-      try {
-        const stored = await chrome.storage.local.get(LAST_ERROR_KEY);
-        const value = stored?.[LAST_ERROR_KEY] as LastError | undefined;
-        if (value) setLastError(value);
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, [refreshAuthState]);
-
-  useEffect(() => {
-    void refreshWatermarks();
-  }, [refreshWatermarks]);
-
-  // ---- brand registry
-
   const refreshBrands = useCallback(async (): Promise<BrandMeta[]> => {
     const list = await listBrands();
     setBrands(list);
@@ -247,22 +182,284 @@ export function OptionsApp(): JSX.Element {
     return list;
   }, []);
 
-  useEffect(() => {
-    void refreshBrands();
-  }, [refreshBrands]);
-
-  // ---- catalog sync
-
   const refreshCatalogState = useCallback(async (): Promise<BrandCatalogState> => {
     const next = await loadBrandCatalogState();
     setCatalogState(next);
     return next;
   }, []);
 
+  /** 重新读一遍设置。保存成功和「放弃修改」都走这里，保证界面显示的就是存储里的值。 */
+  const loadSettings = useCallback(async (): Promise<void> => {
+    const response = await sendToBackground<ExtensionSettings>({
+      type: 'GET_SETTINGS',
+      requestId: createRequestId('settings'),
+    });
+    if (response?.ok && response.data) {
+      const data = response.data;
+      const rows = data.vision.length > 0 ? data.vision : defaultEndpointRows();
+      setServerUrl(data.serverUrl);
+      setUsername(data.username);
+      setCatalogUrl(data.brandCatalogUrl ?? '');
+      setVisionEndpoints(rows);
+      setSavedSnapshot(
+        snapshotOf({
+          serverUrl: data.serverUrl,
+          username: data.username,
+          catalogUrl: data.brandCatalogUrl ?? '',
+          vision: rows,
+        }),
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      await loadSettings();
+      const loggedIn = await refreshAuthState();
+      setStatus(loggedIn ? '已登录' : '未登录');
+      setStatusKind(loggedIn ? 'ok' : 'idle');
+      // 已登录的人不需要再看账号/密码框。
+      if (loggedIn) setLoginFormOpen(false);
+      try {
+        const stored = await chrome.storage.local.get(LAST_ERROR_KEY);
+        const value = stored?.[LAST_ERROR_KEY] as LastError | undefined;
+        if (value) setLastError(value);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [loadSettings, refreshAuthState]);
+
+  useEffect(() => {
+    void refreshWatermarks();
+  }, [refreshWatermarks]);
+
+  useEffect(() => {
+    void refreshBrands();
+  }, [refreshBrands]);
+
   useEffect(() => {
     void refreshCatalogState();
   }, [refreshCatalogState]);
 
+  // ---- 未保存改动的指纹
+  const currentSnapshot = snapshotOf({ serverUrl, username, catalogUrl, vision: visionEndpoints });
+  const dirty = savedSnapshot !== '' && currentSnapshot !== savedSnapshot;
+
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+      // Chrome 只认这个字段，文案由浏览器决定。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
+
+  // ---- 账号
+  const handleLogin = useCallback(async () => {
+    setBusy(true);
+    setStatus('正在登录…');
+    setStatusKind('idle');
+    try {
+      const response = await sendToBackground<AuthUser>({
+        type: 'LOGIN',
+        requestId: createRequestId('login'),
+        payload: { serverUrl, username, password },
+      });
+      if (!response?.ok) {
+        setStatus(`登录失败：${response?.error?.message ?? '未知错误'}`);
+        setStatusKind('bad');
+        return;
+      }
+      setUser(response.data ?? null);
+      setStatus('已登录');
+      setStatusKind('ok');
+      setPassword('');
+      setSaveStatus(null);
+      // 登录同时把服务地址与账号写了进去，所以指纹要跟着走，否则底部会一直亮"有未保存的修改"。
+      setSavedSnapshot(
+        snapshotOf({ serverUrl, username, catalogUrl, vision: visionEndpoints }),
+      );
+      // 登录成功后收起表单：这里已经只剩"我在用什么身份"值得看。
+      setLoginFormOpen(false);
+    } catch (error) {
+      setStatus(`登录失败：${messageOf(error)}`);
+      setStatusKind('bad');
+    } finally {
+      setBusy(false);
+    }
+  }, [catalogUrl, password, serverUrl, username, visionEndpoints]);
+
+  const handleLogout = useCallback(async () => {
+    setBusy(true);
+    try {
+      await sendToBackground({ type: 'LOGOUT', requestId: createRequestId('logout') });
+      setUser(null);
+      setPassword('');
+      setStatus('已退出登录');
+      setStatusKind('idle');
+      setLoginFormOpen(true);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const handleRefreshAuth = useCallback(async () => {
+    setBusy(true);
+    try {
+      const loggedIn = await refreshAuthState();
+      setStatus(loggedIn ? '已登录' : '未登录');
+      setStatusKind(loggedIn ? 'ok' : 'idle');
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshAuthState]);
+
+  // ---- 保存
+  /**
+   * 唯一的提交路径。
+   *
+   * `origin` 只影响提示文案（视觉抽屉里点保存 vs 底部保存栏），走的仍是同一个消息、
+   * 同一份 payload——两个入口不能各自拼一套参数，否则总有一个会漏字段（10.8.1 就是这么
+   * 丢过 vision 的）。
+   */
+  const saveSettings = useCallback(
+    async (origin: 'bar' | 'vision') => {
+      setBusy(true);
+      if (origin === 'vision') setVisionStatus({ kind: 'idle', text: '正在保存…' });
+      try {
+        const rows = rowsForSave(visionEndpoints);
+        const response = await sendToBackground<ExtensionSettings>({
+          type: 'SAVE_SETTINGS',
+          requestId: createRequestId('save'),
+          payload: {
+            serverUrl,
+            username,
+            ...(password ? { password } : {}),
+            brandCatalogUrl: catalogUrl.trim(),
+            vision: rows,
+          },
+        });
+        if (!response?.ok) {
+          const text = `保存失败：${response?.error?.message ?? '未知错误'}`;
+          setSaveStatus({ kind: 'bad', text });
+          if (origin === 'vision') setVisionStatus({ kind: 'bad', text });
+          return;
+        }
+        // 读回落库后的值：空地址行被丢掉、空链回落默认，界面要显示"实际存下来的"而不是"刚才打的"。
+        const saved = response.data?.vision ?? [];
+        const nextVision = saved.length > 0 ? saved : defaultEndpointRows();
+        setVisionEndpoints(nextVision);
+        setSavedSnapshot(
+          snapshotOf({
+            serverUrl: response.data?.serverUrl ?? serverUrl,
+            username: response.data?.username ?? username,
+            catalogUrl: response.data?.brandCatalogUrl ?? catalogUrl,
+            vision: nextVision,
+          }),
+        );
+        setSaveStatus({ kind: 'ok', text: '设置已保存' });
+        if (origin === 'vision') {
+          setVisionStatus({
+            kind: 'ok',
+            text:
+              nextVision.length > 1
+                ? `视觉设置已保存（${nextVision.length} 个接口，按顺序尝试）`
+                : '视觉设置已保存',
+          });
+          setEditingEndpoint(null);
+        }
+      } catch (error) {
+        const text = `保存失败：${messageOf(error)}`;
+        setSaveStatus({ kind: 'bad', text });
+        if (origin === 'vision') setVisionStatus({ kind: 'bad', text });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [catalogUrl, password, serverUrl, username, visionEndpoints],
+  );
+
+  const handleReset = useCallback(() => {
+    setSaveStatus(null);
+    setVisionStatus(null);
+    void loadSettings();
+  }, [loadSettings]);
+
+  // ---- 视觉接口行
+  const updateEndpoint = useCallback((index: number, patch: Partial<VisionEndpoint>) => {
+    setVisionEndpoints((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    // 改了地址/模型/Key 之后旧的测试结论就不作数了。
+    setVisionTestResults((previous) => {
+      const next = { ...previous };
+      delete next[index];
+      return next;
+    });
+  }, []);
+
+  const addEndpoint = useCallback(() => {
+    if (visionEndpoints.length >= MAX_VISION_ENDPOINTS) return;
+    setVisionEndpoints((rows) =>
+      rows.length >= MAX_VISION_ENDPOINTS ? rows : [...rows, blankEndpoint()],
+    );
+    // 直接打开新行：加了却不展开，看起来像按钮没反应。
+    setEditingEndpoint(visionEndpoints.length);
+  }, [visionEndpoints.length]);
+
+  const removeEndpoint = useCallback((index: number) => {
+    // 最后一行留着：空链不是合法配置，一个没有行的分区也没有地方可填。
+    setVisionEndpoints((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== index)));
+    setEditingEndpoint(null);
+    setVisionTestResults((previous) => {
+      const next: Record<number, VisionTestResult> = {};
+      for (const [key, value] of Object.entries(previous)) {
+        const at = Number(key);
+        if (at === index) continue;
+        next[at > index ? at - 1 : at] = value;
+      }
+      return next;
+    });
+  }, []);
+
+  const handleTestVision = useCallback(
+    async (index: number) => {
+      const configs = resolveVisionConfigs(visionEndpoints);
+      const config = configs[index];
+      if (!config) return;
+      setTestingIndex(index);
+      setVisionStatus({ kind: 'idle', text: `正在测试 ${endpointLabel(visionEndpoints[index] ?? config, index)}…` });
+      try {
+        // 真发一条最短的请求：不带图，但要求 JSON——能答上来就说明这个网关至少能做绑定需要的两件事。
+        const answer = await askVisionJson({
+          config,
+          prompt: '这是一条连通性测试。请只回一个 JSON 对象：{"ok":true}',
+          images: [],
+          timeoutMs: 15_000,
+        });
+        setVisionTestResults((previous) => ({
+          ...previous,
+          [index]: { kind: 'ok', text: `可用 · ${Math.round(answer.elapsedMs)}ms`, at: Date.now() },
+        }));
+        setVisionStatus({ kind: 'ok', text: `${endpointLabel(visionEndpoints[index] ?? config, index)} 可用` });
+      } catch (error) {
+        setVisionTestResults((previous) => ({
+          ...previous,
+          [index]: { kind: 'bad', text: '不可用', at: Date.now() },
+        }));
+        setVisionStatus({
+          kind: 'bad',
+          text: `测试失败（${endpointLabel(visionEndpoints[index] ?? config, index)}）：${messageOf(error)}`,
+        });
+      } finally {
+        setTestingIndex(null);
+      }
+    },
+    [visionEndpoints],
+  );
+
+  // ---- 目录同步
   const handleSyncCatalog = useCallback(async () => {
     setCatalogBusy(true);
     setCatalogStatus({ kind: 'idle', text: '正在从 GitHub 读取品牌目录…' });
@@ -305,9 +502,7 @@ export function OptionsApp(): JSX.Element {
       ];
       if (result.plan.conflicts.length > 0) parts.push(`本地优先 ${result.plan.conflicts.length}`);
       if (result.plan.skipped.length > 0) parts.push(`已排除 ${result.plan.skipped.length}`);
-      const failure = result.failures
-        .map((entry) => `${entry.slug}（${entry.message}）`)
-        .join('、');
+      const failure = result.failures.map((entry) => `${entry.slug}（${entry.message}）`).join('、');
       setCatalogStatus({
         kind: result.failures.length > 0 ? 'bad' : 'ok',
         text: `同步完成：${parts.join('，')}${failure ? `；失败：${failure}` : ''}`,
@@ -317,7 +512,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setCatalogBusy(false);
     }
-  }, [refreshBrands, refreshCatalogState, catalogUrl]);
+  }, [catalogUrl, refreshBrands, refreshCatalogState]);
 
   const handleCatalogToggle = useCallback(async (slug: string, enabled: boolean) => {
     const next = await setBrandCatalogSkipped(slug, !enabled);
@@ -330,7 +525,7 @@ export function OptionsApp(): JSX.Element {
     });
   }, []);
 
-  // ---- thumbnail object URLs for the brand list
+  // ---- 缩略图的 object URL（品牌 + 水印共用一个池）
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -348,7 +543,6 @@ export function OptionsApp(): JSX.Element {
     };
   }, [brands]);
 
-  // ---- thumbnail object URLs for the watermark list
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -374,149 +568,7 @@ export function OptionsApp(): JSX.Element {
     [],
   );
 
-  const handleLogin = useCallback(async () => {
-    setBusy(true);
-    setStatus('正在登录…');
-    setStatusKind('idle');
-    try {
-      const response = await sendToBackground<AuthUser>({
-        type: 'LOGIN',
-        requestId: createRequestId('login'),
-        payload: { serverUrl, username, password },
-      });
-      if (!response?.ok) {
-        setStatus(`登录失败：${response?.error?.message ?? '未知错误'}`);
-        setStatusKind('bad');
-        return;
-      }
-      setUser(response.data ?? null);
-      setStatus(`登录成功${response.data?.username ? `：${response.data.username}` : ''}`);
-      setStatusKind('ok');
-      setPassword('');
-    } catch (error) {
-      setStatus(`登录失败：${messageOf(error)}`);
-      setStatusKind('bad');
-    } finally {
-      setBusy(false);
-    }
-  }, [password, serverUrl, username]);
-
-  const handleLogout = useCallback(async () => {
-    setBusy(true);
-    try {
-      await sendToBackground({ type: 'LOGOUT', requestId: createRequestId('logout') });
-      setUser(null);
-      setPassword('');
-      setStatus('已退出登录');
-      setStatusKind('idle');
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const handleSave = useCallback(async () => {
-    setBusy(true);
-    try {
-      const response = await sendToBackground<ExtensionSettings>({
-        type: 'SAVE_SETTINGS',
-        requestId: createRequestId('save'),
-        payload: {
-          serverUrl,
-          username,
-          ...(password ? { password } : {}),
-          brandCatalogUrl: catalogUrl.trim(),
-          vision: rowsForSave(visionEndpoints),
-        },
-      });
-      if (response?.ok) {
-        setStatus('设置已保存');
-        setStatusKind('ok');
-      } else {
-        setStatus(`保存失败：${response?.error?.message ?? '未知错误'}`);
-        setStatusKind('bad');
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [password, serverUrl, username, visionEndpoints, catalogUrl]);
-
-  /**
-   * Save just the vision gateway chain.
-   *
-   * Its own button because the shared「仅保存设置」sits under the *account*
-   * fields and reads like an account action — the seller configuring gateways had
-   * no obvious way to commit the rows in front of them. Everything else (server
-   * URL, account) is sent unchanged so the same handler can serve both buttons.
-   */
-  const handleSaveVision = useCallback(async () => {
-    setBusy(true);
-    setVisionStatus({ kind: 'idle', text: '正在保存…' });
-    try {
-      const response = await sendToBackground<ExtensionSettings>({
-        type: 'SAVE_SETTINGS',
-        requestId: createRequestId('save-vision'),
-        payload: {
-          serverUrl,
-          username,
-          vision: rowsForSave(visionEndpoints),
-        },
-      });
-      if (response?.ok) {
-        // Read back what the store kept: blank rows were dropped and an empty list
-        // falls back to the built-in gateway, so the rows should show what is
-        // actually configured rather than what was typed.
-        const saved = response.data?.vision ?? [];
-        setVisionEndpoints(saved.length > 0 ? saved : defaultEndpointRows());
-        // Saved and done — fold the section back up so the page returns to the
-        // compact summary instead of leaving one gateway's inputs hanging open.
-        setVisionTab(null);
-        setVisionStatus({
-          kind: 'ok',
-          text:
-            saved.length > 1
-              ? `视觉设置已保存（${saved.length} 个接口，按顺序尝试）`
-              : '视觉设置已保存',
-        });
-      } else {
-        setVisionStatus({ kind: 'bad', text: `保存失败：${response?.error?.message ?? '未知错误'}` });
-      }
-    } catch (error) {
-      setVisionStatus({ kind: 'bad', text: `保存失败：${messageOf(error)}` });
-    } finally {
-      setBusy(false);
-    }
-  }, [serverUrl, username, visionEndpoints]);
-
-  const updateEndpoint = useCallback((index: number, patch: Partial<VisionEndpoint>) => {
-    setVisionEndpoints((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  }, []);
-
-  const addEndpoint = useCallback(() => {
-    if (visionEndpoints.length >= MAX_VISION_ENDPOINTS) return;
-    // Expand the row we just appended: a new row added below while the section
-    // stays collapsed looks like the button did nothing.
-    setVisionTab(visionEndpoints.length);
-    setVisionEndpoints((rows) =>
-      rows.length >= MAX_VISION_ENDPOINTS ? rows : [...rows, blankEndpoint()],
-    );
-  }, [visionEndpoints.length]);
-
-  const removeEndpoint = useCallback((index: number) => {
-    // The last row stays: an empty chain is not a valid configuration, and a
-    // section with no rows would leave nothing to type into.
-    setVisionEndpoints((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== index)));
-    // Collapse: the row the editor was pointing at is gone, and silently sliding
-    // to the neighbour would show someone else's address under the same cursor.
-    setVisionTab(null);
-  }, []);
-
-  // The expanded row, or null when collapsed (or when the index outlived its row).
-  const editingIndex =
-    visionTab !== null && visionTab >= 0 && visionTab < visionEndpoints.length ? visionTab : null;
-  const editingEndpoint = editingIndex === null ? null : visionEndpoints[editingIndex];
-
-  // ---- watermark management
-
+  // ---- 水印
   const handleAddWatermark = useCallback(
     async (file: File | undefined) => {
       if (!file) return;
@@ -533,7 +585,7 @@ export function OptionsApp(): JSX.Element {
         setWatermarkStatus({ kind: 'bad', text: messageOf(error) });
       } finally {
         setWatermarkBusy(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
+        if (watermarkFileRef.current) watermarkFileRef.current.value = '';
       }
     },
     [refreshWatermarks],
@@ -554,27 +606,23 @@ export function OptionsApp(): JSX.Element {
     setWatermarkStatus({ kind: 'ok', text: '已设为默认水印（下次打开编辑器生效）' });
   }, []);
 
-  const handleRemoveWatermark = useCallback(
-    async (meta: WatermarkMeta) => {
-      if (!window.confirm(`确定删除水印「${meta.name}」吗？该操作不可撤销。`)) return;
-      const cached = thumbUrlsRef.current[meta.id];
-      if (cached) {
-        URL.revokeObjectURL(cached);
-        delete thumbUrlsRef.current[meta.id];
-      }
-      setWatermarkThumbs((previous) => {
-        const next = { ...previous };
-        delete next[meta.id];
-        return next;
-      });
-      setWatermarks(await removeWatermark(meta.id));
-      setWatermarkStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
-    },
-    [],
-  );
+  const handleRemoveWatermark = useCallback(async (meta: WatermarkMeta) => {
+    if (!window.confirm(`确定删除水印「${meta.name}」吗？该操作不可撤销。`)) return;
+    const cached = thumbUrlsRef.current[meta.id];
+    if (cached) {
+      URL.revokeObjectURL(cached);
+      delete thumbUrlsRef.current[meta.id];
+    }
+    setWatermarkThumbs((previous) => {
+      const next = { ...previous };
+      delete next[meta.id];
+      return next;
+    });
+    setWatermarks(await removeWatermark(meta.id));
+    setWatermarkStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
+  }, []);
 
-  // ---- brand management
-
+  // ---- 品牌
   const handleAddBrand = useCallback(async () => {
     if (!newBrandFile) {
       setBrandStatus({ kind: 'bad', text: '请先选择 Logo 图片' });
@@ -594,7 +642,6 @@ export function OptionsApp(): JSX.Element {
       setNewBrandKeywords('');
       setNewBrandFile(null);
       if (brandFileInputRef.current) brandFileInputRef.current.value = '';
-      // Added brands are read back from the list, not from the form: collapse it.
       setBrandFormOpen(false);
     } catch (error) {
       setBrandStatus({ kind: 'bad', text: messageOf(error) });
@@ -614,8 +661,6 @@ export function OptionsApp(): JSX.Element {
         }),
       );
       setBrandStatus({ kind: 'ok', text: '已保存品牌修改' });
-      // Collapse on save: the row goes back to its one-line summary, which now
-      // shows the values that were just stored.
       setEditingBrandId(null);
     },
     [brandDraftKeywords, brandDraftNames, brands],
@@ -635,557 +680,173 @@ export function OptionsApp(): JSX.Element {
     });
     setBrands(await removeBrand(meta.id));
     setBrandStatus({ kind: 'ok', text: `已删除「${meta.name}」` });
-    // Deleting the expanded row must not leave `editingBrandId` pointing at a
-    // brand that no longer exists.
     setEditingBrandId((current) => (current === meta.id ? null : current));
   }, []);
 
+  const tabs: TabItem[] = [
+    { id: 'account', label: '账号连接' },
+    { id: 'vision', label: 'AI 视觉', count: visionEndpoints.length },
+    { id: 'watermark', label: '水印', count: watermarks.length },
+    { id: 'brand', label: '品牌商标', count: brands.length },
+  ];
+
   return (
-    <div className="options">
-      <h1>AliExpress 图片编辑器 · 设置</h1>
-      <p className="hint">
-        抠图使用服务端已有接口（<code>POST /api/admin/uploads/images</code> 上传 →{' '}
-        <code>POST /api/public/toy-image/v1/background/remove</code> 抠图）。登录态由服务端下发的 SESSION Cookie
-        维持；密码不会写入磁盘，仅保存在浏览器会话存储中用于自动重新登录。
-      </p>
-
-      <div className="field">
-        <label htmlFor="server-url">服务地址</label>
-        <input
-          id="server-url"
-          value={serverUrl}
-          spellCheck={false}
-          onChange={(event) => setServerUrl(event.target.value)}
-          placeholder={DEFAULT_SERVER_URL}
-        />
-        <small>默认 {DEFAULT_SERVER_URL}，可在需要时指向其他同版本服务。</small>
-      </div>
-
-      <div className="field">
-        <label htmlFor="username">账号</label>
-        <input
-          id="username"
-          value={username}
-          spellCheck={false}
-          autoComplete="username"
-          onChange={(event) => setUsername(event.target.value)}
-        />
-      </div>
-
-      <div className="field">
-        <label htmlFor="password">密码</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          autoComplete="current-password"
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="仅用于登录与本次浏览器会话内的自动重登"
-        />
-      </div>
-
-      <div className="row">
-        <button type="button" className="primary" disabled={busy || !username || !password} onClick={() => void handleLogin()}>
-          登录并保存
-        </button>
-        <button type="button" disabled={busy} onClick={() => void handleSave()}>
-          仅保存设置
-        </button>
-        <button type="button" disabled={busy} onClick={() => void refreshAuthState()}>
-          刷新登录状态
-        </button>
-        <button type="button" disabled={busy} onClick={() => void handleLogout()}>
-          退出登录
-        </button>
-      </div>
-
-      <div className="status-line">
+    <div className="opt-page">
+      <header className="opt-header">
         <div>
-          登录状态：
-          <strong className={statusKind === 'ok' ? 'status-ok' : statusKind === 'bad' ? 'status-bad' : ''}>
-            {user ? `${user.username}${user.role ? ` · ${user.role}` : ''}` : status || '未登录'}
-          </strong>
-        </div>
-        {user ? null : <div>{status}</div>}
-        {lastError ? (
-          <div>
-            最近一次错误：<span className="status-bad">[{lastError.code}] {lastError.message}</span>
-          </div>
-        ) : null}
-      </div>
-
-      <hr className="section-divider" />
-
-      <h2>AI 视觉接口</h2>
-      <p className="hint">
-        可选。编辑器里点「AI 识别素材角色」时，素材会以 512px 缩略图发给下面的网关判断主图 / 包装盒。
-        可以配多个网关：<strong>按顺序尝试，谁先答上就用谁</strong>；上一个连不上、超时、鉴权失败或返回不是
-        JSON 都算失败，自动换下一个。全部失败才回退到标签匹配，不影响其他功能。
-      </p>
-
-      <div className="field vision-picker">
-        <label htmlFor="vision-picker">接口</label>
-        <select
-          id="vision-picker"
-          value={editingIndex === null ? '' : String(editingIndex)}
-          disabled={busy}
-          onChange={(event) => {
-            const next = event.target.value;
-            // The placeholder option is how you fold the row back up again.
-            setVisionTab(next === '' ? null : Number(next));
-          }}
-        >
-          <option value="">选择要编辑的接口…（点开才显示地址 / 模型 / Key）</option>
-          {visionEndpoints.map((endpoint, index) => (
-            <option key={index} value={index}>
-              {endpointLabel(endpoint, index)}
-            </option>
-          ))}
-        </select>
-        <small>
-          一共 {visionEndpoints.length} 个，按这个顺序尝试：
-          {visionEndpoints.map((endpoint, index) => endpointLabel(endpoint, index)).join(' → ')}。
-          选中哪一个，下面才展开它的设置。
-        </small>
-      </div>
-
-      {editingIndex === null || editingEndpoint === null ? null : (
-        <div className="vision-row">
-          <div className="vision-row__head">
-            <strong>{endpointLabel(editingEndpoint, editingIndex)}</strong>
-            {editingIndex === 0 ? (
-              <small className="vision-row__note">备用接口里留空的「模型 / Key」都继承这里</small>
-            ) : (
-              <small className="vision-row__note">「模型 / Key」留空 = 继承主接口</small>
-            )}
-            <button
-              type="button"
-              className="vision-row__collapse"
-              disabled={busy}
-              onClick={() => setVisionTab(null)}
-              title="收起，不改动任何设置"
-            >
-              收起
-            </button>
-            {visionEndpoints.length > 1 ? (
-              <button
-                type="button"
-                className="vision-row__remove"
-                disabled={busy}
-                onClick={() => removeEndpoint(editingIndex)}
-                title="从链里移除这个接口"
-              >
-                移除这个接口
-              </button>
-            ) : null}
-          </div>
-
-          <div className="field">
-            <label htmlFor="vision-base-url">接口地址</label>
-            <input
-              id="vision-base-url"
-              value={editingEndpoint.baseUrl}
-              spellCheck={false}
-              onChange={(event) => updateEndpoint(editingIndex, { baseUrl: event.target.value })}
-              placeholder={
-                editingIndex === 0
-                  ? DEFAULT_VISION_BASE_URL
-                  : 'http://127.0.0.1:8788/v1（另一台机器 / 备用网关）'
-              }
-            />
-            {editingEndpoint.baseUrl.trim().length === 0 ? (
-              <small>这个接口还没填地址，保存时会被丢掉。</small>
-            ) : null}
-          </div>
-
-          <div className="field">
-            <label htmlFor="vision-model">视觉模型</label>
-            <input
-              id="vision-model"
-              value={editingEndpoint.model}
-              spellCheck={false}
-              onChange={(event) => updateEndpoint(editingIndex, { model: event.target.value })}
-              placeholder={
-                editingIndex === 0
-                  ? DEFAULT_VISION_MODEL
-                  : `留空 = 继承主接口（${visionEndpoints[0]?.model.trim() || DEFAULT_VISION_MODEL}）`
-              }
-            />
-          </div>
-
-          <div className="field">
-            <label htmlFor="vision-api-key">接口 Key</label>
-            <input
-              id="vision-api-key"
-              type="password"
-              value={editingEndpoint.apiKey}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) => updateEndpoint(editingIndex, { apiKey: event.target.value })}
-              placeholder={
-                editingIndex === 0
-                  ? '留空 = 使用构建期内置的默认 Key'
-                  : '留空 = 继承主接口的 Key'
-              }
-            />
-          </div>
-        </div>
-      )}
-
-      <p className="hint">
-        只填地址也能用：主接口留空「模型 / Key」就用构建期内置的默认值（本地开发时来自 gitignored 的{' '}
-        <code>.env.local</code> 里的 <code>VITE_VISION_API_KEY</code>）。需要多图输入与 JSON 输出的模型。
-      </p>
-
-      <div className="row">
-        <button
-          type="button"
-          disabled={busy || visionEndpoints.length >= MAX_VISION_ENDPOINTS}
-          onClick={addEndpoint}
-        >
-          + 添加接口
-        </button>
-        <button type="button" className="primary" disabled={busy} onClick={() => void handleSaveVision()}>
-          保存视觉设置
-        </button>
-      </div>
-
-      {visionStatus ? (
-        <div
-          className={`status-line status-line--tight${visionStatus.kind === 'bad' ? ' status-bad' : ''}`}
-        >
-          {visionStatus.text}
-        </div>
-      ) : null}
-
-      <hr className="section-divider" />
-
-      <h2>水印框</h2>
-      <p className="hint">
-        可以配置多个水印框，并把其中一个设为默认。每次打开编辑器时，默认水印会自动作为
-        <strong>锁定图层放在最上层</strong>——不可拖动、缩放、旋转、删除，也不受「清空画布 / 撤销」影响，
-        导出时一并合成。编辑器工具栏里可以临时隐藏或换用其他水印，不会改变这里的默认设置。
-      </p>
-
-      <div className="field">
-        <label htmlFor="watermark-file">添加水印框</label>
-        <input
-          id="watermark-file"
-          ref={fileInputRef}
-          type="file"
-          accept={ACCEPTED_TYPES}
-          disabled={watermarkBusy}
-          onChange={(event) => void handleAddWatermark(event.target.files?.[0])}
-        />
-        <small>
-          PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {SIZE_LIMIT_MB}MB。
-          图片按「长边铺满 800、居中」等比缩放，不拉伸；边框类水印请直接做成正方形。
-        </small>
-      </div>
-
-      {watermarks.length === 0 ? (
-        <div className="empty">还没有水印框，添加一张即可自动成为默认水印。</div>
-      ) : (
-        <div className="watermark-list">
-          {watermarks.map((meta) => (
-            <div className="watermark-row" key={meta.id}>
-              <span className="watermark-row__thumb">
-                {watermarkThumbs[meta.id] ? (
-                  <img src={watermarkThumbs[meta.id]} alt="" />
-                ) : (
-                  <span className="watermark-row__thumb-empty" />
-                )}
-              </span>
-
-              <input
-                className="watermark-row__name"
-                value={watermarkNames[meta.id] ?? meta.name}
-                spellCheck={false}
-                onChange={(event) =>
-                  setWatermarkNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                }
-                onBlur={() => void handleRenameWatermark(meta.id)}
-              />
-
-              <span className="watermark-row__size">
-                {meta.width}×{meta.height}
-              </span>
-
-              <label className="watermark-row__default" title="设为默认水印">
-                <input
-                  type="radio"
-                  name="watermark-default"
-                  checked={meta.isDefault}
-                  onChange={() => void handleSetDefaultWatermark(meta.id)}
-                />
-                默认
-              </label>
-
-              <button type="button" onClick={() => void handleRemoveWatermark(meta)}>
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {watermarkStatus ? (
-        <div className={`status-line status-line--tight${watermarkStatus.kind === 'bad' ? ' status-bad' : ''}`}>
-          {watermarkStatus.text}
-        </div>
-      ) : null}
-
-      <hr className="section-divider" />
-
-      <h2>品牌商标</h2>
-      <p className="hint">
-        维护「品牌 → Logo」列表。只有**关键词**参与匹配：打开编辑器时拿关键词去商品标题里找（不区分大小写），
-        命中的品牌 Logo 会自动作为图层加到画布上；也可以在编辑器工具栏手动选择。
-        名称只用来区分不同品牌，不参与匹配——把品牌名、英文名、系列缩写都写进关键词即可。
-      </p>
-
-      <div className="catalog-block">
-        <div className="catalog-block__head">
-          <strong>品牌目录（GitHub）</strong>
-          <span className="catalog-block__state">
-            {catalogState === null
-              ? '读取中…'
-              : catalogState.syncedAt > 0
-                ? `已同步 v${catalogState.version} · ${formatTimestamp(catalogState.syncedAt)}${catalogState.baseUrlUsed ? ` · ${catalogMirrorLabel(catalogState.baseUrlUsed)}` : ''}`
-                : '从未同步'}
-          </span>
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => setCatalogOpen((previous) => !previous)}
-          >
-            {catalogOpen ? '收起' : '镜像设置'}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={catalogBusy}
-            onClick={() => void handleSyncCatalog()}
-          >
-            {catalogBusy ? '正在同步…' : '立即同步'}
-          </button>
-        </div>
-        {catalogOpen ? (
-          <>
-            <p className="hint">
-              目录来自仓库的 <code>catalog/brands.json</code>：仓库里加一个品牌、换一张 Logo，
-              这里点一次同步就能拿到，不用重新打包插件。打开编辑器时也会自动同步（24 小时内不重复请求）。
-              目录里的品牌 id 固定（<code>remote-&lt;slug&gt;</code>），所以更新 Logo 不会让历史画布断图。
-            </p>
-            <div className="field">
-              <label htmlFor="catalog-url">自填目录地址（可选）</label>
-              <input
-                id="catalog-url"
-                value={catalogUrl}
-                spellCheck={false}
-                disabled={catalogBusy}
-                onChange={(event) => setCatalogUrl(event.target.value)}
-                placeholder="https://你的域名/catalog/"
-              />
-              <small>
-                国内访问 GitHub 不稳时，把这个仓库的 <code>catalog/</code> 镜像到别处再填这里。
-                同步会先试它、失败再回落到内置镜像。留空 = 只用内置镜像。改完点上面的「设置」区保存，
-                或直接「立即同步」按当前输入试一次。只接受 HTTPS（本机 <code>127.0.0.1</code> 可用 HTTP）。
-              </small>
-            </div>
-          </>
-        ) : (
-          <p className="hint hint--tight">
-            仓库里的 <code>catalog/brands.json</code> 改完点「立即同步」就能拿到，不用重新打包插件。
+          <h1>AliExpress 图片编辑器</h1>
+          <p className="opt-header__sub">
+            登录、AI 视觉接口、水印与品牌 Logo。改动集中到页面底部一次保存。
           </p>
-        )}
-        {catalogStatus ? (
+        </div>
+        <div className="opt-header__status">
+          <StatusBadge kind={user ? 'ok' : 'idle'} label={user ? '已连接' : '未登录'} />
+          <span className="opt-header__user">
+            {user ? `${user.username}${user.role ? ` · ${user.role}` : ''}` : '—'}
+          </span>
+        </div>
+      </header>
+
+      <div className="opt-shell">
+        <Tabs items={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} idPrefix="opt" />
+
+        <main className="opt-main">
           <div
-            className={`status-line status-line--tight${catalogStatus.kind === 'bad' ? ' status-bad' : ''}`}
+            role="tabpanel"
+            id="opt-panel-account"
+            aria-labelledby="opt-tab-account"
+            hidden={activeTab !== 'account'}
           >
-            {catalogStatus.text}
+            <AccountSection
+              serverUrl={serverUrl}
+              onServerUrlChange={setServerUrl}
+              username={username}
+              onUsernameChange={setUsername}
+              password={password}
+              onPasswordChange={setPassword}
+              user={user}
+              busy={busy}
+              status={status}
+              statusKind={statusKind}
+              formOpen={loginFormOpen}
+              onFormOpenChange={setLoginFormOpen}
+              onLogin={() => void handleLogin()}
+              onLogout={() => void handleLogout()}
+              onRefresh={() => void handleRefreshAuth()}
+              lastError={lastError}
+              serverUrlDirty={savedSnapshot !== '' && snapshotOf({ serverUrl, username, catalogUrl, vision: visionEndpoints }) !== savedSnapshot}
+            />
           </div>
-        ) : null}
-        {catalogState?.lastError ? (
-          <div className="status-line status-line--tight status-bad">
-            上次同步失败：{catalogState.lastError}
+
+          <div
+            role="tabpanel"
+            id="opt-panel-vision"
+            aria-labelledby="opt-tab-vision"
+            hidden={activeTab !== 'vision'}
+          >
+            <VisionSection
+              endpoints={visionEndpoints}
+              editingIndex={editingEndpoint}
+              editing={editingEndpoint === null ? null : visionEndpoints[editingEndpoint] ?? null}
+              busy={busy}
+              dirty={dirty}
+              testingIndex={testingIndex}
+              testResults={visionTestResults}
+              status={visionStatus}
+              onEdit={setEditingEndpoint}
+              onUpdate={updateEndpoint}
+              onAdd={addEndpoint}
+              onRemove={removeEndpoint}
+              onTest={(index) => void handleTestVision(index)}
+              onSave={() => void saveSettings('vision')}
+            />
           </div>
-        ) : null}
-      </div>
 
-      <div className="row">
-        <button type="button" onClick={() => setBrandFormOpen((previous) => !previous)}>
-          {brandFormOpen ? '收起添加表单' : '+ 添加品牌'}
-        </button>
-      </div>
-
-      {brandFormOpen ? (
-        <div className="brand-form">
-          <div className="field">
-            <label htmlFor="brand-file">Logo 图片</label>
-            <input
-              id="brand-file"
-              ref={brandFileInputRef}
-              type="file"
+          <div
+            role="tabpanel"
+            id="opt-panel-watermark"
+            aria-labelledby="opt-tab-watermark"
+            hidden={activeTab !== 'watermark'}
+          >
+            <WatermarkSection
+              watermarks={watermarks}
+              names={watermarkNames}
+              thumbs={watermarkThumbs}
+              busy={watermarkBusy}
+              status={watermarkStatus}
+              sizeLimitMb={SIZE_LIMIT_MB}
               accept={ACCEPTED_TYPES}
-              disabled={brandBusy}
-              onChange={(event) => setNewBrandFile(event.target.files?.[0] ?? null)}
+              fileInputRef={watermarkFileRef}
+              onAdd={(file) => void handleAddWatermark(file)}
+              onNameChange={(id, value) =>
+                setWatermarkNames((previous) => ({ ...previous, [id]: value }))
+              }
+              onRename={(id) => void handleRenameWatermark(id)}
+              onSetDefault={(id) => void handleSetDefaultWatermark(id)}
+              onRemove={(meta) => void handleRemoveWatermark(meta)}
             />
-            <small>PNG（可带透明通道，推荐）／JPEG／WebP，单张上限 {LOGO_SIZE_LIMIT_MB}MB。</small>
           </div>
-          <div className="field">
-            <label htmlFor="brand-name">品牌名称</label>
-            <input
-              id="brand-name"
-              value={newBrandName}
-              spellCheck={false}
-              disabled={brandBusy}
-              onChange={(event) => setNewBrandName(event.target.value)}
-              placeholder="例：Morph Toys"
+
+          <div
+            role="tabpanel"
+            id="opt-panel-brand"
+            aria-labelledby="opt-tab-brand"
+            hidden={activeTab !== 'brand'}
+          >
+            <BrandSection
+              brands={brands}
+              thumbs={brandThumbs}
+              busy={brandBusy}
+              status={brandStatus}
+              catalog={{
+                state: catalogState,
+                busy: catalogBusy,
+                status: catalogStatus,
+                url: catalogUrl,
+                dirty: savedSnapshot !== '' && catalogUrl.trim() !== (catalogState?.baseUrlUsed ?? catalogUrl.trim()),
+                onUrlChange: setCatalogUrl,
+                onSync: () => void handleSyncCatalog(),
+                onToggleSync: (slug, enabled) => void handleCatalogToggle(slug, enabled),
+              }}
+              draft={{
+                names: brandDraftNames,
+                keywords: brandDraftKeywords,
+                onName: (id, value) => setBrandDraftNames((previous) => ({ ...previous, [id]: value })),
+                onKeywords: (id, value) =>
+                  setBrandDraftKeywords((previous) => ({ ...previous, [id]: value })),
+              }}
+              add={{
+                open: brandFormOpen,
+                onOpenChange: setBrandFormOpen,
+                name: newBrandName,
+                onName: setNewBrandName,
+                keywords: newBrandKeywords,
+                onKeywords: setNewBrandKeywords,
+                file: newBrandFile,
+                onFile: setNewBrandFile,
+                fileInputRef: brandFileInputRef,
+                sizeLimitMb: LOGO_SIZE_LIMIT_MB,
+                accept: ACCEPTED_TYPES,
+                onSubmit: () => void handleAddBrand(),
+              }}
+              edit={{
+                id: editingBrandId,
+                onOpen: setEditingBrandId,
+                onSave: (id) => void handleSaveBrandRow(id),
+                onRemove: (meta) => void handleRemoveBrand(meta),
+              }}
             />
-            <small>只用来区分不同品牌（这里和编辑器里的品牌下拉显示的就是它），不参与标题匹配。</small>
           </div>
-          <div className="field">
-            <label htmlFor="brand-keywords">标题关键词（逗号分隔）</label>
-            <input
-              id="brand-keywords"
-              value={newBrandKeywords}
-              spellCheck={false}
-              disabled={brandBusy}
-              onChange={(event) => setNewBrandKeywords(event.target.value)}
-              placeholder="例：Morph Toys, MTS, 摩变"
-            />
-            <small>
-              标题里出现任一关键词（<b>不区分大小写</b>）就判定为该品牌，所以把品牌名、英文名、系列缩写都写进来。
-              留空 = 永不自动识别，只能在编辑器里手动选品牌。
-            </small>
-          </div>
-          <div className="row">
-            <button
-              type="button"
-              className="primary"
-              disabled={brandBusy || !newBrandFile}
-              onClick={() => void handleAddBrand()}
-            >
-              添加品牌
-            </button>
-          </div>
-        </div>
-      ) : null}
+        </main>
+      </div>
 
-      {brands.length === 0 ? (
-        <div className="empty">还没有品牌，先上传一张 Logo 并填上名称。</div>
-      ) : (
-        <div className="watermark-list">
-          {brands.map((meta) => {
-            const expanded = editingBrandId === meta.id;
-            const keywords = (brandDraftKeywords[meta.id] ?? meta.keywords.join(', ')).trim();
-            return (
-              <div
-                className={`watermark-row watermark-row--brand${expanded ? ' watermark-row--editing' : ''}`}
-                key={meta.id}
-              >
-                <span className="watermark-row__thumb">
-                  {brandThumbs[meta.id] ? (
-                    <img src={brandThumbs[meta.id]} alt="" />
-                  ) : (
-                    <span className="watermark-row__thumb-empty" />
-                  )}
-                </span>
-
-                {expanded ? (
-                  <span className="watermark-row__brand-fields">
-                    <input
-                      value={brandDraftNames[meta.id] ?? meta.name}
-                      spellCheck={false}
-                      placeholder="品牌名称"
-                      onChange={(event) =>
-                        setBrandDraftNames((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                      }
-                    />
-                    <input
-                      value={brandDraftKeywords[meta.id] ?? ''}
-                      spellCheck={false}
-                      placeholder="标题关键词（逗号分隔，留空 = 不自动识别）"
-                      onChange={(event) =>
-                        setBrandDraftKeywords((previous) => ({ ...previous, [meta.id]: event.target.value }))
-                      }
-                    />
-                  </span>
-                ) : (
-                  // Collapsed: the two things you actually read at a glance — who
-                  // this brand is, and what text would trigger it.
-                  <span className="watermark-row__brand-summary">
-                    <strong className="watermark-row__brand-name">{meta.name}</strong>
-                    <span className="watermark-row__brand-keywords">
-                      {keywords === '' ? '无关键词（不会自动识别）' : keywords}
-                    </span>
-                  </span>
-                )}
-
-                {expanded ? (
-                  <span className="watermark-row__size">
-                    {meta.width}×{meta.height}
-                    {meta.source === 'remote' && meta.slug ? (
-                      <label
-                        className="watermark-row__default"
-                        title="取消勾选后，目录同步既不覆盖也不删除这个品牌当前的 Logo"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!catalogState?.skipped.includes(meta.slug)}
-                          disabled={catalogBusy}
-                          onChange={(event) =>
-                            void handleCatalogToggle(meta.slug as string, event.target.checked)
-                          }
-                        />
-                        同步
-                      </label>
-                    ) : null}
-                  </span>
-                ) : (
-                  <span className="watermark-row__size">
-                    {meta.source === 'remote' ? '目录同步' : '手动上传'}
-                  </span>
-                )}
-
-                {expanded ? (
-                  <>
-                    <button type="button" className="primary" onClick={() => void handleSaveBrandRow(meta.id)}>
-                      保存
-                    </button>
-                    <button
-                      type="button"
-                      className="link-button link-button--danger"
-                      onClick={() => void handleRemoveBrand(meta)}
-                    >
-                      删除
-                    </button>
-                    <button
-                      type="button"
-                      className="link-button"
-                      title="收起，不改动任何设置"
-                      onClick={() => setEditingBrandId(null)}
-                    >
-                      收起
-                    </button>
-                  </>
-                ) : (
-                  <button type="button" onClick={() => setEditingBrandId(meta.id)}>
-                    编辑
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {brandStatus ? (
-        <div className={`status-line status-line--tight${brandStatus.kind === 'bad' ? ' status-bad' : ''}`}>
-          {brandStatus.text}
-        </div>
-      ) : null}
+      <SaveBar
+        dirty={dirty}
+        busy={busy}
+        status={saveStatus}
+        onSave={() => void saveSettings('bar')}
+        onReset={handleReset}
+      />
     </div>
   );
 }
