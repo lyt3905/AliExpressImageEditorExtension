@@ -171,6 +171,31 @@ export interface TemplateRules {
    * their `zIndex` and go in front.
    */
   renderOrder?: readonly string[];
+  /**
+   * 叠图秩序：谁挡谁、最大的那张站哪、四边留白齐不齐 —— `rules.cascade`。
+   *
+   * 拼贴的价值在构图，所以位置默认由模板钉死（§10.9）。但"三个姿态互相叠压"这件事
+   * 天然会打架：后画的图会压住先画的图，压到胸口以下好看、压到脸上就是事故。这组规则
+   * 只允许在 `maxShift` 以内平移，绝不缩放、绝不改叠放顺序 —— 位置仍然是模板的结论，
+   * 只是允许它避开别人的脸。
+   */
+  cascade?: CascadeRule;
+}
+
+export interface CascadeRule {
+  /**
+   * 内容高度的上这么多比例视为"脸"（0–1）。0 表示不保护。
+   *
+   * 默认 0.24：手办/人偶的头部大致占立像高度的四分之一，取小了护不住，取大了会把
+   * 肩膀也算进禁区，拼贴就摆不开了。
+   */
+  protectHead: number;
+  /** 面积最大的那张是否要落在画布水平中心。 */
+  centerLargest: boolean;
+  /** 四边留白是否尽量均等（靠整体平移实现，不缩放）。 */
+  balanceMargins: boolean;
+  /** 为躲脸/居中允许的最大平移量（占画布宽/高的比例）。 */
+  maxShift: number;
 }
 
 export interface TemplateCanvas {

@@ -740,7 +740,34 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
 
   if (!heroDominance || !collision || !shadow || !packageReadability || !text) return null;
   const renderOrder = parseRenderOrder(rules.collision ?? rules.collage, collisionKey, sink);
-  return { heroDominance, collision, shadow, packageReadability, text, ...(renderOrder ? { renderOrder } : {}) };
+  const cascade = parseCascade(rules.cascade, sink);
+  return {
+    heroDominance,
+    collision,
+    shadow,
+    packageReadability,
+    text,
+    ...(renderOrder ? { renderOrder } : {}),
+    ...(cascade ? { cascade } : {}),
+  };
+}
+
+/**
+ * `rules.cascade`: 谁挡谁、最大的站哪、留白齐不齐。
+ *
+ * 整块可选 —— 没有它的模板（hero/包装盒那套）行为一个字都不变。写了就必须四个字段都写全：
+ * 这组规则直接决定三个姿态怎么叠，猜错一半会让"挡脸"时好时坏，比不写更难查。
+ */
+function parseCascade(raw: unknown, sink: Sink): TemplateRules['cascade'] {
+  if (raw === undefined) return undefined;
+  const record = readRecord(raw, 'rules.cascade', sink);
+  if (!record) return undefined;
+  const protectHead = readRange(record.protect_head, 'rules.cascade.protect_head', sink, 0, 1);
+  const centerLargest = readBoolean(record.center_largest, 'rules.cascade.center_largest', sink, true);
+  const balanceMargins = readBoolean(record.balance_margins, 'rules.cascade.balance_margins', sink, true);
+  const maxShift = readRange(record.max_shift, 'rules.cascade.max_shift', sink, 0, 0.5);
+  if (protectHead === null || maxShift === null) return undefined;
+  return { protectHead, centerLargest, balanceMargins, maxShift };
 }
 
 /**

@@ -33,7 +33,13 @@ export type CompositionWarningCode =
   /** A slot's model-requested occupancy could not be reached inside the zoom bounds. */
   | 'support_fill_clamped'
   /** The hero's model-requested occupancy lost to the template floor or the package rule. */
-  | 'hero_fill_unmet';
+  | 'hero_fill_unmet'
+  /** A layer painted later still covers an earlier layer's head after every allowed shift. */
+  | 'head_occluded'
+  /** The largest picture had to give up the centre so it would not cover someone's face. */
+  | 'cascade_center_tradeoff'
+  /** Margins could not be equalised without pushing content off the canvas. */
+  | 'margins_uneven';
 
 export interface CompositionWarning {
   code: CompositionWarningCode;

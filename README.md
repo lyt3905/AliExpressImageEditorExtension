@@ -566,6 +566,11 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
   `dominanceForFill()` 收窄偏好区间（地板仍是模板的 `hero_dominance`，上限仍是模板的 `zoom`）。
   做不到时报警而不是假装做到：`support_fill_clamped`（撞了缩放上下限）、`hero_fill_unmet`
   （实际占比和目标差超过 4%），`plan.diagnostics.fills` 里能看到每个图位的 `target` / `achieved`
+- **叠图秩序（10.16.0）**：`rules.cascade` 让"谁挡谁"变成规则 —— 面积最大的那张挪到水平中心、
+  后画的图层避开先画的头部（`protect_head: 0.24`，擦到 6% 以内算过）、所有图层整体平移让左右留白相等。
+  **只平移**：不改大小、不改 z 序（大小归 `size`、顺序归 `render_order`）。挪不动时发
+  `cascade_center_tradeoff`（为了躲脸，前图让出了中心）/ `head_occluded`（16% 的平移预算内没有解）/
+  `margins_uneven`（内容已经比画布宽，四边不可能一样宽）
 - 这个模板**不写** `shadow` / `package_readability` / `text`：这三条属于"主图 + 包装盒"布局，缺省时
   按不投影 / 不要求包装可见 / 文字不压主体处理（并各留一条警告）
 
@@ -713,7 +718,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 50 文件 / 788 个单元测试（不联网）
+│  ├─ unit/                      # 49 文件 / 797 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -929,6 +934,10 @@ AliExpressImageEditorExtension/
     hero 位的上限仍是模板 `zoom`（为了凑百分比把主体放大到被裁掉是更糟的错）。
     出了范围就发警告并如实报告实际占比，面板不会假装"已按你要求生成"。
     另外 `size` 只影响**大小**，不影响位置、不改变 z 序、也不参与去重判断。
+25. 拼贴模板的 `rules.cascade` 是**只平移**的补丁：它会让最大的那张居中、让后画的图层避开先画的头部
+    （擦到 6% 以内算过）、把所有图层整体挪一下让左右留白相等，但**从不改大小、不改 z 序**。
+    平移上限 `max_shift: 0.16`（画布宽的 16%），所以三张图在横向压得太狠时仍会发 `head_occluded` ——
+    那时候要动的是模板的 `viewport`/`zoom` 或让模型把 `size` 拉开差距，而不是继续加大这个上限。
 
 ---
 
@@ -937,7 +946,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（50 文件 / 793 测试，其中 788 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（51 文件 / 802 测试，其中 797 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -962,5 +971,6 @@ AliExpressImageEditorExtension/
 | 错误记录（10.11.2） | **仅自动化验证**（18 个单测：损坏/半截条目降级、按时间重排、20 类封顶、同一条连续失败合并 `×N` 且中间夹别的错误不合并、写失败不抛、清空两个键）。**真机对照**：连点三次非商品页看到 `×3`、换个失败原因变成 2 类、清空后刷新仍为空，步骤见 manual-test 5.101–5.102 |
 | 品牌下拉可选 + 缓存键范围（10.12.0 修复） | **仅自动化验证**（`typecheck` + 29 个缓存单测；两个 bug 都是"路径根本没走到"，没有可以断言的新函数：① 编辑器启动流程在"目录已最新"时提前 `return`，`loadBrandMaterials()` 从未执行 → 工具栏品牌下拉永远是空的；② 缓存键把整组抠图身份都算进去，多一张/少一张图就整份作废 → 看着像"有的商品不缓存、下次还重新生成"。**真机对照**：打开任一商品页，品牌下拉里应列出目录里的品牌并能手工选中；同一商品第二次打开，面板应出现「已复用上次的抠图 n 张」，Network 里不应再有视觉模型请求，步骤见 manual-test 5.103–5.104） |
 | AI 决定每张图的占比（10.15.0） | **仅自动化验证**（12 个单测：`solveSupportFill` 的二分收敛、撞地板/天花板时 `clamped` 为真、目标变小缩放单调变小；planner 在有/无 `size` 时的缩放关系与只改大小不改水平位置；hero hint 可达时不报警、不可达时报 `hero_fill_unmet`；`parseFills` 只收模板点名的槽位并夹到 0.05–0.85）。**画布上的观感未在真实 Chrome 里看过** —— 三张图大小是否真的拉开了、`diagnostics.fills` 的 target/achieved 是否肉眼一致，步骤见 manual-test 5.108） |
+| 叠图秩序（10.16.0） | **仅自动化验证**（9 个单测 + 2 例集成）：全关时一个像素都不动、最大者被挪到画布水平中心而其它图不动、被挡的图让开、被挡的挪不开时改挪前图并发 `cascade_center_tradeoff`、都挪不动发 `head_occluded`、整体平移让左右留白相等、内容比画布宽时发 `margins_uneven`；集成用拼贴模板跑真实 plan，断言每张图的头带被后画图层压住的比例 ≤ 6%、左右留白相等。**"脸是不是真的没被挡"要在真机上用眼睛确认**，步骤见 manual-test 5.109） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

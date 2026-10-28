@@ -29,6 +29,7 @@ import {
 import { heroPlacement, solveHero } from './solve-hero';
 import { solveBox, type BoxSolution } from './solve-box';
 import { FILL_MIN_ZOOM_FACTOR, solveSupportFill } from './solve-fill';
+import { arrangeCascade } from './arrange-cascade';
 import { fitTextToBox, parseFontStyleSpec, textLayerGeometry, type MeasureText } from './text-fit';
 import { round, warning, type CompositionWarning } from './warnings';
 import type { HeroDominanceRule, LayoutTemplate, Rect, SlotRole, TemplateSlot, TextZone } from './types';
@@ -568,13 +569,6 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     }
   }
 
-  // ---- assemble ----------------------------------------------------------
-  images.push(placedFromMaterial(hero, placement, heroSlot));
-  if (boxSource && boxSolution) {
-    const placed = placedFromMaterial(boxSource, boxSolution.placement, boxSlot!);
-    images.push({ ...placed, visibleRatio: boxSolution.visibleRatio });
-  }
-
   // ---- pass 3: the remaining picture slots --------------------------------
   //
   // These are positioned literally: each slot's own `closeup` says where the
@@ -582,6 +576,39 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   // is the whole difference between a collage and the hero/package layout — a
   // collage's value is the composition the designer drew, so "solving" it would
   // only invent a different one.
+  const renderOrder = template.rules.renderOrder;
+  const pictureRank = (slotId: string): number => {
+    if (renderOrder) {
+      const index = renderOrder.indexOf(slotId);
+      return index === -1 ? renderOrder.length : index;
+    }
+    return template.slots.find((slot) => slot.id === slotId)?.zIndex ?? 0;
+  };
+  const supportSlots = [...template.slots]
+    .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
+    .sort((left, right) => pictureRank(left.id) - pictureRank(right.id));
+
+  /*
+    Every picture that made it onto the canvas, together with the material and the
+    placement that produced it. Collected first, emitted second: `rules.cascade`
+    may still move them (see arrange-cascade.ts), and a plan that emits before
+    arranging would have to un-emit.
+  */
+  const pictures: Array<{
+    slotId: string;
+    material: PlannerMaterial;
+    placement: ContentPlacement;
+    rank: number;
+  }> = [{ slotId: heroSlot.id, material: hero, placement, rank: pictureRank(heroSlot.id) }];
+  if (boxSource && boxSolution && boxSlot) {
+    pictures.push({
+      slotId: boxSlot.id,
+      material: boxSource,
+      placement: boxSolution.placement,
+      rank: pictureRank(boxSlot.id),
+    });
+  }
+
   const usedMaterialIds = new Set([hero.materialId, boxSource?.materialId ?? '']);
 
   /*
@@ -601,22 +628,6 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       );
     }
   }
-
-  /**
-   * Paint order of a picture slot: `render_order` position when the template has
-   * one, else its `z_index`. Both are ascending — back to front.
-   */
-  const renderOrder = template.rules.renderOrder;
-  const pictureRank = (slotId: string): number => {
-    if (renderOrder) {
-      const index = renderOrder.indexOf(slotId);
-      return index === -1 ? renderOrder.length : index;
-    }
-    return template.slots.find((slot) => slot.id === slotId)?.zIndex ?? 0;
-  };
-  const supportSlots = [...template.slots]
-    .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
-    .sort((left, right) => pictureRank(left.id) - pictureRank(right.id));
 
   for (const slot of supportSlots) {
     const assignment = request.supports?.find((entry) => entry.slotId === slot.id);
@@ -648,9 +659,17 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       never asks the model for sizes stays exactly as authored.
     */
     const fill = fills?.[slot.id];
-    if (fill === undefined) {
-      const supportPlacement = heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom);
-      images.push(placedFromMaterial(assignment.material, supportPlacement, slot));
+    const supportPlacement =
+      fill === undefined
+        ? heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom)
+        : null;
+    if (supportPlacement) {
+      pictures.push({
+        slotId: slot.id,
+        material: assignment.material,
+        placement: supportPlacement,
+        rank: pictureRank(slot.id),
+      });
       continue;
     }
 
@@ -658,19 +677,56 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       profile: assignment.material.profile,
       closeup: slot.closeup!,
       canvas,
-      target: fill,
+      target: fill!,
     });
-    fillReport[slot.id] = { target: round(fill, 4), achieved: round(solved.occupancy, 4) };
+    fillReport[slot.id] = { target: round(fill!, 4), achieved: round(solved.occupancy, 4) };
     if (solved.clamped) {
       warnings.push(
         warning(
           'support_fill_clamped',
-          `图位 ${slot.id} 想要占画布 ${round(fill * 100, 1)}%，缩放上限只允许到 ${round(solved.occupancy * 100, 1)}%`,
-          { slotId: slot.id, target: round(fill, 4), achieved: round(solved.occupancy, 4) },
+          `图位 ${slot.id} 想要占画布 ${round(fill! * 100, 1)}%，缩放上限只允许到 ${round(solved.occupancy * 100, 1)}%`,
+          { slotId: slot.id, target: round(fill!, 4), achieved: round(solved.occupancy, 4) },
         ),
       );
     }
-    images.push(placedFromMaterial(assignment.material, solved.placement, slot));
+    pictures.push({
+      slotId: slot.id,
+      material: assignment.material,
+      placement: solved.placement,
+      rank: pictureRank(slot.id),
+    });
+  }
+
+  // ---- pass 4: 叠图秩序 ---------------------------------------------------
+  //
+  // Optional, and only the collage template asks for it: 后画的图不许压住先画的图的脸、
+  // 最大的那张站中间、四边留白对齐。全部靠平移实现，`maxShift` 之内，绝不缩放。
+  const cascade = template.rules.cascade;
+  if (cascade) {
+    const arranged = arrangeCascade({
+      items: pictures.map((picture) => ({
+        slotId: picture.slotId,
+        profile: picture.material.profile,
+        placement: picture.placement,
+        rank: picture.rank,
+      })),
+      canvas,
+      rule: cascade,
+    });
+    warnings.push(...arranged.warnings);
+    for (const picture of pictures) {
+      const moved = arranged.placements.get(picture.slotId);
+      if (moved) picture.placement = moved;
+    }
+  }
+
+  // ---- assemble ----------------------------------------------------------
+  for (const picture of pictures) {
+    const slot = template.slots.find((candidate) => candidate.id === picture.slotId);
+    if (!slot) continue;
+    const placed = placedFromMaterial(picture.material, picture.placement, slot);
+    if (boxSolution && boxSlot && picture.slotId === boxSlot.id) placed.visibleRatio = boxSolution.visibleRatio;
+    images.push(placed);
   }
 
   /*

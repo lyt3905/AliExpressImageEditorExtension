@@ -129,6 +129,12 @@
       "no_nonuniform_scaling": true,
       "allow_partial_canvas_crop": true
     },
+    "cascade": {
+      "protect_head": 0.24,
+      "center_largest": true,
+      "balance_margins": true,
+      "max_shift": 0.16
+    },
     "fallback": {
       "allow_two_pose_degraded_candidate": true,
       "never_duplicate_same_source_to_fill_slot": true,
