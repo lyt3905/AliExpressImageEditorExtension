@@ -349,6 +349,16 @@ export function App(): JSX.Element {
    */
   const [visionSkipped, setVisionSkipped] = useState<string[]>([]);
   /**
+   * The same list, readable synchronously.
+   *
+   * The automatic run asks the model and composes inside one `await` chain: the
+   * `setVisionSkipped` above only lands on the next render, so `composeFor` — already
+   * captured from this render — would still hold the unfiltered candidates and drop
+   * the framed photo into a collage slot on the very run that detected it. The ref is
+   * what makes "skip it" mean "this time", not "next time".
+   */
+  const visionSkippedRef = useRef<string[]>([]);
+  /**
    * Cache key of the composition that is on screen, waiting to be photographed.
    *
    * Set right after a successful compose and consumed by an effect that waits for
@@ -959,11 +969,23 @@ export function App(): JSX.Element {
 
       const heroProfile = await profileFor(heroMaterial);
       const boxProfile = boxMaterial ? await profileFor(boxMaterial) : null;
+      /*
+        Candidates for the automatic picks (stand-in photo, collage slots). Filtered
+        through the ref as well as the state-backed list — see the comment on
+        `visionSkippedRef`: within one automatic run the state update is not in this
+        closure yet, and a framed photo in a collage slot is exactly the case this
+        exclusion exists for.
+      */
+      const skippedNow = visionSkippedRef.current;
+      const layoutCandidates =
+        skippedNow.length === 0
+          ? bindCandidates
+          : bindCandidates.filter((candidate) => !skippedNow.includes(candidate.materialId));
       // Only look for a stand-in photo when there is no package material: the
       // fallback ladder lives in the template, so the panel does not decide it.
       const secondaryCandidate = boxMaterial
         ? null
-        : pickSecondary(bindCandidates, [heroMaterialId, boxMaterialId]);
+        : pickSecondary(layoutCandidates, [heroMaterialId, boxMaterialId]);
       const secondaryMaterial = secondaryCandidate
         ? cutouts.find((material) => material.id === secondaryCandidate.materialId) ?? null
         : null;
@@ -982,7 +1004,7 @@ export function App(): JSX.Element {
       if (supportSlots.length > 0) {
         const assignments = selectSupportMaterials({
           slots: supportSlots,
-          candidates: bindCandidates,
+          candidates: layoutCandidates,
           usedIds: [heroMaterialId, boxMaterialId],
           preference: visionSlots,
         });
@@ -1129,6 +1151,7 @@ export function App(): JSX.Element {
         if (resolved) {
           setVisionSlots(resolved.slotMaterialIds);
           setVisionFills(resolved.fills);
+          visionSkippedRef.current = resolved.skippedIds;
           setVisionSkipped(resolved.skippedIds);
           return resolved;
         }
@@ -1164,6 +1187,7 @@ export function App(): JSX.Element {
       if (!binding) return null;
       setVisionSlots(binding.slotMaterialIds);
       setVisionFills(binding.fills);
+      visionSkippedRef.current = binding.skippedIds;
       setVisionSkipped(binding.skippedIds);
       const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
       const slotIdentities: Record<string, string> = {};
