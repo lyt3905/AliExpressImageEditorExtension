@@ -34,6 +34,9 @@ const MAX_ZOOM_FACTOR = 2.2;
  */
 export const FILL_MIN_ZOOM_FACTOR = MIN_ZOOM_FACTOR;
 
+/** Exported for the same reason in the other direction: the global fill pass must not exceed it. */
+export const FILL_MAX_ZOOM_FACTOR = MAX_ZOOM_FACTOR;
+
 /** Bisection steps. The sample is monotone in zoom, so ~22 steps land inside 0.1 %. */
 const BISECTION_STEPS = 22;
 

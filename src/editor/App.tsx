@@ -1024,7 +1024,7 @@ export function App(): JSX.Element {
         }
       }
 
-      return buildCompositionPlan({
+      const plan = buildCompositionPlan({
         template: parsed.template,
         hero: {
           materialId: heroMaterial.id,
@@ -1059,6 +1059,22 @@ export function App(): JSX.Element {
         ...(supports.length > 0 ? { supports } : {}),
         ...(Object.keys(visionFills).length > 0 ? { fills: visionFills } : {}),
       });
+
+      /*
+        底线：模板要求的图片张数（`rules.collage.min_pictures`，拼贴模板是 2）。
+
+        素材只够一张时，硬拼出来的"独苗"最坏 —— 画布上一个人站着、四周全白，卖家会
+        把它当成品上架。宁可不画，把原因写在红色提示里。
+      */
+      const minPictures = parsed.template.rules.minPictures ?? 1;
+      if (plan.images.length < minPictures) {
+        const reason =
+          plan.warnings.find((entry) => entry.code === 'not_enough_pictures')?.message ??
+          `这个版面至少要 ${minPictures} 张图，当前只有 ${plan.images.length} 张`;
+        setComposeError(reason);
+        return null;
+      }
+      return plan;
     },
     [bindCandidates, cutouts, profileFor, session, sessionId, templateKey, visionFills, visionSlots],
   );

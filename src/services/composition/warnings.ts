@@ -39,7 +39,15 @@ export type CompositionWarningCode =
   /** The largest picture had to give up the centre so it would not cover someone's face. */
   | 'cascade_center_tradeoff'
   /** Margins could not be equalised without pushing content off the canvas. */
-  | 'margins_uneven';
+  | 'margins_uneven'
+  /** Every picture reads the same size and the smallest one is already at its floor. */
+  | 'hierarchy_flat'
+  /** The page is still too full after shrinking to the template's lower bound. */
+  | 'canvas_fill_capped'
+  /** The page is still too empty after growing to the template's upper bound. */
+  | 'canvas_fill_short'
+  /** Fewer usable pictures than the template's `min_pictures` — nothing was composed. */
+  | 'not_enough_pictures';
 
 export interface CompositionWarning {
   code: CompositionWarningCode;

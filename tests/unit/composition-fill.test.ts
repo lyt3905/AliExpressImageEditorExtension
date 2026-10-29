@@ -16,7 +16,22 @@ import { parseLayoutTemplateOrThrow } from '../../src/services/composition/templ
 import { buildBindingPrompt, parseBindingAnswer } from '../../src/services/composition/vision-binder';
 import type { CloseupSpec } from '../../src/services/composition/types';
 
-const TEMPLATE = parseLayoutTemplateOrThrow(COLLAGE_SOURCE);
+/*
+  这个文件测的是"模型报了 size 时，单个图位的 zoom 怎么被求解"。
+  模板里那两条全局规则（`canvas_fill` 会把整页重新缩放、`min_pictures` 会拦掉只有
+  一张的版面）会盖掉 per-slot 的结论，所以这里用摘掉它们的副本 —— 全局那层由
+  `composition-aesthetic.test.ts` 负责。
+*/
+function perSlotTemplate() {
+  const clone = JSON.parse(JSON.stringify(COLLAGE_SOURCE)) as {
+    rules: { collage: { canvas_fill?: unknown; min_pictures?: unknown } };
+  };
+  delete clone.rules.collage.canvas_fill;
+  delete clone.rules.collage.min_pictures;
+  return parseLayoutTemplateOrThrow(clone);
+}
+
+const TEMPLATE = perSlotTemplate();
 const CANVAS = { width: 800, height: 800 };
 
 /** A full-bleed square closeup: at zoom 1 the content covers the whole canvas. */

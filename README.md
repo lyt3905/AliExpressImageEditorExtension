@@ -575,6 +575,15 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
   抠图去不掉它（边框是商品照片的像素）。视觉答案因此多一个 `skip` 名单，
   `parseBindingAnswer` 把被点名的素材从 hero / 包装盒 / 每个图位里排除，
   面板会写「已跳过 N 张带店铺边框水印」。**排除只作用于自动路径**：素材列表里还在，手动选它照样能排版
+- **成品观感（10.18.0）**：`rules.collage.canvas_fill` 给"整页"定区间 ——
+  `min_union` / `max_union` 是可见内容并集占画布的比例（太高缩回来、太低放大），
+  `min_hierarchy` 是"最大 ÷ 最小"的倍数下限（不够就把最小的那张往下收，收到地板就发
+  `hierarchy_flat`）。**只缩放后景那几张，不动 hero**（hero 的 zoom 已经跟 `hero_dominance`
+  与包装盒可读性谈完了）。拼完的六个数字（并集 / 层级 / 四边留白 / 遮挡 / 裁切 / 重心）只测量、
+  写进 `plan.diagnostics.aesthetic`，不参与判断
+- **底线两张图（10.18.0）**：`rules.collage.min_pictures`（拼贴模板 = 2）。素材只够一张时不出图，
+  面板写红字「这个版面至少要 2 张图，当前只凑到 1 张」—— 一个人站在白底上四周全空的"独苗"
+  会被当成成品上架
 - 这个模板**不写** `shadow` / `package_readability` / `text`：这三条属于"主图 + 包装盒"布局，缺省时
   按不投影 / 不要求包装可见 / 文字不压主体处理（并各留一条警告）
 
@@ -722,7 +731,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 49 文件 / 803 个单元测试（不联网）
+│  ├─ unit/                      # 50 文件 / 815 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -945,6 +954,13 @@ AliExpressImageEditorExtension/
 26. 「带店铺边框水印的图」这条是**模型判断**，不是本地检测：漏判就会照旧拼进去（回到 10.16.0 的行为），
     误判则少一张可用素材（面板会写「已跳过 N 张」，可以在素材列表里手动选回来）。
     `skip` 只作用于自动路径；它不影响 hero / 包装盒之外的任何决定，也不删除素材。
+27. 「整体观感」这一层是**确定性规则**，不是审美判断：`canvas_fill` 只保证"整页占 X%–Y%、最大比最小大
+    1.35 倍以上"，`cascade` 只保证"不挡脸、最大者居中、留白齐"。这些区间是拍的，能挡掉明显难看的成品，
+    但拼不出"好看"本身 —— 真正的自评（成品缩到 512 让模型当评委、判难看就换档重试）**还没做**，
+    它要多花 token 且分数不稳定，得先跑一段时间用眼睛对账。`plan.diagnostics.aesthetic` 里的六个数字
+    就是用来对账的。
+28. `min_pictures` 是模板自己声明的底线（拼贴 = 2）。低于它时**不出图**，只给原因；这时要么补素材，
+    要么换「主图 + 包装盒」那个模板。它不判断"素材够不够好看"——三张同姿态的图仍会被当成三张图。
 
 ---
 
@@ -953,7 +969,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（51 文件 / 808 测试，其中 803 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（52 文件 / 820 测试，其中 815 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -980,5 +996,6 @@ AliExpressImageEditorExtension/
 | AI 决定每张图的占比（10.15.0） | **仅自动化验证**（12 个单测：`solveSupportFill` 的二分收敛、撞地板/天花板时 `clamped` 为真、目标变小缩放单调变小；planner 在有/无 `size` 时的缩放关系与只改大小不改水平位置；hero hint 可达时不报警、不可达时报 `hero_fill_unmet`；`parseFills` 只收模板点名的槽位并夹到 0.05–0.85）。**画布上的观感未在真实 Chrome 里看过** —— 三张图大小是否真的拉开了、`diagnostics.fills` 的 target/achieved 是否肉眼一致，步骤见 manual-test 5.108） |
 | 叠图秩序（10.16.0） | **仅自动化验证**（9 个单测 + 2 例集成）：全关时一个像素都不动、最大者被挪到画布水平中心而其它图不动、被挡的图让开、被挡的挪不开时改挪前图并发 `cascade_center_tradeoff`、都挪不动发 `head_occluded`、整体平移让左右留白相等、内容比画布宽时发 `margins_uneven`；集成用拼贴模板跑真实 plan，断言每张图的头带被后画图层压住的比例 ≤ 6%、左右留白相等。**"脸是不是真的没被挡"要在真机上用眼睛确认**，步骤见 manual-test 5.109） |
 | 识图时剔掉带店铺边框水印的图（10.17.0） | **仅自动化验证**（4 个 `parseBindingAnswer`/`buildBindingPrompt` 单测 + 2 个缓存单测）：prompt 同时要求 `skip` 与"没有就写空数组"、被点名的图不能当包装盒、不能进拼贴图位、既选 hero 又排除 hero 时整条答案作废、`skipped` 身份列表去重去脏后原样读回；10.17.1 补一条：判定当场生效（`visionSkippedRef`，不等下一次渲染 —— 自动排版是"问模型 → 排版"一条链，等 state 会漏掉那次运行）。**"模型到底认不认得出边框"只能在真机上试**：拿一张带花边的第一张图跑一次 AI 识别，面板应写「已跳过 1 张带店铺边框水印」且画布里不出现那圈白边，步骤见 manual-test 5.110） |
+| 成品观感 + 底线两张图（10.18.0） | **仅自动化验证**（12 个单测）：`unionArea` 的容斥（相邻不重复、重叠只算一次）、并集/最紧留白/重心的量法、遮挡 50%、被画布切掉一半的 `cropped`、`fitCanvasFill` 在区间内不动/太满缩回/太空放大/层级差只收最小的那张/单张不做层级差、拼贴模板只有 hero 时发 `not_enough_pictures` 且不出图、两张图时 `diagnostics.canvasFill` 与 `diagnostics.aesthetic` 都有账。**"这页到底好看没好看"仍要眼睛**：三张图是否真的拉开层级、四边留白是否齐、有没有人被裁掉半个头，步骤见 manual-test 5.111–5.112） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

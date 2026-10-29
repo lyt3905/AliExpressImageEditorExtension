@@ -115,7 +115,13 @@
       "min_gap_px": 0,
       "allow_canvas_overflow": true,
       "clip_to_canvas": true,
-      "render_order": ["rear_view_background", "front_view_right", "action_pose_left_hero"]
+      "render_order": ["rear_view_background", "front_view_right", "action_pose_left_hero"],
+      "min_pictures": 2,
+      "canvas_fill": {
+        "min_union": 0.4,
+        "max_union": 0.7,
+        "min_hierarchy": 1.35
+      }
     },
     "hero_dominance": {
       "min_canvas_occupancy": 0.28,

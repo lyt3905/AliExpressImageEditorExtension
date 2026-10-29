@@ -180,6 +180,29 @@ export interface TemplateRules {
    * 只是允许它避开别人的脸。
    */
   cascade?: CascadeRule;
+  /**
+   * 整体观感的上下限 —— `rules.collage.canvas_fill`。
+   *
+   * 上面每条规则都只管一张图；「整页用得太满 / 太空 / 三张一样大」是拼完才看得见
+   * 的问题，必须有地方说，否则只能由求解器拍数字。
+   */
+  canvasFill?: CanvasFillRule;
+  /**
+   * 一个版面最少几张图（`rules.collage.min_pictures`，默认 1）。
+   *
+   * 拼贴的底线是两张：素材只够一张时，硬拼出来的"独苗"比不出图更难看，也让卖家
+   * 误以为这就是成品。低于这个数就不出图，把原因说清楚。
+   */
+  minPictures?: number;
+}
+
+export interface CanvasFillRule {
+  /** 可见内容并集 / 画布面积 的下限。低于它说明整页太空。 */
+  minUnion: number;
+  /** 上限。高于它说明整页糊成一片。 */
+  maxUnion: number;
+  /** 最大 / 最小 α 占比 的倍数下限。1.35 ≈ "一眼看得出谁是主体"。 */
+  minHierarchy: number;
 }
 
 export interface CascadeRule {

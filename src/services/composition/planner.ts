@@ -30,6 +30,8 @@ import { heroPlacement, solveHero } from './solve-hero';
 import { solveBox, type BoxSolution } from './solve-box';
 import { FILL_MIN_ZOOM_FACTOR, solveSupportFill } from './solve-fill';
 import { arrangeCascade } from './arrange-cascade';
+import { fitCanvasFill } from './fit-canvas-fill';
+import { measureLayout } from './measure-layout';
 import { fitTextToBox, parseFontStyleSpec, textLayerGeometry, type MeasureText } from './text-fit';
 import { round, warning, type CompositionWarning } from './warnings';
 import type { HeroDominanceRule, LayoutTemplate, Rect, SlotRole, TemplateSlot, TextZone } from './types';
@@ -111,6 +113,21 @@ export interface CompositionPlan {
      * its authored zoom and shows up nowhere here.
      */
     fills?: Record<string, { target: number; achieved: number }>;
+    /** 整页占位：`union` 是可见内容并集 ÷ 画布，`scaledBy` 是整体缩放的累计系数。 */
+    canvasFill?: { union: number; scaledBy: number };
+    /**
+     * 拼完之后的六个观感数字（`measure-layout.ts`）。只测量、不判断：它存在的意义
+     * 是让"这页为什么看着挤"可以被截图对照，而不是让管线自己给自己打分。
+     */
+    aesthetic?: {
+      union: number;
+      hierarchy: number;
+      margins: { left: number; right: number; top: number; bottom: number };
+      minMargin: number;
+      occlusion: number;
+      cropped: number;
+      centroid: { x: number; y: number };
+    };
   };
 }
 
@@ -599,6 +616,8 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     material: PlannerMaterial;
     placement: ContentPlacement;
     rank: number;
+    /** Only the collage's support slots carry it: the zoom that produced `placement`. */
+    zoom?: number;
   }> = [{ slotId: heroSlot.id, material: hero, placement, rank: pictureRank(heroSlot.id) }];
   if (boxSource && boxSolution && boxSlot) {
     pictures.push({
@@ -669,6 +688,7 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
         material: assignment.material,
         placement: supportPlacement,
         rank: pictureRank(slot.id),
+        zoom: slot.closeup!.zoom,
       });
       continue;
     }
@@ -694,7 +714,54 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       material: assignment.material,
       placement: solved.placement,
       rank: pictureRank(slot.id),
+      zoom: solved.zoom,
     });
+  }
+
+  // ---- pass 3.5: 整体观感（占位区间 + 层级差） ------------------------------
+  //
+  // Optional and collage-only (`rules.collage.canvas_fill`). Every pass above solves
+  // one slot against its own viewport; none of them can see that the page ends up
+  // three-quarters full of near-equal shapes. This pass scales ONLY the support
+  // slots — the hero's zoom already answered to `hero_dominance` and the package
+  // readability rule, and moving it would re-open a negotiation that is finished.
+  const canvasFillRule = template.rules.canvasFill;
+  let canvasFillReport: { union: number; scaledBy: number } | null = null;
+  if (canvasFillRule) {
+    const scalable = pictures.filter((picture) => picture.zoom !== undefined);
+    if (scalable.length > 0) {
+      const filled = fitCanvasFill({
+        items: scalable.map((picture) => {
+          const slot = template.slots.find((candidate) => candidate.id === picture.slotId)!;
+          return {
+            slotId: picture.slotId,
+            profile: picture.material.profile,
+            closeup: slot.closeup!,
+            zoom: picture.zoom!,
+          };
+        }),
+        fixed: pictures
+          .filter((picture) => picture.zoom === undefined)
+          .map((picture) => ({
+            slotId: picture.slotId,
+            profile: picture.material.profile,
+            placement: picture.placement,
+          })),
+        canvas,
+        rule: canvasFillRule,
+      });
+      warnings.push(...filled.warnings);
+      for (const result of filled.items) {
+        const picture = pictures.find((candidate) => candidate.slotId === result.slotId);
+        if (!picture) continue;
+        picture.placement = result.placement;
+        picture.zoom = result.zoom;
+        // The model asked for a size; if this pass moved it, report what actually landed.
+        const reported = fillReport[result.slotId];
+        if (reported) reported.achieved = round(result.occupancy, 4);
+      }
+      canvasFillReport = { union: filled.metrics.union, scaledBy: filled.scaledBy };
+    }
   }
 
   // ---- pass 4: 叠图秩序 ---------------------------------------------------
@@ -721,6 +788,23 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   }
 
   // ---- assemble ----------------------------------------------------------
+  /*
+    底线：`rules.collage.min_pictures`（默认 1）。素材只够一张时，硬拼出来的"独苗"
+    比不出图更糟 —— 卖家会把它当成品上架。这里把图清空并把话说清楚，由调用方决定
+    是否回退到别的模板。
+  */
+  const minPictures = template.rules.minPictures ?? 1;
+  if (pictures.length < minPictures) {
+    warnings.push(
+      warning(
+        'not_enough_pictures',
+        `这个版面至少要 ${minPictures} 张图，当前只凑到 ${pictures.length} 张，本次不出图`,
+        { required: minPictures, available: pictures.length },
+      ),
+    );
+    pictures.length = 0;
+  }
+
   for (const picture of pictures) {
     const slot = template.slots.find((candidate) => candidate.id === picture.slotId);
     if (!slot) continue;
@@ -748,6 +832,21 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   }
 
   const zone = modelCodeZone(template);
+  /*
+    最终观感的六个数字，只测量、不判断（`measure-layout.ts`）。放在叠图秩序之后，
+    因为"脸被挡了多少、留白齐不齐"是移动完才算数的。它是给人看的账本，不是门槛。
+  */
+  const aesthetic =
+    pictures.length === 0
+      ? null
+      : measureLayout({
+          canvas,
+          pictures: pictures.map((picture) => ({
+            slotId: picture.slotId,
+            profile: picture.material.profile,
+            placement: picture.placement,
+          })),
+        });
   // Skipped when the code already sits on a plate: printing it twice on one 主图
   // looks like a mistake, and the plate caption is the more intentional of the two.
   if (zone && modelCode && !plateCarriesCode) {
@@ -772,6 +871,8 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       boxVariantIndex: boxSolution ? boxSolution.variantIndex : null,
       boxFallback,
       ...(Object.keys(fillReport).length > 0 ? { fills: fillReport } : {}),
+      ...(canvasFillReport ? { canvasFill: canvasFillReport } : {}),
+      ...(aesthetic ? { aesthetic } : {}),
     },
   };
 }

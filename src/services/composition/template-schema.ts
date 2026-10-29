@@ -739,7 +739,10 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
   }
 
   if (!heroDominance || !collision || !shadow || !packageReadability || !text) return null;
-  const renderOrder = parseRenderOrder(rules.collision ?? rules.collage, collisionKey, sink);
+  const collageBlock = rules.collision ?? rules.collage;
+  const renderOrder = parseRenderOrder(collageBlock, collisionKey, sink);
+  const canvasFill = parseCanvasFill(collageBlock, collisionKey, sink);
+  const minPictures = parseMinPictures(collageBlock, collisionKey, sink);
   const cascade = parseCascade(rules.cascade, sink);
   return {
     heroDominance,
@@ -748,8 +751,47 @@ function parseRules(raw: unknown, sink: Sink): TemplateRules | null {
     packageReadability,
     text,
     ...(renderOrder ? { renderOrder } : {}),
+    ...(canvasFill ? { canvasFill } : {}),
+    ...(minPictures !== undefined ? { minPictures } : {}),
     ...(cascade ? { cascade } : {}),
   };
+}
+
+/**
+ * `rules.collage.canvas_fill`: 整页占多少、三张差多少。
+ *
+ * 可选。这三个数是"整体观感"唯一的落点 —— 没有它们，求解器只能各图位各算各的，
+ * 拼起来是满是空没人负责。区间写反了直接报错：那说明模板作者的意图本身就矛盾。
+ */
+function parseCanvasFill(raw: unknown, path: string, sink: Sink): TemplateRules['canvasFill'] {
+  const record = readRecord(raw, path, sink);
+  if (!record || record.canvas_fill === undefined) return undefined;
+  const fillPath = `${path}.canvas_fill`;
+  const fill = readRecord(record.canvas_fill, fillPath, sink);
+  if (!fill) return undefined;
+  const minUnion = readRange(fill.min_union, `${fillPath}.min_union`, sink, 0.05, 0.95);
+  const maxUnion = readRange(fill.max_union, `${fillPath}.max_union`, sink, 0.05, 0.95);
+  const minHierarchy = readRange(fill.min_hierarchy, `${fillPath}.min_hierarchy`, sink, 1, 4);
+  if (minUnion === null || maxUnion === null || minHierarchy === null) return undefined;
+  if (minUnion >= maxUnion) {
+    sink.error(fillPath, `min_union（${minUnion}）必须小于 max_union（${maxUnion}）`);
+    return undefined;
+  }
+  return { minUnion, maxUnion, minHierarchy };
+}
+
+/**
+ * `rules.collage.min_pictures`: 一个版面最少几张图（默认 1）。
+ *
+ * 拼贴的底线是两张。低于这个数不出图并把原因说清楚，比硬塞一张"独苗"更诚实 ——
+ * 独苗会被当成成品拿去上架。上限 4 是因为画布上放不下载更多还保持可读。
+ */
+function parseMinPictures(raw: unknown, path: string, sink: Sink): number | undefined {
+  const record = readRecord(raw, path, sink);
+  if (!record || record.min_pictures === undefined) return undefined;
+  const value = readRange(record.min_pictures, `${path}.min_pictures`, sink, 1, 4);
+  if (value === null) return undefined;
+  return Math.round(value);
 }
 
 /**
@@ -848,6 +890,21 @@ function crossCheck(template: LayoutTemplate, sink: Sink): void {
           );
         }
       }
+    }
+  }
+
+  /*
+    `min_pictures` 不能超过模板实际能给到的图片位数 —— 否则这个模板永远出不了图，
+    而且失败会表现在运行时（"素材不够"），查起来像是素材的问题。
+  */
+  const minPictures = template.rules.minPictures;
+  if (minPictures !== undefined && minPictures > 1) {
+    const pictureSlots = template.slots.filter((slot) => slot.closeup !== undefined || (slot.variants?.length ?? 0) > 0);
+    if (minPictures > pictureSlots.length) {
+      sink.error(
+        'rules.collage.min_pictures',
+        `要求至少 ${minPictures} 张图，但模板只有 ${pictureSlots.length} 个能放图的槽位`,
+      );
     }
   }
 

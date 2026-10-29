@@ -178,8 +178,13 @@ describe('buildCompositionPlan — collage', () => {
       seed: 'MTS-0001',
     });
 
-    expect(plan.images).toHaveLength(1);
-    expect(plan.warnings.map((entry) => entry.code)).toContain('support_slot_empty');
+    // 复制同一条素材进第二个图位是被拒的 —— 拼贴里"同一张图两次"读起来像 bug。
+    expect(plan.images.some((image) => image.slotId === 'rear_view_background')).toBe(false);
+    const codes = plan.warnings.map((entry) => entry.code);
+    expect(codes).toContain('support_slot_empty');
+    // 于是只剩 hero 一张，低于模板的两张底线，整版不出图。
+    expect(plan.images).toHaveLength(0);
+    expect(codes).toContain('not_enough_pictures');
   });
 });
 
@@ -333,9 +338,26 @@ describe('render_order controls paint order', () => {
 });
 
 describe('per-slot placement', () => {
+  /**
+   * 只测"每个图位用自己的 viewport / center_x"。
+   *
+   * 全局那一层（`canvas_fill` 的整体缩放、`cascade` 的最大者居中）会故意推翻
+   * center_x，拿它们开着的模板来断言坐标，等于在测另外一件事 —— 所以这里把两组
+   * 全局规则摘掉，剩下逐槽几何。
+   */
+  function layoutOnlyTemplate() {
+    const clone = JSON.parse(JSON.stringify(COLLAGE_SOURCE)) as {
+      rules: { cascade?: unknown; collage: { canvas_fill?: unknown; min_pictures?: unknown } };
+    };
+    delete clone.rules.cascade;
+    delete clone.rules.collage.canvas_fill;
+    delete clone.rules.collage.min_pictures;
+    return parseLayoutTemplateOrThrow(clone);
+  }
+
   it('uses each slot own viewport and center_x, not one shared box', () => {
     const plan = buildCompositionPlan({
-      template: TEMPLATE,
+      template: layoutOnlyTemplate(),
       hero: HERO,
       supports: [
         { slotId: 'rear_view_background', material: REAR },
