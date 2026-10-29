@@ -196,6 +196,30 @@ describe('state parsing', () => {
     expect(state.bindings.b.confidence).toBe(0);
   });
 
+  it('remembers which photos were ruled out for carrying the shop frame', () => {
+    const state = parseComposeCacheState({
+      bindings: {
+        k: {
+          hero: 'url:a',
+          box: null,
+          skipped: ['url:frame', 'url:frame', 42, ''],
+          confidence: 0.6,
+          reason: '第一张带边框',
+          at: 3,
+        },
+      },
+    });
+    // Duplicates, non-strings and blanks are dropped: the list means "these photos".
+    expect(state.bindings.k.skipped).toEqual(['url:frame']);
+  });
+
+  it('leaves `skipped` absent when the stored answer had none', () => {
+    const state = parseComposeCacheState({
+      bindings: { k: { hero: 'url:a', box: null, skipped: 'nope', at: 3 } },
+    });
+    expect(state.bindings.k.skipped).toBeUndefined();
+  });
+
   it('prunes over-long sections down to the newest entries', () => {
     const raw: Record<string, { blobId: string; at: number }> = {};
     for (let index = 0; index < COMPOSE_CACHE_MAX_CUTOUTS + 5; index += 1) {

@@ -144,6 +144,12 @@ function resolveCachedBinding(
     slotMaterialIds,
     // Sizes are per SLOT, not per photo, so they survive the identity remap as-is.
     fills: cached.fills ?? {},
+    /*
+      Frame-watermark photos: a cached identity that no longer resolves is dropped,
+      not remembered as "unknown". The list only ever means "these specific photos",
+      and this session has none of them — so nothing is excluded on its account.
+    */
+    skippedIds: (cached.skipped ?? []).map((identity) => materialFor(identity)).filter((id): id is string => Boolean(id)),
     confidence: cached.confidence,
     reason: cached.reason,
   };
@@ -332,6 +338,16 @@ export function App(): JSX.Element {
    * lifetime: a re-bind replaces both, and a cached binding restores both.
    */
   const [visionFills, setVisionFills] = useState<Record<string, number>>({});
+  /**
+   * Materials the model ruled out: they carry the shop's own frame watermark.
+   *
+   * The frame is part of the pixels, so cut-out keeps it; putting such a photo into
+   * the collage produces a white printed card with a border inside an otherwise
+   * clean layout. Exclusion happens here (not in the prompt alone) so that every
+   * consumer — heuristic binding, secondary pick, collage slots — sees the same
+   * filtered pool and cannot quietly re-admit one.
+   */
+  const [visionSkipped, setVisionSkipped] = useState<string[]>([]);
   /**
    * Cache key of the composition that is on screen, waiting to be photographed.
    *
@@ -794,15 +810,28 @@ export function App(): JSX.Element {
     [materials],
   );
 
+  /**
+   * Cut-outs that may be used for LAYOUT — everything except the photos the model
+   * flagged as carrying the shop's frame watermark.
+   *
+   * `composeFor` still looks the hero/box up in `cutouts`, so a seller who picks a
+   * framed photo by hand still gets it: the exclusion is about what the automatic
+   * paths may choose, not about hiding material from its owner.
+   */
+  const usableCutouts = useMemo(
+    () => (visionSkipped.length === 0 ? cutouts : cutouts.filter((material) => !visionSkipped.includes(material.id))),
+    [cutouts, visionSkipped],
+  );
+
   const bindCandidates = useMemo(
     () =>
-      cutouts.map((material) => ({
+      usableCutouts.map((material) => ({
         materialId: material.id,
         label: material.label,
         width: material.width,
         height: material.height,
       })),
-    [cutouts],
+    [usableCutouts],
   );
 
   /**
@@ -1100,6 +1129,7 @@ export function App(): JSX.Element {
         if (resolved) {
           setVisionSlots(resolved.slotMaterialIds);
           setVisionFills(resolved.fills);
+          setVisionSkipped(resolved.skippedIds);
           return resolved;
         }
       }
@@ -1134,12 +1164,16 @@ export function App(): JSX.Element {
       if (!binding) return null;
       setVisionSlots(binding.slotMaterialIds);
       setVisionFills(binding.fills);
+      setVisionSkipped(binding.skippedIds);
       const heroIdentity = binding.heroId ? identityByMaterialId.get(binding.heroId) ?? '' : '';
       const slotIdentities: Record<string, string> = {};
       for (const [slotId, materialId] of Object.entries(binding.slotMaterialIds)) {
         const identity = identityByMaterialId.get(materialId);
         if (identity) slotIdentities[slotId] = identity;
       }
+      const skippedIdentities = binding.skippedIds
+        .map((materialId) => identityByMaterialId.get(materialId))
+        .filter((identity): identity is string => Boolean(identity));
       // Stored as identities, so the next session can point at its own materials.
       void composeCache
         .putBinding(bindingKey, {
@@ -1147,6 +1181,7 @@ export function App(): JSX.Element {
           box: binding.boxId ? identityByMaterialId.get(binding.boxId) ?? null : null,
           ...(Object.keys(slotIdentities).length > 0 ? { slots: slotIdentities } : {}),
           ...(Object.keys(binding.fills).length > 0 ? { fills: binding.fills } : {}),
+          ...(skippedIdentities.length > 0 ? { skipped: skippedIdentities } : {}),
           confidence: binding.confidence,
           reason: binding.reason,
         })
@@ -1172,7 +1207,7 @@ export function App(): JSX.Element {
       setBindNote(
         `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
           binding.boxId ? '' : ' · 未识别到包装盒'
-        }`,
+        }${binding.skippedIds.length > 0 ? ` · 已跳过 ${binding.skippedIds.length} 张带店铺边框水印` : ''}`,
       );
     } catch (error) {
       setBindNote(`AI 识别不可用：${messageOf(error)}。已保留标签匹配结果`);

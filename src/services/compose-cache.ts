@@ -204,6 +204,15 @@ export interface CachedBinding {
    * would make the same photos lay out differently on every open.
    */
   fills?: Record<string, number>;
+  /**
+   * Identities of the photos the model refused: they carry the shop's frame
+   * watermark, so they must not appear in any slot.
+   *
+   * Kept in the cache for the same reason as `fills`: it is part of the same
+   * answer, and dropping it on a cache hit would quietly re-admit the framed photo
+   * on the second visit — the run where nobody is watching the prompt.
+   */
+  skipped?: readonly string[];
   confidence: number;
   reason: string;
   at: number;
@@ -303,11 +312,19 @@ export function parseComposeCacheState(raw: unknown): ComposeCacheState {
           if (size > 0 && size < 1) fills[slotId] = size;
         }
       }
+      const skipped: string[] = [];
+      if (Array.isArray(value.skipped)) {
+        for (const identity of value.skipped) {
+          const trimmed = str(identity);
+          if (trimmed && !skipped.includes(trimmed)) skipped.push(trimmed);
+        }
+      }
       bindings[key] = {
         hero,
         box,
         ...(Object.keys(slots).length > 0 ? { slots } : {}),
         ...(Object.keys(fills).length > 0 ? { fills } : {}),
+        ...(skipped.length > 0 ? { skipped } : {}),
         confidence: num(value.confidence),
         reason: str(value.reason),
         at: num(value.at),

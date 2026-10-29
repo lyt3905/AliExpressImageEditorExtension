@@ -41,6 +41,16 @@ export interface VisionBinding {
    * the hero dominance band, never to a pixel coordinate.
    */
   fills: Record<string, number>;
+  /**
+   * Materials the model says must not go into the picture: the photo is wrapped
+   * in the shop's own frame watermark (a printed border, corner sticker or text
+   * bar that is not part of the product). Usually the first photo of a listing.
+   *
+   * Dropped rather than ranked last: the frame survives cut-out (it is part of
+   * the pixels, not the background), so using it puts a white card with a printed
+   * edge inside an otherwise clean collage — the exact look a 主图 must not have.
+   */
+  skippedIds: string[];
   confidence: number;
   reason: string;
 }
@@ -91,6 +101,10 @@ export function buildBindingPrompt(
     '请判断：',
     '- 哪一张适合做"特写主体"（hero）：单件商品、有清晰立面、适合放大裁切；',
     '- 哪一张是"包装盒"（package）：外包装、盒体、可见盒面。',
+    '',
+    '先看这一步：有没有哪一张整图被"店铺边框水印"包住——一圈花边 / 圆角白卡 / 角标贴纸 /',
+    '上下文字条，商品本身并没有这些东西。这类图不能用来拼图（通常就排在第一张）。把它们的',
+    '编号放进 skip；skip 里的图不要再拿去当 hero、package 或任何图位。',
   ];
 
   if (slots.length > 0) {
@@ -134,12 +148,13 @@ export function buildBindingPrompt(
     '只输出一个 JSON，不要解释，格式：',
     slots.length > 0
       ? heroSlotId
-        ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"size":{"图位名":0.18},"reason":"一句话"}'
-        : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"slots":{"图位名":"C"},"reason":"一句话"}'
-      : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"reason":"一句话"}',
+        ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"slots":{"图位名":"C"},"size":{"图位名":0.18},"reason":"一句话"}'
+        : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"slots":{"图位名":"C"},"reason":"一句话"}'
+      : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"reason":"一句话"}',
     '',
     '如果没有任何一张是包装盒，package 填 null、package_found 填 false。',
     '不要把同一张图同时当作 hero 和 package。',
+    '没有带边框水印的图就把 skip 写成空数组 []。',
   );
   return lines.join('\n');
 }
@@ -167,14 +182,25 @@ export function parseBindingAnswer(
   const record = json as Record<string, unknown>;
 
   const byKey = new Map(candidates.map((candidate) => [candidate.key, candidate.materialId]));
+  /*
+    Skip-list first: the frame-watermark photos are dropped for EVERY role, so a
+    model that both flags「A 有边框」and names A as hero has contradicted itself.
+    That answer is unusable — returning null lets the label heuristic decide, which
+    is the same outcome as "the model could not decide" and keeps one wrong pick
+    from silently winning.
+  */
+  const skippedIds = parseSkippedIds(record.skip, byKey);
+  const skipped = new Set(skippedIds);
+
   const heroKey = asKey(record.hero);
   const heroId = heroKey ? byKey.get(heroKey) ?? null : null;
-  if (!heroId) return null;
+  if (!heroId || skipped.has(heroId)) return null;
 
   const packageFound = record.package_found === true;
   const packageKey = asKey(record.package);
-  const boxId =
+  const boxCandidate =
     packageFound && packageKey && packageKey !== heroKey ? byKey.get(packageKey) ?? null : null;
+  const boxId = boxCandidate && !skipped.has(boxCandidate) ? boxCandidate : null;
 
   // Collage slots: only keys the template asked for, only letters that exist, no
   // repeats and never the hero — a duplicate would render as the same photo twice,
@@ -187,7 +213,7 @@ export function parseBindingAnswer(
       const key = asKey((rawSlots as Record<string, unknown>)[slot.slotId]);
       if (!key) continue;
       const materialId = byKey.get(key);
-      if (!materialId || taken.has(materialId)) continue;
+      if (!materialId || taken.has(materialId) || skipped.has(materialId)) continue;
       taken.add(materialId);
       slotMaterialIds[slot.slotId] = materialId;
     }
@@ -199,7 +225,33 @@ export function parseBindingAnswer(
     : 0;
 
   const reason = typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : '模型未给出理由';
-  return { heroId, boxId, slotMaterialIds, fills: parseFills(record.size, slots, heroSlotId), confidence, reason };
+  return {
+    heroId,
+    boxId,
+    slotMaterialIds,
+    fills: parseFills(record.size, slots, heroSlotId),
+    skippedIds,
+    confidence,
+    reason,
+  };
+}
+
+/**
+ * `skip` in the answer: candidate letters the model says carry the shop's frame
+ * watermark. Unknown letters and repeats are dropped — the letters are the model's
+ * only handle on the photos, so a typo must not silently exclude a good picture.
+ */
+function parseSkippedIds(raw: unknown, byKey: ReadonlyMap<string, string>): string[] {
+  if (!Array.isArray(raw)) return [];
+  const ids: string[] = [];
+  for (const entry of raw) {
+    const key = asKey(entry);
+    if (!key) continue;
+    const materialId = byKey.get(key);
+    if (!materialId || ids.includes(materialId)) continue;
+    ids.push(materialId);
+  }
+  return ids;
 }
 
 /**

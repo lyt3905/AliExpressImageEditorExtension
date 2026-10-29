@@ -571,6 +571,10 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
   **只平移**：不改大小、不改 z 序（大小归 `size`、顺序归 `render_order`）。挪不动时发
   `cascade_center_tradeoff`（为了躲脸，前图让出了中心）/ `head_occluded`（16% 的平移预算内没有解）/
   `margins_uneven`（内容已经比画布宽，四边不可能一样宽）
+- **带店铺边框水印的图会被剔掉（10.17.0）**：本店常给第一张套一圈花边 / 圆角白卡 / 角标，
+  抠图去不掉它（边框是商品照片的像素）。视觉答案因此多一个 `skip` 名单，
+  `parseBindingAnswer` 把被点名的素材从 hero / 包装盒 / 每个图位里排除，
+  面板会写「已跳过 N 张带店铺边框水印」。**排除只作用于自动路径**：素材列表里还在，手动选它照样能排版
 - 这个模板**不写** `shadow` / `package_readability` / `text`：这三条属于"主图 + 包装盒"布局，缺省时
   按不投影 / 不要求包装可见 / 文字不压主体处理（并各留一条警告）
 
@@ -718,7 +722,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 49 文件 / 797 个单元测试（不联网）
+│  ├─ unit/                      # 49 文件 / 803 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -938,6 +942,9 @@ AliExpressImageEditorExtension/
     （擦到 6% 以内算过）、把所有图层整体挪一下让左右留白相等，但**从不改大小、不改 z 序**。
     平移上限 `max_shift: 0.16`（画布宽的 16%），所以三张图在横向压得太狠时仍会发 `head_occluded` ——
     那时候要动的是模板的 `viewport`/`zoom` 或让模型把 `size` 拉开差距，而不是继续加大这个上限。
+26. 「带店铺边框水印的图」这条是**模型判断**，不是本地检测：漏判就会照旧拼进去（回到 10.16.0 的行为），
+    误判则少一张可用素材（面板会写「已跳过 N 张」，可以在素材列表里手动选回来）。
+    `skip` 只作用于自动路径；它不影响 hero / 包装盒之外的任何决定，也不删除素材。
 
 ---
 
@@ -946,7 +953,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（51 文件 / 802 测试，其中 797 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（51 文件 / 808 测试，其中 803 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -972,5 +979,6 @@ AliExpressImageEditorExtension/
 | 品牌下拉可选 + 缓存键范围（10.12.0 修复） | **仅自动化验证**（`typecheck` + 29 个缓存单测；两个 bug 都是"路径根本没走到"，没有可以断言的新函数：① 编辑器启动流程在"目录已最新"时提前 `return`，`loadBrandMaterials()` 从未执行 → 工具栏品牌下拉永远是空的；② 缓存键把整组抠图身份都算进去，多一张/少一张图就整份作废 → 看着像"有的商品不缓存、下次还重新生成"。**真机对照**：打开任一商品页，品牌下拉里应列出目录里的品牌并能手工选中；同一商品第二次打开，面板应出现「已复用上次的抠图 n 张」，Network 里不应再有视觉模型请求，步骤见 manual-test 5.103–5.104） |
 | AI 决定每张图的占比（10.15.0） | **仅自动化验证**（12 个单测：`solveSupportFill` 的二分收敛、撞地板/天花板时 `clamped` 为真、目标变小缩放单调变小；planner 在有/无 `size` 时的缩放关系与只改大小不改水平位置；hero hint 可达时不报警、不可达时报 `hero_fill_unmet`；`parseFills` 只收模板点名的槽位并夹到 0.05–0.85）。**画布上的观感未在真实 Chrome 里看过** —— 三张图大小是否真的拉开了、`diagnostics.fills` 的 target/achieved 是否肉眼一致，步骤见 manual-test 5.108） |
 | 叠图秩序（10.16.0） | **仅自动化验证**（9 个单测 + 2 例集成）：全关时一个像素都不动、最大者被挪到画布水平中心而其它图不动、被挡的图让开、被挡的挪不开时改挪前图并发 `cascade_center_tradeoff`、都挪不动发 `head_occluded`、整体平移让左右留白相等、内容比画布宽时发 `margins_uneven`；集成用拼贴模板跑真实 plan，断言每张图的头带被后画图层压住的比例 ≤ 6%、左右留白相等。**"脸是不是真的没被挡"要在真机上用眼睛确认**，步骤见 manual-test 5.109） |
+| 识图时剔掉带店铺边框水印的图（10.17.0） | **仅自动化验证**（4 个 `parseBindingAnswer`/`buildBindingPrompt` 单测 + 2 个缓存单测）：prompt 同时要求 `skip` 与"没有就写空数组"、被点名的图不能当包装盒、不能进拼贴图位、既选 hero 又排除 hero 时整条答案作废、`skipped` 身份列表去重去脏后原样读回。**"模型到底认不认得出边框"只能在真机上试**：拿一张带花边的第一张图跑一次 AI 识别，面板应写「已跳过 1 张带店铺边框水印」且画布里不出现那圈白边，步骤见 manual-test 5.110） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

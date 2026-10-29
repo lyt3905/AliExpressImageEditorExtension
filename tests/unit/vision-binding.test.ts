@@ -199,9 +199,48 @@ describe('parseBindingAnswer', () => {
       boxId: 'm-box',
       slotMaterialIds: {},
       fills: {},
+      skippedIds: [],
       confidence: 0.9,
       reason: 'A 是主体',
     });
+  });
+
+  it('drops the photos the model says carry a shop frame watermark', () => {
+    const binding = parseBindingAnswer(
+      {
+        hero: 'A',
+        package: 'B',
+        hero_confidence: 0.8,
+        package_found: true,
+        skip: ['b', 'B', 'Z'],
+        reason: 'B 带边框',
+      },
+      candidates,
+    );
+    // B is skipped, so the packaging slot goes empty; repeated and unknown letters
+    // are ignored rather than silently excluding something else.
+    expect(binding?.boxId).toBeNull();
+    expect(binding?.skippedIds).toEqual(['m-box']);
+  });
+
+  it('treats "skip the hero itself" as no answer at all', () => {
+    // The model contradicted itself: an answer that both picks A and forbids A is
+    // unusable, and letting A win would put the framed photo in the biggest slot.
+    expect(
+      parseBindingAnswer(
+        { hero: 'A', package_found: false, hero_confidence: 0.9, skip: ['A'], reason: '-' },
+        candidates,
+      ),
+    ).toBeNull();
+  });
+
+  it('never puts a skipped photo into a collage slot', () => {
+    const binding = parseBindingAnswer(
+      { hero: 'A', package_found: false, skip: ['B'], slots: { rear: 'B' }, reason: '-' },
+      candidates,
+      [{ slotId: 'rear' }],
+    );
+    expect(binding?.slotMaterialIds).toEqual({});
   });
 
   it('treats package_found=false as "no package", even with a letter', () => {
@@ -367,5 +406,14 @@ describe('buildBindingPrompt', () => {
     expect(prompt).toContain('B（包装图）');
     expect(prompt).toContain('package_found');
     expect(prompt).toContain('null');
+  });
+
+  it('asks for a skip list of shop-frame photos and shows it in the answer shape', () => {
+    const prompt = buildBindingPrompt([{ key: 'A', label: '商品正面图' }]);
+    expect(prompt).toContain('店铺边框水印');
+    expect(prompt).toContain('"skip":[]');
+    // The instruction has to say what to do when nothing is framed, otherwise the
+    // model invents an entry to fill the field.
+    expect(prompt).toContain('没有带边框水印的图就把 skip 写成空数组');
   });
 });
