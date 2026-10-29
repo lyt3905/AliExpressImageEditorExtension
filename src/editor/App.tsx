@@ -318,6 +318,15 @@ export function App(): JSX.Element {
   const [templateKey, setTemplateKey] = useState<string>(DEFAULT_TEMPLATE_KEY);
   const [heroId, setHeroId] = useState<string | null>(null);
   const [boxId, setBoxId] = useState<string | null>(null);
+  /**
+   * 用户有没有亲手选过主体 / 包装盒。
+   *
+   * 「生成主图」现在内部会先跑一次识别，如果无脑覆盖，那个下拉框就成了摆设：
+   * 用户明确挑了主体，一按生成又被 AI 改回去。所以手工选择一旦发生，识别就退到
+   * 只服务「重新识别素材角色」那条链接（那里是明说要重问）。
+   */
+  const heroPickedByHandRef = useRef(false);
+  const boxPickedByHandRef = useRef(false);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composePlan, setComposePlan] = useState<CompositionPlan | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
@@ -1110,40 +1119,16 @@ export function App(): JSX.Element {
     setComposePlan(plan);
   }, [document]);
 
-  const handleCompose = useCallback(async () => {
-    setComposeBusy(true);
-    setComposeError(null);
-    try {
-      const plan = await composeFor(heroId, boxId);
-      if (!plan) return;
-      applyComposedPlan(plan);
-      setPendingResultKey(resultKeyForCompose(heroId, boxId));
-
-      const firstWarning = plan.warnings[0];
-      showNotice(
-        firstWarning
-          ? { kind: 'error', text: `已排版，但有让步：${firstWarning.message}` }
-          : { kind: 'ok', text: '已按模板排版（Ctrl+Z 可整体撤销）' },
-      );
-    } catch (error) {
-      const message = messageOf(error);
-      setComposeError(message);
-      showNotice({ kind: 'error', text: `排版失败：${message}` });
-    } finally {
-      setComposeBusy(false);
-    }
-  }, [applyComposedPlan, boxId, composeFor, heroId, resultKeyForCompose, showNotice]);
-
   /**
    * Ask the model which material is the hero and which is the packaging.
    *
    * Throws on transport/auth problems and returns null when the answer names no
-   * usable hero — the caller decides whether to fall back to labels (manual button:
-   * keep them; automatic run: use them and carry on).
+   * usable hero — the caller decides whether to fall back to labels (manual run:
+   * keep them and carry on; 「重新识别素材角色」: say so).
    *
    * The answer is a pure function of (these photos, this model), so it is cached:
    * the second visit to a product skips the vision call entirely. `force` is for
-   * the manual button — pressing「AI 识别」again should really ask again.
+   * 「重新识别素材角色」— that link promises a second opinion, so it must really ask.
    */
   const bindVisionRoles = useCallback(
     async (options?: { force?: boolean }): Promise<VisionBinding | null> => {
@@ -1231,30 +1216,97 @@ export function App(): JSX.Element {
     [composeCache, cutouts, identityByMaterialId, session, templateKey],
   );
 
-  /** Manual trigger: bind, then leave the result in the panel for review. */
-  const handleVisionBind = useCallback(async () => {
-    if (cutouts.length === 0) return;
-    setVisionBusy(true);
-    setBindNote(null);
-    try {
-      const binding = await bindVisionRoles({ force: true });
-      if (!binding) {
-        setBindNote('AI 没有给出可用结论，已保留标签匹配结果');
-        return;
+  /**
+   * 一次点击 = 识别 + 排版。
+   *
+   * 以前这是两个按钮（「AI 识别素材角色」→「生成主图」）。两个按钮等于把实现细节
+   * 漏到了界面上：识别结论只是排版的一个入参，用户凭什么要先点一次再点一次？
+   * 顺序点反了还会白排一版。现在识别在内部完成：有缓存结论就直接用（第二次打开
+   * 不会真的问模型），没有就当场问。
+   *
+   * `forceVision` 是按钮下面那条小链接用的：「重新识别素材角色」要真的再问一次，
+   * 否则它点下去跟没点一样（缓存命中的速度会让人以为按钮坏了）。
+   */
+  const handleCompose = useCallback(
+    async (options?: { forceVision?: boolean }): Promise<void> => {
+      setComposeBusy(true);
+      setComposeError(null);
+      // 识别结论要当场用上：state 要等下一次渲染，这次排版还在闭包里。
+      let hero = heroId;
+      let box = boxId;
+      /*
+        手工选过主体就不要再让 AI 改它 —— 否则那两个下拉框等于装饰。
+        「重新识别素材角色」是例外：它明说要重问，重问完就把"手工"这件事清掉。
+      */
+      const manualPick = heroPickedByHandRef.current;
+      const identify = cutouts.length > 0 && (options?.forceVision || !manualPick);
+      try {
+        if (identify) {
+          setVisionBusy(true);
+          try {
+            const binding = await bindVisionRoles({ force: options?.forceVision });
+            if (binding) {
+              hero = binding.heroId;
+              box = binding.boxId;
+              setHeroId(binding.heroId);
+              setBoxId(binding.boxId);
+              // AI 现在拿回了主导权（尤其是强制重问之后），手工标记随之清掉。
+              heroPickedByHandRef.current = false;
+              boxPickedByHandRef.current = false;
+              setBindNote(
+                `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
+                  binding.boxId ? '' : ' · 未识别到包装盒'
+                }${
+                  binding.skippedIds.length > 0
+                    ? ` · 已跳过 ${binding.skippedIds.length} 张带店铺边框水印`
+                    : ''
+                }`,
+              );
+            } else if (options?.forceVision) {
+              setBindNote('AI 没有给出可用结论，已用标签匹配结果');
+            }
+          } catch (error) {
+            setBindNote(`AI 识别不可用：${messageOf(error)}。已用标签匹配结果`);
+          } finally {
+            setVisionBusy(false);
+          }
+        }
+
+        const plan = await composeFor(hero, box);
+        if (!plan) return;
+        applyComposedPlan(plan);
+        setPendingResultKey(resultKeyForCompose(hero, box));
+
+        const firstWarning = plan.warnings[0];
+        showNotice(
+          firstWarning
+            ? { kind: 'error', text: `已排版，但有让步：${firstWarning.message}` }
+            : { kind: 'ok', text: '已按模板排版（Ctrl+Z 可整体撤销）' },
+        );
+      } catch (error) {
+        const message = messageOf(error);
+        setComposeError(message);
+        showNotice({ kind: 'error', text: `排版失败：${message}` });
+      } finally {
+        setComposeBusy(false);
       }
-      setHeroId(binding.heroId);
-      setBoxId(binding.boxId);
-      setBindNote(
-        `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
-          binding.boxId ? '' : ' · 未识别到包装盒'
-        }${binding.skippedIds.length > 0 ? ` · 已跳过 ${binding.skippedIds.length} 张带店铺边框水印` : ''}`,
-      );
-    } catch (error) {
-      setBindNote(`AI 识别不可用：${messageOf(error)}。已保留标签匹配结果`);
-    } finally {
-      setVisionBusy(false);
-    }
-  }, [bindVisionRoles, cutouts.length]);
+    },
+    [
+      applyComposedPlan,
+      bindVisionRoles,
+      boxId,
+      composeFor,
+      cutouts.length,
+      heroId,
+      resultKeyForCompose,
+      showNotice,
+    ],
+  );
+
+  /** 「重新识别素材角色」：同一个按钮的第二档，强制再问一次模型。 */
+  const handleRegenerate = useCallback(() => {
+    void handleCompose({ forceVision: true });
+  }, [handleCompose]);
 
   // ---- 自动排版：打开编辑器就出图，不用点
   //
@@ -2019,17 +2071,24 @@ export function App(): JSX.Element {
             heroId={heroId}
             boxId={boxId}
             onHeroChange={(materialId) => {
+              heroPickedByHandRef.current = true;
               setHeroId(materialId);
               // One material cannot be both hero and box: the plan would draw the
               // same picture twice at two very different scales.
-              if (boxId === materialId) setBoxId(null);
+              if (boxId === materialId) {
+                boxPickedByHandRef.current = false;
+                setBoxId(null);
+              }
             }}
-            onBoxChange={setBoxId}
+            onBoxChange={(materialId) => {
+              boxPickedByHandRef.current = materialId !== null;
+              setBoxId(materialId);
+            }}
             busy={composeBusy}
             plan={composePlan}
             error={composeError}
             onGenerate={() => void handleCompose()}
-            onVisionBind={() => void handleVisionBind()}
+            onRegenerate={handleRegenerate}
             visionBusy={visionBusy}
             bindNote={bindNote}
             status={composeStatus}

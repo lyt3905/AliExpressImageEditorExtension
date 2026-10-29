@@ -215,6 +215,33 @@ button.primary:hover:not(:disabled) {
   opacity: 0.5;
 }
 
+/*
+  Second gear of the same button: 「重新识别素材角色」 ignores the cache and asks
+  the model again. It lives as a link because it is the rare path — the primary
+  button already identifies, so a second full-size button would make the panel
+  look like two steps again.
+*/
+.compose-relink {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.compose-relink:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.compose-relink:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .compose-warnings {
   margin: 8px 0 0;
   padding-left: 16px;

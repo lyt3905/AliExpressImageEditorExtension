@@ -21,9 +21,10 @@ export interface ComposePanelProps {
   busy: boolean;
   plan: CompositionPlan | null;
   error: string | null;
+  /** 识别素材角色 + 排版，一次点击完成（识别在内部，有缓存就不再问模型）。 */
   onGenerate: () => void;
-  /** Runs the vision model to decide hero/box; explicit, never automatic. */
-  onVisionBind: () => void;
+  /** 同一件事的第二档：强制再问一次 AI，然后重排。 */
+  onRegenerate: () => void;
   visionBusy: boolean;
   /** Outcome of the last vision attempt, or null. */
   bindNote: string | null;
@@ -52,7 +53,7 @@ export function ComposePanel({
   plan,
   error,
   onGenerate,
-  onVisionBind,
+  onRegenerate,
   visionBusy,
   bindNote,
   status,
@@ -61,7 +62,12 @@ export function ComposePanel({
   onDownloadCached,
   onClearCache,
 }: ComposePanelProps): JSX.Element {
-  const ready = cutouts.length > 0 && Boolean(heroId);
+  /*
+    「有没有已抠素材」是唯一的门槛：主体是谁由 AI 认，认不出来才回落到下拉框里
+    手动选的那个。所以这里不再要求先有 heroId —— 那会让刚打开面板的人看到一个
+    灰掉的按钮，而其实他什么都不缺。
+  */
+  const ready = cutouts.length > 0;
   const active = templates.find((template) => template.key === templateKey);
 
   return (
@@ -136,29 +142,43 @@ export function ComposePanel({
             </select>
           </label>
 
-          <button
-            type="button"
-            className="compose-button compose-button--secondary"
-            onClick={onVisionBind}
-            disabled={busy || visionBusy || cutouts.length === 0}
-            title="把前几张素材发给视觉模型，由它判断谁是主体、谁是包装盒"
-          >
-            {visionBusy ? 'AI 识别中…' : 'AI 识别素材角色'}
-          </button>
-
-          {bindNote ? <p className="compose-note compose-note--bind">{bindNote}</p> : null}
-
+          {/*
+            一个按钮做完整件事。识别素材角色是排版的入参，不是独立的步骤 ——
+            以前拆成两个按钮，点反顺序就白排一版，而"点完识别还得再点一次生成"
+            本来就是实现细节。第二档（强制重问 AI）缩成下面那条小链接，因为它是
+            少数情况下才需要的动作。
+          */}
           <button
             type="button"
             className="compose-button"
             onClick={onGenerate}
             disabled={busy || !ready}
-            title={ready ? '按模板排版并替换当前画布（可撤销）' : '需要至少一张已抠素材'}
+            title={
+              ready
+                ? '先用 AI 认出主体与包装盒，再按模板排版并替换当前画布（可撤销）'
+                : '需要至少一张已抠素材'
+            }
           >
-            {busy ? '正在排版…' : '生成主图'}
+            {busy ? (visionBusy ? '正在识别素材角色…' : '正在排版…') : '生成主图'}
           </button>
+
+          {bindNote ? (
+            <button
+              type="button"
+              className="compose-relink"
+              onClick={onRegenerate}
+              disabled={busy}
+              title="这次会忽略缓存，真的再问一次 AI"
+            >
+              重新识别素材角色
+            </button>
+          ) : null}
+
+          {bindNote ? <p className="compose-note compose-note--bind">{bindNote}</p> : null}
+
           <p className="compose-note">
             打开编辑器会自动生成一次；手动重新生成会替换当前画布（Ctrl+Z 可整体撤销）。
+            识别素材角色和排版是同一次点击里的两步，不用分开点。
           </p>
 
           {/*
