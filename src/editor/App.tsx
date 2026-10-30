@@ -316,17 +316,14 @@ export function App(): JSX.Element {
 
   // ---- 智能排版 (template composition)
   const [templateKey, setTemplateKey] = useState<string>(DEFAULT_TEMPLATE_KEY);
+  /*
+    `heroId` / `boxId` 仍然是排版的两个入参，但**不再有手选入口**（10.18.4 起面板上
+    没有主体/包装盒下拉框）：它们由 AI 的答案写入，AI 不可用时由标签启发式与面积兜底
+    决定。保留 state 是因为「重新识别素材角色」、缓存命中与自动排版三条路都要共享同一份
+    结论，而且成品图缓存键要用它。
+  */
   const [heroId, setHeroId] = useState<string | null>(null);
   const [boxId, setBoxId] = useState<string | null>(null);
-  /**
-   * 用户有没有亲手选过主体 / 包装盒。
-   *
-   * 「生成主图」现在内部会先跑一次识别，如果无脑覆盖，那个下拉框就成了摆设：
-   * 用户明确挑了主体，一按生成又被 AI 改回去。所以手工选择一旦发生，识别就退到
-   * 只服务「重新识别素材角色」那条链接（那里是明说要重问）。
-   */
-  const heroPickedByHandRef = useRef(false);
-  const boxPickedByHandRef = useRef(false);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composePlan, setComposePlan] = useState<CompositionPlan | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
@@ -414,18 +411,6 @@ export function App(): JSX.Element {
       }),
     [],
   );
-
-  /**
-   * Whether the selected template can paint a box at all.
-   *
-   * The collage template has no `box` slot (no `variants` either), so the answer is
-   * false there — and `planner` never draws one, which is exactly why the panel must
-   * not offer a 包装盒 picker for it.
-   */
-  const templateHasBoxSlot = useMemo(() => {
-    const template = parseTemplateByKey(templateKey).template;
-    return Boolean(template?.slots.some((slot) => slot.role === 'box'));
-  }, [templateKey]);
 
   /**
    * Show a notice, then let it clear itself.
@@ -1254,11 +1239,11 @@ export function App(): JSX.Element {
       let hero = heroId;
       let box = boxId;
       /*
-        手工选过主体就不要再让 AI 改它 —— 否则那两个下拉框等于装饰。
-        「重新识别素材角色」是例外：它明说要重问，重问完就把"手工"这件事清掉。
+        面板上不再有主体/包装盒的下拉框 —— 素材角色由 AI 认，认不出来才回落到标签
+        启发式与面积兜底（`bindVisionRoles` / `composeFor` 各自都有一层）。所以这里
+        没有"手工优先"分支：识别能跑就跑，跑不动才沿用上一次的 state。
       */
-      const manualPick = heroPickedByHandRef.current;
-      const identify = cutouts.length > 0 && (options?.forceVision || !manualPick);
+      const identify = cutouts.length > 0;
       try {
         if (identify) {
           setVisionBusy(true);
@@ -1269,9 +1254,6 @@ export function App(): JSX.Element {
               box = binding.boxId;
               setHeroId(binding.heroId);
               setBoxId(binding.boxId);
-              // AI 现在拿回了主导权（尤其是强制重问之后），手工标记随之清掉。
-              heroPickedByHandRef.current = false;
-              boxPickedByHandRef.current = false;
               setBindNote(
                 `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
                   binding.boxId ? '' : ' · 未识别到包装盒'
@@ -1288,6 +1270,21 @@ export function App(): JSX.Element {
             setBindNote(`AI 识别不可用：${messageOf(error)}。已用标签匹配结果`);
           } finally {
             setVisionBusy(false);
+          }
+        }
+
+        /*
+          没有下拉框了，所以"主体是谁"不能停在 null 上（那只会得到一句
+          「未选择主体素材」，而用户已经没有别的办法指定）。AI 没给结论时用标签启发式
+          兜最后一次，它的答案和自动排版用的是同一套规则。
+        */
+        if (!hero) {
+          const fallback = bindMaterialRoles(bindCandidates);
+          if (fallback.heroId) {
+            hero = fallback.heroId;
+            box = fallback.boxId;
+            setHeroId(fallback.heroId);
+            setBoxId(fallback.boxId);
           }
         }
 
@@ -2087,28 +2084,6 @@ export function App(): JSX.Element {
             templateKey={templateKey}
             onTemplateChange={setTemplateKey}
             cutouts={cutouts}
-            heroId={heroId}
-            boxId={boxId}
-            onHeroChange={(materialId) => {
-              heroPickedByHandRef.current = true;
-              setHeroId(materialId);
-              // One material cannot be both hero and box: the plan would draw the
-              // same picture twice at two very different scales.
-              if (boxId === materialId) {
-                boxPickedByHandRef.current = false;
-                setBoxId(null);
-              }
-            }}
-            onBoxChange={(materialId) => {
-              boxPickedByHandRef.current = materialId !== null;
-              setBoxId(materialId);
-            }}
-            /*
-              包装盒下拉框只在这两件事同时成立时出现：当前模板真的会画一个盒子，
-              而且除主体之外还有别的素材可选。否则它是一个只有一个「无」的下拉框 ——
-              用户既不能借此改变什么，还要每次读一遍。
-            */
-            showBoxPicker={templateHasBoxSlot && cutouts.some((material) => material.id !== heroId)}
             busy={composeBusy}
             plan={composePlan}
             error={composeError}
