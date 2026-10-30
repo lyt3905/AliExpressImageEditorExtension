@@ -93,3 +93,35 @@ export function planToLayers(plan: CompositionPlan): EditorLayer[] {
   entries.sort((a, b) => a.z - b.z);
   return entries.map((entry) => entry.layer);
 }
+
+/**
+ * Layers that survive a compose: brand logos and the product-code text.
+ *
+ * Both are **document layers the seller owns**, not part of the layout: a logo
+ * they placed (and possibly unlocked and moved) must not vanish because they
+ * pressed 生成主图, and the code text is the same story — it came from the listing
+ * title, not from the template.
+ *
+ * The code is only carried when the plan does not already place it: 「主图 + 包装盒」
+ * has a `text_zone`, so its code comes from the plan (position decided by the
+ * template). The collage template deliberately has no text zone, and that is
+ * exactly the case this function exists for — without it, switching templates
+ * makes the code disappear, which reads as "it stopped extracting from the title".
+ *
+ * Order: carried code sits above the plan (it used to be the top-most text) and
+ * below brand logos, matching `EditorStage`, which paints brand layers last.
+ */
+export function carriedLayers(
+  plan: CompositionPlan,
+  existing: readonly EditorLayer[],
+  productCode: string | null | undefined,
+): EditorLayer[] {
+  const code = (productCode ?? '').trim();
+  const planHasCode = code !== '' && plan.texts.some((text) => text.text.trim() === code);
+  const logos = existing.filter((layer) => layer.kind === 'brand');
+  const codeLayers =
+    code === '' || planHasCode
+      ? []
+      : existing.filter((layer) => layer.kind === 'text' && layer.text.trim() === code);
+  return [...codeLayers, ...logos];
+}

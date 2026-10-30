@@ -500,9 +500,15 @@ AI 不可用（网关没开 / Key 无效）时**自动回退到标签匹配**，
 2. 点「生成主图」→ **先用 AI 识别素材角色，再按模板排版**，一次点击做完两件事
 3. 想让它换个判断：点按钮下面那条「重新识别素材角色」→ 忽略缓存，真的再问一次模型再重排
 
-排版有让步时（主体放不进去、盒子只能换变体之类）会在面板里逐条列出原因（红色），不做无声妥协；
-没让步就什么都不显示。求解器的中间量（zoom 前后、可见占比、盒子变体号、编号字号）不再摆在面板上，
-需要时看 `docs/architecture.md` §10 或控制台日志。
+排版有让步时（主体放不进去、盒子只能换变体之类）会逐条列出原因，不做无声妥协；
+没让步就什么都不显示。这些信息默认**折叠**在面板底部：一行摘要写「本次有 N 条让步：第一条原因」，
+点开才展开全部；「识别结论与本地缓存」（AI 说了什么、复用了多少抠图、下载/清除缓存）同理，
+平时面板上只剩按钮和两个下拉框。求解器的中间量（zoom 前后、可见占比、盒子变体号、编号字号）
+不摆在面板上，需要时看 `docs/architecture.md` §10 或控制台日志。
+
+**换模板不会弄丢编号和品牌 Logo**：编号文字和品牌 Logo 都是文档图层（来自标题的编号由你控制，
+Logo 可能已经被你解锁挪过位置），所以排版只替换商品图、衬板和模板自己带的文字区；
+模板没有文字区时（拼贴模板故意不放文字），编号图层原样留在画布上，不会被"生成主图"擦掉。
 
 ### 视觉接口配置（选项页）
 
@@ -731,7 +737,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 50 文件 / 815 个单元测试（不联网）
+│  ├─ unit/                      # 51 文件 / 821 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -970,7 +976,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（52 文件 / 820 测试，其中 815 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（53 文件 / 826 测试，其中 821 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -999,5 +1005,6 @@ AliExpressImageEditorExtension/
 | 识图时剔掉带店铺边框水印的图（10.17.0） | **仅自动化验证**（4 个 `parseBindingAnswer`/`buildBindingPrompt` 单测 + 2 个缓存单测）：prompt 同时要求 `skip` 与"没有就写空数组"、被点名的图不能当包装盒、不能进拼贴图位、既选 hero 又排除 hero 时整条答案作废、`skipped` 身份列表去重去脏后原样读回；10.17.1 补一条：判定当场生效（`visionSkippedRef`，不等下一次渲染 —— 自动排版是"问模型 → 排版"一条链，等 state 会漏掉那次运行）。**"模型到底认不认得出边框"只能在真机上试**：拿一张带花边的第一张图跑一次 AI 识别，面板应写「已跳过 1 张带店铺边框水印」且画布里不出现那圈白边，步骤见 manual-test 5.110） |
 | 成品观感 + 底线两张图（10.18.0） | **仅自动化验证**（12 个单测）：`unionArea` 的容斥（相邻不重复、重叠只算一次）、并集/最紧留白/重心的量法、遮挡 50%、被画布切掉一半的 `cropped`、`fitCanvasFill` 在区间内不动/太满缩回/太空放大/层级差只收最小的那张/单张不做层级差、拼贴模板只有 hero 时发 `not_enough_pictures` 且不出图、两张图时 `diagnostics.canvasFill` 与 `diagnostics.aesthetic` 都有账。**"这页到底好看没好看"仍要眼睛**：三张图是否真的拉开层级、四边留白是否齐、有没有人被裁掉半个头，步骤见 manual-test 5.111–5.112） |
 | 识别与排版合成一个按钮（10.18.1） | **仅自动化验证**（`typecheck` + 815 测试不变；`src/editor/components/` 与面板接线没有单测，这是纯交互重构）。**真机必须走一遍**：面板里只有一个主按钮、点它先「正在识别素材角色…」再「正在排版…」、第二次打开不重发视觉请求、「重新识别素材角色」那条链接会真的重问、手工改过主体后生成不再被 AI 覆盖、网关挂掉时画布照样出图，步骤见 manual-test 5.64 |
+| 面板折叠 + 换模板不丢编号/Logo（10.18.2） | **仅自动化验证**（6 个 `compose-emit` 单测锁 `carriedLayers()`：只搬 brand、plan 没编号时搬编号、plan 已有编号时不重复搬、trim 后比较、空编号不搬、其它文字永不搬）。**折叠与提示的真机验证**：面板只剩按钮和下拉框、两行摘要能点开、切换模板生成后编号与 Logo 仍在、识别到品牌但本机没有 Logo 时应弹红字指引，步骤见 manual-test 5.113–5.115 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

@@ -174,55 +174,74 @@ export function ComposePanel({
             </button>
           ) : null}
 
-          {bindNote ? <p className="compose-note compose-note--bind">{bindNote}</p> : null}
-
-          <p className="compose-note">
-            打开编辑器会自动生成一次；手动重新生成会替换当前画布（Ctrl+Z 可整体撤销）。
-            识别素材角色和排版是同一次点击里的两步，不用分开点。
-          </p>
-
           {/*
-            Reuse is worth showing: without this line a fast second visit looks
-            identical to a slow one, and 「清除本地缓存」is the only way out when a
-            cached cut-out is the thing that looks wrong.
+            下面这些东西对"这一次生成"有用，对"平时看一眼"是噪音 —— 识别结论能有
+            三行、缓存那行每次都在、让步原因能有五条。默认全部折起来，摘要里只留
+            "有什么"，要看就点开。真正需要立刻看到的只有红色报错（在面板下方，不折叠）。
           */}
-          {cacheNote ? (
-            <div className="compose-cache">
-              <p className="compose-note compose-note--cache">{cacheNote}</p>
-              {hasCachedResult ? (
-                <button
-                  type="button"
-                  className="compose-cache__clear"
-                  onClick={onDownloadCached}
-                  disabled={busy}
-                  title="直接下载上次生成的 800×800 PNG，不重新排版、不重新抠图"
-                >
-                  下载缓存成品图
-                </button>
+          {bindNote || cacheNote ? (
+            <details className="compose-fold">
+              <summary>识别结论与本地缓存</summary>
+              {bindNote ? <p className="compose-note compose-note--bind">{bindNote}</p> : null}
+
+              {/*
+                Reuse is worth showing: without this line a fast second visit looks
+                identical to a slow one, and 「清除本地缓存」is the only way out when a
+                cached cut-out is the thing that looks wrong.
+              */}
+              {cacheNote ? (
+                <div className="compose-cache">
+                  <p className="compose-note compose-note--cache">{cacheNote}</p>
+                  {hasCachedResult ? (
+                    <button
+                      type="button"
+                      className="compose-cache__clear"
+                      onClick={onDownloadCached}
+                      disabled={busy}
+                      title="直接下载上次生成的 800×800 PNG，不重新排版、不重新抠图"
+                    >
+                      下载缓存成品图
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="compose-cache__clear"
+                    onClick={onClearCache}
+                    disabled={busy}
+                    title="删除本机保存的抠图、AI 识别结论和成品图，下次会重新计算"
+                  >
+                    清除本地缓存
+                  </button>
+                </div>
               ) : null}
-              <button
-                type="button"
-                className="compose-cache__clear"
-                onClick={onClearCache}
-                disabled={busy}
-                title="删除本机保存的抠图、AI 识别结论和成品图，下次会重新计算"
-              >
-                清除本地缓存
-              </button>
-            </div>
+
+              <p className="compose-note">
+                打开编辑器会自动生成一次；手动重新生成会替换当前画布（Ctrl+Z 可整体撤销）。
+                识别素材角色和排版是同一次点击里的两步，不用分开点。
+              </p>
+            </details>
           ) : null}
         </section>
 
         {error ? <div className="notice notice--error">{error}</div> : null}
 
+        {/*
+          让步原因：五条红字会把面板撑满，而"有没有让步"是摘要就能回答的。
+          默认折叠，摘要给出条数与最严重的那条（第一条），点开看全部。
+        */}
         {plan && plan.warnings.length > 0 ? (
-          <ul className="compose-warnings">
-            {plan.warnings.map((entry, index) => (
-              <li key={`${entry.code}-${index}`} title={entry.code}>
-                {entry.message}
-              </li>
-            ))}
-          </ul>
+          <details className="compose-fold compose-fold--warn">
+            <summary>
+              本次有 {plan.warnings.length} 条让步：{plan.warnings[0]?.message}
+            </summary>
+            <ul className="compose-warnings">
+              {plan.warnings.map((entry, index) => (
+                <li key={`${entry.code}-${index}`} title={entry.code}>
+                  {entry.message}
+                </li>
+              ))}
+            </ul>
+          </details>
         ) : null}
       </div>
     </aside>

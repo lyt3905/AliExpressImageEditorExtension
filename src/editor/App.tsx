@@ -75,7 +75,7 @@ import {
 } from '../services/composition/templates';
 import { measureTextWithCanvas } from '../services/text-measure';
 import { ComposePanel } from './components/ComposePanel';
-import { planToLayers } from './state/compose-emit';
+import { carriedLayers, planToLayers } from './state/compose-emit';
 import { EditorStage, type EditorStageHandle } from './components/EditorStage';
 import { LayerPanel } from './components/LayerPanel';
 import { MaterialPanel } from './components/MaterialPanel';
@@ -744,7 +744,18 @@ export function App(): JSX.Element {
     const material = brandMaterials.find(
       (entry) => entry.id === `material-brand-${matched.brand.id}`,
     );
-    if (!material) return;
+    if (!material) {
+      /*
+        标题命中了品牌，但本机没有它的 Logo 图片（目录同步没拉下来，或手工上传的
+        那张丢了）。以前这里静默 return：下拉框显示着品牌名、画布上却没有 Logo，
+        看起来像"没从标题里提取"。说清楚，比让人对着一处空白猜要好。
+      */
+      showNotice({
+        kind: 'error',
+        text: `已按标题识别品牌：${matched.brand.name}，但本机没有它的 Logo 图片 —— 去选项页「品牌商标」里上传，或点「立即同步」`,
+      });
+      return;
+    }
     const alreadyOnCanvas = document.layers.some(
       (layer) => layer.kind === 'brand' && layer.materialId === material.id,
     );
@@ -1092,15 +1103,11 @@ export function App(): JSX.Element {
   const applyComposedPlan = useCallback((plan: CompositionPlan) => {
     const planLayers = planToLayers(plan);
     /*
-      Brand logos survive the replacement, like the watermark does.
-
-      They are document layers (unlike the watermark, they can be unlocked and
-      moved), so the only way to keep them is to carry them across: the compose
-      replaces the product picture, the backdrop plate and the code text; a logo
-      the seller put in place is not "part of the layout" and must not vanish.
+      Brand logos and the product-code text survive the replacement, like the
+      watermark does — see `carriedLayers()` for why the code is only carried when
+      the template has no text zone of its own.
     */
-    const brandLayers = document.layers.filter((layer) => layer.kind === 'brand');
-    const layers = [...planLayers, ...brandLayers];
+    const layers = [...planLayers, ...carriedLayers(plan, document.layers, session?.productCode)];
     /*
       Select the hero on the way in, so the transformer lands on the subject instead
       of on nothing or on the backdrop plate — with nothing selected, the first drag
@@ -1117,7 +1124,7 @@ export function App(): JSX.Element {
     dispatch({ type: 'APPLY_PLAN', layers, selectLayerId: hero?.id ?? null });
     setSelectionIsExplicit(false);
     setComposePlan(plan);
-  }, [document]);
+  }, [document, session]);
 
   /**
    * Ask the model which material is the hero and which is the packaging.
