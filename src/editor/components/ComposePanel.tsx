@@ -18,6 +18,14 @@ export interface ComposePanelProps {
   boxId: string | null;
   onHeroChange: (materialId: string) => void;
   onBoxChange: (materialId: string | null) => void;
+  /**
+   * Whether to show the 包装盒 picker at all.
+   *
+   * Only when the current template actually paints a box AND there is at least one
+   * material besides the hero — otherwise the row is a select whose only option is
+   * 「无」, i.e. clutter that asks the user to confirm something they cannot change.
+   */
+  showBoxPicker: boolean;
   busy: boolean;
   plan: CompositionPlan | null;
   error: string | null;
@@ -49,6 +57,7 @@ export function ComposePanel({
   boxId,
   onHeroChange,
   onBoxChange,
+  showBoxPicker,
   busy,
   plan,
   error,
@@ -123,24 +132,35 @@ export function ComposePanel({
             </select>
           </label>
 
-          <label className="compose-field">
-            <span>包装盒</span>
-            <select
-              className="compose-select"
-              value={boxId ?? ''}
-              onChange={(event) => onBoxChange(event.target.value || null)}
-              disabled={busy || cutouts.length === 0}
-            >
-              <option value="">无（按兜底规则留空/换图）</option>
-              {cutouts
-                .filter((material) => material.id !== heroId)
-                .map((material) => (
-                  <option key={material.id} value={material.id}>
-                    {material.label}
-                  </option>
-                ))}
-            </select>
-          </label>
+          {/*
+            包装盒这一行只在"真有盒子可选、而且当前模板会把它画上去"时出现：
+
+            - 拼贴模板没有 box 槽位（`findSlot(template,'box')` 找不到），选了也不会进画面；
+            - 素材里只有主体一张时，下拉框里只有一个「无」，纯占地方。
+
+            两种情况都留着它，就是在向用户确认一件他无法改变的事。隐藏不影响行为：
+            包装盒仍然由 AI 认、认不出来走兜底规则，这里只是不再让手选覆盖它。
+          */}
+          {showBoxPicker ? (
+            <label className="compose-field">
+              <span>包装盒</span>
+              <select
+                className="compose-select"
+                value={boxId ?? ''}
+                onChange={(event) => onBoxChange(event.target.value || null)}
+                disabled={busy || cutouts.length === 0}
+              >
+                <option value="">无（按兜底规则留空/换图）</option>
+                {cutouts
+                  .filter((material) => material.id !== heroId)
+                  .map((material) => (
+                    <option key={material.id} value={material.id}>
+                      {material.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ) : null}
 
           {/*
             一个按钮做完整件事。识别素材角色是排版的入参，不是独立的步骤 ——

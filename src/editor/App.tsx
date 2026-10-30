@@ -416,6 +416,18 @@ export function App(): JSX.Element {
   );
 
   /**
+   * Whether the selected template can paint a box at all.
+   *
+   * The collage template has no `box` slot (no `variants` either), so the answer is
+   * false there — and `planner` never draws one, which is exactly why the panel must
+   * not offer a 包装盒 picker for it.
+   */
+  const templateHasBoxSlot = useMemo(() => {
+    const template = parseTemplateByKey(templateKey).template;
+    return Boolean(template?.slots.some((slot) => slot.role === 'box'));
+  }, [templateKey]);
+
+  /**
    * Show a notice, then let it clear itself.
    *
    * Re-arming on every call is what lets a second notice take over from the
@@ -2091,6 +2103,12 @@ export function App(): JSX.Element {
               boxPickedByHandRef.current = materialId !== null;
               setBoxId(materialId);
             }}
+            /*
+              包装盒下拉框只在这两件事同时成立时出现：当前模板真的会画一个盒子，
+              而且除主体之外还有别的素材可选。否则它是一个只有一个「无」的下拉框 ——
+              用户既不能借此改变什么，还要每次读一遍。
+            */
+            showBoxPicker={templateHasBoxSlot && cutouts.some((material) => material.id !== heroId)}
             busy={composeBusy}
             plan={composePlan}
             error={composeError}

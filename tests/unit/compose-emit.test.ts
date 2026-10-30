@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CompositionPlan } from '../../src/services/composition/planner';
-import type { EditorLayer } from '../../src/shared/types';
+import type { EditorLayer, ImageLayer } from '../../src/shared/types';
 import { carriedLayers } from '../../src/editor/state/compose-emit';
 
 /** Only `texts` matters here; the rest of the plan is irrelevant to this seam. */
@@ -9,7 +9,7 @@ function planWith(texts: Array<{ text: string }>): CompositionPlan {
   return { texts } as unknown as CompositionPlan;
 }
 
-function imageLayer(id: string): EditorLayer {
+function imageLayer(id: string): ImageLayer {
   return {
     id,
     kind: 'cutout',
