@@ -968,3 +968,20 @@
   background: #fdf6e3;
   color: #8a6100;
 }
+
+/* ---- 回填记录 ---- */
+/*
+  一行是「标题 + 编号/次数 · 时间 · 状态 · 打开」。窄屏时让它整行换行，
+  而不是把标题压成两三个字 —— 这个列表里最先要读的就是标题。
+*/
+.opt-row--log {
+  flex-wrap: wrap;
+}
+
+.opt-row--log .opt-row__main {
+  flex: 1 1 220px;
+}
+
+.opt-row--log .opt-row__meta {
+  font-variant-numeric: tabular-nums;
+}

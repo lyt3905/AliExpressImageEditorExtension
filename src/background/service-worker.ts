@@ -25,6 +25,7 @@ import { buildSessionRecord, createSessionId, openEditorTab, readSessionMeta, sa
 import { putBlob, putSession } from '../services/indexed-db';
 import { downloadDataUrl } from '../services/downloader';
 import { appendError } from '../services/error-log';
+import { recordFill } from '../services/fill-log';
 import { ServerApi, type AuthUser } from '../services/server-api';
 import { clearCredentials, loadCredentials, loadSettings, saveCredentials, saveSettings } from '../services/settings';
 
@@ -243,6 +244,19 @@ const handlers: MessageHandlers = {
     await setBadge('…', `${EXTENSION_TITLE}：正在把图片回填到商品页…`);
     try {
       const result = await fillPageImage(payload, meta);
+      /*
+        账本记在后台，不记在编辑器里：回填成功后编辑器可能立刻自己关掉
+        （`auto-close.ts`），而那一次记录必须比标签页活得久。失败不进这张表 ——
+        那是错误记录的事；这张表回答的是"哪些商品已经换过主图"。
+      */
+      if (result.status !== 'failed') {
+        await recordFill({
+          productCode: meta.productCode,
+          title: meta.productTitle ?? '',
+          url: meta.sourceUrl,
+          status: result.status,
+        });
+      }
       await setBadge(
         result.status === 'success' ? '' : '!',
         `${EXTENSION_TITLE}：${result.message}`,

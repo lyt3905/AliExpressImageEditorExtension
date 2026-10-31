@@ -185,7 +185,7 @@ export function listZipEntries(
 ): Array<{ path: string; size: number; crc: number; offset: number; dataOffset: number }> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const decoder = new TextDecoder();
-  const out: Array<{ path: string; size: number; crc: number; offset: number }> = [];
+  const out: Array<{ path: string; size: number; crc: number; offset: number; dataOffset: number }> = [];
 
   // Find the end-of-central-directory record from the tail.
   let eocd = -1;
@@ -209,12 +209,12 @@ export function listZipEntries(
     const offset = view.getUint32(cursor + 42, true);
     const name = decoder.decode(bytes.subarray(cursor + CENTRAL_HEADER_SIZE, cursor + CENTRAL_HEADER_SIZE + nameLength));
     out.push({
-    path: name,
-    size,
-    crc,
-    offset,
-    dataOffset: offset + LOCAL_HEADER_SIZE + nameLength,
-  });
+      path: name,
+      size,
+      crc,
+      offset,
+      dataOffset: offset + LOCAL_HEADER_SIZE + nameLength,
+    });
     cursor += CENTRAL_HEADER_SIZE + nameLength + extraLength + commentLength;
   }
   return out;

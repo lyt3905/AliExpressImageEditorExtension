@@ -202,6 +202,11 @@ export const STORAGE_KEYS = {
   errorLog: 'aiee:error-log',
   /** Last error only, kept for backwards compatibility with older builds. */
   lastError: 'aiee:last-error',
+  /**
+   * 回填成功的商品记录（新的在前）。和 `errorLog` 是两份账：那边记"哪里坏了"，
+   * 这边记"哪些商品已经换过主图了" —— 卖家真正想避免的是同一个商品重复做一遍。
+   */
+  fillLog: 'aiee:fill-log',
 } as const;
 
 /**
@@ -211,6 +216,14 @@ export const STORAGE_KEYS = {
  * 是每次写入都要序列化的，历史里堆长文本对写失败的那个时刻没有好处。
  */
 export const ERROR_LOG_MAX = 20;
+
+/**
+ * 回填记录最多留多少条商品。
+ *
+ * 200 条大约是一个店铺两三周的换图量：足够回答"这个商品我是不是已经做过了"，
+ * 又不至于让 `chrome.storage.local` 每次写都序列化一大团。满了丢最久没动过的那条。
+ */
+export const FILL_LOG_MAX = 200;
 
 export const DB_NAME = 'aliexpress-image-editor';
 export const DB_VERSION = 1;

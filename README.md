@@ -734,14 +734,14 @@ AliExpressImageEditorExtension/
 │  ├─ background/                # service-worker / message-router / session-manager / download-manager / page-filler
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
-│  ├─ options/                   # 设置页：App.tsx（外壳）· options.css · helpers.ts · components/（Tabs/Card/Drawer/Pager/SaveBar…）· sections/（账号/AI 视觉/水印/品牌）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / zip / settings / watermark-store / text-defaults / code-placement / logo-placement / error-log / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
+│  ├─ options/                   # 设置页：App.tsx（外壳）· options.css · helpers.ts · components/（Tabs/Card/Drawer/Pager/SaveBar…）· sections/（账号/AI 视觉/水印/品牌/回填记录）
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / zip / settings / watermark-store / text-defaults / code-placement / logo-placement / error-log / fill-log / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
 │  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / solve-fill / fit-canvas-fill / measure-layout / arrange-cascade / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 53 文件 / 842 个单元测试（不联网）
+│  ├─ unit/                      # 54 文件 / 859 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -823,10 +823,10 @@ AliExpressImageEditorExtension/
 
 ---
 
-## 设置页：四个分类，一次保存
+## 设置页：五个分类，一次保存
 
 选项页（`chrome://extensions` → 详情 → 扩展程序选项）以前是一列到底，现在分成**账号连接 / AI 视觉 /
-水印 / 品牌商标**四块，宽屏时左侧导航、窄屏时顶部标签，**一次只显示一块**：
+水印 / 品牌商标 / 回填记录**五块，宽屏时左侧导航、窄屏时顶部标签，**一次只显示一块**：
 
 - 页头只有「标题 · 一句说明 · 连接状态 · 账号名·角色」。接口路径、SESSION Cookie、错误详情都在
   各分区底部的「技术说明 / 使用说明」折叠面板里，默认关闭。
@@ -841,6 +841,10 @@ AliExpressImageEditorExtension/
   两处列表都按每页 10 条分页，品牌另可按名称 / 关键词搜索。
 - 出错不再是"只有最后一条"：账号区顶部是最近一次失败的红色提示卡，下面折叠着「错误记录（N 类，
   共 M 次）」—— 同一个错误连续发生合并成一条并标 `×N`，所以能分清"老毛病又犯了"和"换了个新毛病"。
+- **回填记录**：每回填成功一个商品，这里就多一行（标题 · 编号 · 回填次数 · 时间 · 状态 · 打开）。
+  同一个商品重复回填只累加次数，不重复占行；可按标题 / 编号 / 地址搜索，每页 10 条，可一键清空
+  （要确认）。失败**不进**这张表（那是错误记录的事），「未确认」是会标黄的那一档 —— 图已经进面板了，
+  只是没等到服务端完成信号。
 - 键盘可用：分类之间用方向键移动（`Home`/`End` 跳首尾），折叠面板是原生 `<details>`，抽屉可用 Esc 关闭。
 
 ---
@@ -987,6 +991,10 @@ AliExpressImageEditorExtension/
     自己的 HTTPS 空间，再从别的机器填「自填目录地址」同步取回 —— 但那是**手动搬运**：没有后台定时
     任务、没有自动上传，导出与上传都要你自己做一次。导出时读不到图片的品牌会跳过（提示里点名），
     派生出的 slug 一旦被别的机器同步过一次就**不要改名**（改 id = 换新品牌，历史画布断图）。
+30. 回填记录也**只在本机**（`aiee:fill-log`，最多 200 个商品，满了丢最久没动过的那条），换台电脑
+    看不到，也没有导出/导入。它记的是"哪个商品回填成功过"，不记"换了哪张图"（画布是会话级的，
+    回填上去了就只有商品页上那一份）。「未确认」那一档不是失败：图确实进了面板，只是没等到服务端
+    完成信号 —— 值得去商品页看一眼。清空是不可撤销的（要确认一次），清掉之后唯一的凭证就只剩订单。
 
 ---
 
@@ -995,7 +1003,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（55 文件 / 847 测试，其中 842 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（56 文件 / 864 测试，其中 859 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1026,5 +1034,6 @@ AliExpressImageEditorExtension/
 | 识别与排版合成一个按钮（10.18.1） | **仅自动化验证**（`typecheck` + 815 测试不变；`src/editor/components/` 与面板接线没有单测，这是纯交互重构）。**真机必须走一遍**：面板里只有一个主按钮、点它先「正在识别素材角色…」再「正在排版…」、第二次打开不重发视觉请求、「重新识别素材角色」那条链接会真的重问、手工改过主体后生成不再被 AI 覆盖、网关挂掉时画布照样出图，步骤见 manual-test 5.64 |
 | 面板折叠 + 换模板不丢编号/Logo（10.18.2） | **仅自动化验证**（6 个 `compose-emit` 单测锁 `carriedLayers()`：只搬 brand、plan 没编号时搬编号、plan 已有编号时不重复搬、trim 后比较、空编号不搬、其它文字永不搬）。**折叠与提示的真机验证**：面板只剩按钮和下拉框、两行摘要能点开、切换模板生成后编号与 Logo 仍在、识别到品牌但本机没有 Logo 时应弹红字指引，步骤见 manual-test 5.113–5.115 |
 | 导出目录包 + 自填域名授权（10.19.0） | **仅自动化验证**（6 个 `zip` 单测：`crc32` 参考值、写出的包能按中央目录读回、size/crc 记录正确、包首尾是 `PK\x03\x04`/`PK\x05\x06`、重复路径抛、空包 22 字节；15 个导出单测：magic bytes 判扩展名、`brandSlug` 的 ASCII 化与 `brand-<id 尾段>` 回落、slug 冲突加 `-2`、缺图/非图片记进 `skipped`、全空抛错、`sha256` 与 `rev` 一致、zip 条目顺序、`version` 默认 epoch 秒、**且导出的 `brands.json` 能被真正的 `parseBrandCatalog()` 反解**）。**真机链路未跑过**：导出的 zip 放到自建 HTTPS 目录 → 另一台机器填地址 → 同步能拿到手工品牌；首次会弹「允许访问该网站」，步骤见 manual-test 5.117–5.118） |
+| 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

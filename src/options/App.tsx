@@ -13,6 +13,7 @@ import type { ExtensionSettings, VisionEndpoint } from '../services/settings';
 import { askVisionJson } from '../services/vision-client';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
 import { clearErrorLog, loadErrorLog, type ErrorLogEntry } from '../services/error-log';
+import { clearFillLog, loadFillLog, type FillLogEntry } from '../services/fill-log';
 import {
   listBrands,
   loadBrandLogo,
@@ -43,6 +44,7 @@ import { StatusBadge } from './components/StatusBadge';
 import { Tabs } from './components/Tabs';
 import type { TabItem } from './components/Tabs';
 import { AccountSection } from './sections/AccountSection';
+import { FillLogSection } from './sections/FillLogSection';
 import { VisionSection } from './sections/VisionSection';
 import type { VisionTestResult } from './sections/VisionSection';
 import { WatermarkSection } from './sections/WatermarkSection';
@@ -60,7 +62,7 @@ const SIZE_LIMIT_MB = Math.round(MAX_WATERMARK_BYTES / 1024 / 1024);
 const LOGO_SIZE_LIMIT_MB = Math.round(MAX_BRAND_LOGO_BYTES / 1024 / 1024);
 
 type StatusKind = 'ok' | 'bad' | 'idle';
-type TabId = 'account' | 'vision' | 'watermark' | 'brand';
+type TabId = 'account' | 'vision' | 'watermark' | 'brand' | 'fill';
 
 /**
  * 一份"可保存设置"的指纹，用来判断底部「保存更改」该不该亮。
@@ -103,6 +105,9 @@ export function OptionsApp(): JSX.Element {
   const [statusKind, setStatusKind] = useState<StatusKind>('idle');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [errorLog, setErrorLog] = useState<ErrorLogEntry[]>([]);
+  /** 回填记录：写的人在后台，这里只读 + 清空。 */
+  const [fillLog, setFillLog] = useState<FillLogEntry[]>([]);
+  const [fillLogStatus, setFillLogStatus] = useState<{ kind: 'ok' | 'bad' | 'idle'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   /** 已保存设置的指纹；和当前值不等就说明有未保存改动。 */
@@ -218,6 +223,7 @@ export function OptionsApp(): JSX.Element {
       // 已登录的人不需要再看账号/密码框。
       if (loggedIn) setLoginFormOpen(false);
       setErrorLog(await loadErrorLog());
+      setFillLog(await loadFillLog());
     })();
   }, [loadSettings, refreshAuthState]);
 
@@ -312,6 +318,21 @@ export function OptionsApp(): JSX.Element {
   const handleClearErrorLog = useCallback(async () => {
     await clearErrorLog();
     setErrorLog([]);
+  }, []);
+
+  /**
+   * 清空回填记录。
+   *
+   * 要确认一次：这张表是"哪些商品做过了"的唯一凭证，误点清空之后再想找回就得去翻后台订单。
+   * 清空只删本机账本，不碰商品页上的任何东西。
+   */
+  const handleClearFillLog = useCallback(async () => {
+    if (typeof window !== 'undefined' && !window.confirm('清空全部回填记录？只删本机这张表，不影响商品页。')) {
+      return;
+    }
+    await clearFillLog();
+    setFillLog([]);
+    setFillLogStatus({ kind: 'ok', text: '已清空回填记录。' });
   }, []);
 
   // ---- 保存
@@ -750,6 +771,7 @@ export function OptionsApp(): JSX.Element {
     { id: 'vision', label: 'AI 视觉', count: visionEndpoints.length },
     { id: 'watermark', label: '水印', count: watermarks.length },
     { id: 'brand', label: '品牌商标', count: brands.length },
+    { id: 'fill', label: '回填记录', count: fillLog.length },
   ];
 
   return (
@@ -758,7 +780,7 @@ export function OptionsApp(): JSX.Element {
         <div>
           <h1>AliExpress 图片编辑器</h1>
           <p className="opt-header__sub">
-            登录、AI 视觉接口、水印与品牌 Logo。改动集中到页面底部一次保存。
+            登录、AI 视觉接口、水印、品牌 Logo，以及哪些商品已经换过主图。改动集中到页面底部一次保存。
           </p>
         </div>
         <div className="opt-header__status">
@@ -899,6 +921,19 @@ export function OptionsApp(): JSX.Element {
                 onSave: (id) => void handleSaveBrandRow(id),
                 onRemove: (meta) => void handleRemoveBrand(meta),
               }}
+            />
+          </div>
+
+          <div
+            role="tabpanel"
+            id="opt-panel-fill"
+            aria-labelledby="opt-tab-fill"
+            hidden={activeTab !== 'fill'}
+          >
+            <FillLogSection
+              entries={fillLog}
+              status={fillLogStatus}
+              onClear={() => void handleClearFillLog()}
             />
           </div>
         </main>
