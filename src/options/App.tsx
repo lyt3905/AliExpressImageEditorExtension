@@ -35,6 +35,8 @@ import {
   type BrandCatalogState,
 } from '../services/brand-catalog/state';
 import { syncBrandCatalog } from '../services/brand-catalog/sync';
+import { buildCatalogBundle } from '../services/brand-catalog/export-bundle';
+import { downloadBlobInPage } from '../services/downloader';
 import { SaveBar } from './components/SaveBar';
 import type { SaveBarStatus } from './components/SaveBar';
 import { StatusBadge } from './components/StatusBadge';
@@ -49,6 +51,7 @@ import {
   blankEndpoint,
   defaultEndpointRows,
   endpointLabel,
+  originPatternOf,
   rowsForSave,
 } from './helpers';
 
@@ -454,7 +457,72 @@ export function OptionsApp(): JSX.Element {
   );
 
   // ---- 目录同步
+  /**
+   * 申请「自填目录地址」那个域名的主机权限。
+   *
+   * 必须在点击事件里**同步**调用：`chrome.permissions.request()` 要求用户手势，await
+   * 一次之后手势就丢了（Chrome 会静默拒绝、连弹框都不出）。所以这里不返回 Promise，
+   * 结果只用来写一行状态：拒绝不等于保存失败，但同步一定拿不到数据，得让人知道原因。
+   */
+  const requestCatalogOrigin = useCallback((rawUrl: string) => {
+    const pattern = originPatternOf(rawUrl);
+    if (!pattern) return;
+    const permissions = chrome.permissions;
+    if (!permissions?.request) return;
+    void permissions
+      .request({ origins: [pattern] })
+      .then((granted) => {
+        if (granted) return;
+        setCatalogStatus({
+          kind: 'bad',
+          text: `没有拿到访问 ${pattern} 的权限。浏览器会直接拦掉这个域名的同步请求 —— 再点一次「立即同步」，在弹出的对话框里选「允许」。`,
+        });
+      })
+      .catch(() => undefined);
+  }, []);
+
+  /**
+   * 把当前品牌注册表导出成 `catalog/` 同构的 zip（`brands.json` + `logos/*`）。
+   *
+   * 这是手工上传的 Logo 唯一能跨机器流通的方式：它只活在这一个浏览器配置里，目录同步
+   * 永远不会碰它（只有 `source: 'remote'` 的条目会被同步更新）。导出成目录包之后，
+   * 把它放到任意 HTTPS 静态空间、在「自填目录地址」填那个地址，别的客户端一次同步就全拿到。
+   */
+  const handleExportBundle = useCallback(async () => {
+    setCatalogBusy(true);
+    setCatalogStatus({ kind: 'idle', text: '正在打包品牌目录…' });
+    try {
+      const brands = await listBrands();
+      if (brands.length === 0) {
+        setCatalogStatus({
+          kind: 'bad',
+          text: '还没有品牌可以导出：先在下面「+ 添加品牌」，或点「立即同步」从目录拉一份。',
+        });
+        return;
+      }
+      const bundle = await buildCatalogBundle(brands, {
+        loadLogo: (brand) => loadBrandLogo(brand),
+      });
+      await downloadBlobInPage(bundle.blob, bundle.fileName);
+      const skipped =
+        bundle.skipped.length > 0
+          ? `；${bundle.skipped.length} 个品牌读不到 Logo，已跳过（${bundle.skipped.join('、')}）`
+          : '';
+      setCatalogStatus({
+        kind: bundle.skipped.length > 0 ? 'bad' : 'ok',
+        text: `已导出 ${bundle.brands.length} 个品牌 → ${bundle.fileName}${skipped}。把 zip 里的 brands.json 与 logos/ 原样传到你的 HTTPS 空间，再在「自填目录地址」填那个目录的地址。`,
+      });
+    } catch (error) {
+      setCatalogStatus({ kind: 'bad', text: `导出失败：${messageOf(error)}` });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, []);
+
   const handleSyncCatalog = useCallback(async () => {
+    // 先申请权限再发请求：自填域名不在 manifest 的 host_permissions 里，没授权时
+    // 请求会被浏览器拦成"CORS 失败"，看上去像对方服务器坏了。
+    requestCatalogOrigin(catalogUrl);
     setCatalogBusy(true);
     setCatalogStatus({ kind: 'idle', text: '正在从 GitHub 读取品牌目录…' });
     try {
@@ -506,7 +574,7 @@ export function OptionsApp(): JSX.Element {
     } finally {
       setCatalogBusy(false);
     }
-  }, [catalogUrl, refreshBrands, refreshCatalogState]);
+  }, [catalogUrl, refreshBrands, refreshCatalogState, requestCatalogOrigin]);
 
   const handleCatalogToggle = useCallback(async (slug: string, enabled: boolean) => {
     const next = await setBrandCatalogSkipped(slug, !enabled);
@@ -801,6 +869,7 @@ export function OptionsApp(): JSX.Element {
                 dirty: savedSnapshot !== '' && catalogUrl.trim() !== (catalogState?.baseUrlUsed ?? catalogUrl.trim()),
                 onUrlChange: setCatalogUrl,
                 onSync: () => void handleSyncCatalog(),
+                onExport: () => void handleExportBundle(),
                 onToggleSync: (slug, enabled) => void handleCatalogToggle(slug, enabled),
               }}
               draft={{
@@ -839,7 +908,12 @@ export function OptionsApp(): JSX.Element {
         dirty={dirty}
         busy={busy}
         status={saveStatus}
-        onSave={() => void saveSettings('bar')}
+        onSave={() => {
+          // 保存自填目录地址的同时顺手申请该域名的权限：这是唯一带用户手势的时刻，
+          // 编辑器里的静默同步没法弹权限框（没有手势，浏览器会直接拒绝）。
+          requestCatalogOrigin(catalogUrl);
+          void saveSettings('bar');
+        }}
         onReset={handleReset}
       />
     </div>

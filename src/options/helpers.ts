@@ -87,3 +87,27 @@ export function endpointHost(endpoint: VisionEndpoint): string {
 export function blankEndpoint(): VisionEndpoint {
   return { baseUrl: '', model: '', apiKey: '' };
 }
+
+/**
+ * 自填目录地址对应的「主机权限」匹配串，例如 `https://cdn.example.com/*`。
+ *
+ * MV3 里扩展页发跨域请求需要该域名在 `host_permissions` 或 `optional_host_permissions`
+ * 里被授权，否则浏览器直接拦掉（服务器给不给 CORS 头都轮不到）。内置的两个镜像写在
+ * manifest 里，自填的新域名只能运行时申请，所以要换算成匹配串。
+ *
+ * 只对 HTTPS 返回（本机 `127.0.0.1` / `localhost` 允许 HTTP，与 `isAllowedCatalogBase()`
+ * 的口径一致）；不是合法 URL 或协议不对就返回 null —— 那时同步本来也会被拒。
+ */
+export function originPatternOf(rawUrl: string): string | null {
+  const raw = rawUrl.trim();
+  if (raw.length === 0) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+  if (url.protocol !== 'https:' && !(loopback && url.protocol === 'http:')) return null;
+  return `${url.protocol}//${url.host}/*`;
+}

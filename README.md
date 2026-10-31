@@ -735,13 +735,13 @@ AliExpressImageEditorExtension/
 │  ├─ content/                   # content-script / image-scanner / url-normalizer / aliexpress-page-adapter
 │  ├─ editor/                    # index.html / App / components（含 ComposePanel）/ state（reducer + history + transform + compose-emit + use-watermark + use-paste-images）/ styles
 │  ├─ options/                   # 设置页：App.tsx（外壳）· options.css · helpers.ts · components/（Tabs/Card/Drawer/Pager/SaveBar…）· sections/（账号/AI 视觉/水印/品牌）
-│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / settings / watermark-store / text-defaults / code-placement / logo-placement / error-log / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
-│  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / text-fit / planner / bind-materials / vision-binder
+│  ├─ services/                  # indexed-db / server-api / cutout-client / cutout-queue / exporter / downloader / zip / settings / watermark-store / text-defaults / code-placement / logo-placement / error-log / upload-images / text-measure / image-thumbnail / vision-client / compose-cache
+│  │  ├─ composition/            # 模板排版：template-schema / rect / alpha / alpha-scan / alpha-probe / coverage / solve-hero / solve-box / solve-fill / fit-canvas-fill / measure-layout / arrange-cascade / text-fit / planner / bind-materials / vision-binder
 │  │  │  └─ templates/           # 版式模板 JSON + 注册表（id@version）
-│  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync
+│  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 51 文件 / 821 个单元测试（不联网）
+│  ├─ unit/                      # 53 文件 / 842 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -772,7 +772,14 @@ AliExpressImageEditorExtension/
   点「编辑」才换成名称/关键词输入框与 保存 / 删除 / 收起；保存、删除后自动收起。
   「+ 添加品牌」也收在一个按钮后面，添加成功即折回。
 - **自填镜像**：国内拉 GitHub 不稳时，把仓库 `catalog/` 镜像到自己的域名，填在选项页「自填目录地址」里，
-  同步会先试它、失败再回落内置镜像。只接受 HTTPS（本机 `127.0.0.1` 可用 HTTP）。
+  同步会先试它、失败再回落内置镜像。只接受 HTTPS（本机 `127.0.0.1` 可用 HTTP）。首次保存或同步
+  这个域名时浏览器会弹「允许访问该网站」——**必须点允许**，否则请求会被直接拦掉（10.19.0 起走
+  `optional_host_permissions` 运行时授权；编辑器里那段静默同步没有点击手势，所以这个域名必须先在这里授权过一次）。
+- **手工品牌可以跨机器**：手工上传的 Logo 只存在本机配置里，目录同步永远不碰它，所以别的机器看不到。
+  点「导出目录包」得到 `brand-catalog-YYYY-MM-DD.zip`，里面就是与仓库 `catalog/` 完全同构的
+  `brands.json` + `logos/*`；传到任意 HTTPS 空间、在另一台机器的「自填目录地址」填那个地址、
+  同步一次，手工品牌就成了目录品牌。全流程不需要服务器（目录本身就是交换格式）。
+  读不到图片的品牌会被跳过并在提示里点名，不会写进一个指向空文件的条目。
 - 真相源仍是**本地注册表**：拉不到目录时照旧用工牌缓存，不阻塞任何操作。
 - 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
   目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
@@ -929,7 +936,7 @@ AliExpressImageEditorExtension/
 17. 品牌目录同步是**拉取式**的：打开选项页或编辑器时才同步，24 小时内不重复请求；
     只认 `https`（本机除外）；先试选项页里自填的目录地址，再试 `raw.githubusercontent.com` 与
     `cdn.jsdelivr.net` 两个内置镜像；失败不会自动重试，也没有后台定时任务。
-    自填的地址如果换了域名，还需要在 `host_permissions` 里放行（10.8.0 未做动态授权）。
+    自填的地址换了域名要重新授权一次跨域（10.19.0 起走运行时授权，见第 20 条）。
     本地注册表是真相源 —— 同名手工品牌、你在选项页改过的远程品牌、被取消勾选的品牌都不会被覆盖，
     目录里删掉的品牌只移除条目、已下载的图片仍保留。
 18. 本地缓存**没有 TTL**，失效只靠「什么变了」。两个键的范围不一样（10.12.0 起）：AI 识别结论按
@@ -941,9 +948,12 @@ AliExpressImageEditorExtension/
 19. 品牌 Logo 的锁定只挡**画布上的误操作**（点不中、拖不动），不挡删除：锁着的 Logo 仍可在图层面板点 ✕
     删掉，切品牌也会先删掉旧 Logo。位置记忆按品牌存在 `aiee:logo-placement`，没有"恢复默认位置"的按钮 ——
     拖歪了只能自己拖回去（清了这条存储就会回到右下角默认位）。
-20. 自填镜像地址**不会**自动申请跨域权限：填的是一个新域名、而它又不在 `host_permissions` 里，
-    请求会被浏览器拦下（表现就是同步失败）。要嘛把域名配进 manifest，要嘛继续用内置的 GitHub /
-    jsDelivr 两个镜像。**动态申请权限（`optional_host_permissions`）是下一步的事，本次没做。**
+20. 自填镜像地址从 10.19.0 起走**运行时授权**：`manifest.json` 声明了
+    `optional_host_permissions: ["https://*/*"]`，选项页在「保存更改 / 立即同步」前调
+    `chrome.permissions.request()`。所以首次用某个新域名时会弹一次「允许访问该网站」，**必须点允许**
+    （拒绝后提示会写"没有拿到访问 … 的权限"）。两点残余：① 拒绝过一次就还会被拦，要在
+    `chrome://extensions` 的站点访问权限里手动改；② 编辑器里那段**静默同步没有点击手势**，弹不出
+    权限框 —— 所以新域名必须先在选项页手动授权一次，否则编辑器侧会一直同步不上（表现为"没同步"）。
 21. 视觉接口最多 **5 条**，且**任何失败都算失败**：401、500、超时、返回不是 JSON 一律切下一条，
     不做"这个错误值得重试"的区分（分不清就会让一个 Key 过期的网关把整条链堵死）。
     代价是主接口真出问题时先看到的仍是第一条的错误，其余原因附在括号里。
@@ -972,6 +982,11 @@ AliExpressImageEditorExtension/
     就是用来对账的。
 28. `min_pictures` 是模板自己声明的底线（拼贴 = 2）。低于它时**不出图**，只给原因；这时要么补素材，
     要么换「主图 + 包装盒」那个模板。它不判断"素材够不够好看"——三张同姿态的图仍会被当成三张图。
+29. 手工上传的品牌**不会自动跨机器**：它存在本机 `chrome.storage.local` + IndexedDB 里，目录同步按
+    设计只碰 `source: 'remote'` 的条目。10.19.0 起可以「导出目录包」（与 `catalog/` 同构的 zip）放到
+    自己的 HTTPS 空间，再从别的机器填「自填目录地址」同步取回 —— 但那是**手动搬运**：没有后台定时
+    任务、没有自动上传，导出与上传都要你自己做一次。导出时读不到图片的品牌会跳过（提示里点名），
+    派生出的 slug 一旦被别的机器同步过一次就**不要改名**（改 id = 换新品牌，历史画布断图）。
 
 ---
 
@@ -980,7 +995,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（53 文件 / 826 测试，其中 821 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（55 文件 / 847 测试，其中 842 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1010,5 +1025,6 @@ AliExpressImageEditorExtension/
 | 成品观感 + 底线两张图（10.18.0） | **仅自动化验证**（12 个单测）：`unionArea` 的容斥（相邻不重复、重叠只算一次）、并集/最紧留白/重心的量法、遮挡 50%、被画布切掉一半的 `cropped`、`fitCanvasFill` 在区间内不动/太满缩回/太空放大/层级差只收最小的那张/单张不做层级差、拼贴模板只有 hero 时发 `not_enough_pictures` 且不出图、两张图时 `diagnostics.canvasFill` 与 `diagnostics.aesthetic` 都有账。**"这页到底好看没好看"仍要眼睛**：三张图是否真的拉开层级、四边留白是否齐、有没有人被裁掉半个头，步骤见 manual-test 5.111–5.112） |
 | 识别与排版合成一个按钮（10.18.1） | **仅自动化验证**（`typecheck` + 815 测试不变；`src/editor/components/` 与面板接线没有单测，这是纯交互重构）。**真机必须走一遍**：面板里只有一个主按钮、点它先「正在识别素材角色…」再「正在排版…」、第二次打开不重发视觉请求、「重新识别素材角色」那条链接会真的重问、手工改过主体后生成不再被 AI 覆盖、网关挂掉时画布照样出图，步骤见 manual-test 5.64 |
 | 面板折叠 + 换模板不丢编号/Logo（10.18.2） | **仅自动化验证**（6 个 `compose-emit` 单测锁 `carriedLayers()`：只搬 brand、plan 没编号时搬编号、plan 已有编号时不重复搬、trim 后比较、空编号不搬、其它文字永不搬）。**折叠与提示的真机验证**：面板只剩按钮和下拉框、两行摘要能点开、切换模板生成后编号与 Logo 仍在、识别到品牌但本机没有 Logo 时应弹红字指引，步骤见 manual-test 5.113–5.115 |
+| 导出目录包 + 自填域名授权（10.19.0） | **仅自动化验证**（6 个 `zip` 单测：`crc32` 参考值、写出的包能按中央目录读回、size/crc 记录正确、包首尾是 `PK\x03\x04`/`PK\x05\x06`、重复路径抛、空包 22 字节；15 个导出单测：magic bytes 判扩展名、`brandSlug` 的 ASCII 化与 `brand-<id 尾段>` 回落、slug 冲突加 `-2`、缺图/非图片记进 `skipped`、全空抛错、`sha256` 与 `rev` 一致、zip 条目顺序、`version` 默认 epoch 秒、**且导出的 `brands.json` 能被真正的 `parseBrandCatalog()` 反解**）。**真机链路未跑过**：导出的 zip 放到自建 HTTPS 目录 → 另一台机器填地址 → 同步能拿到手工品牌；首次会弹「允许访问该网站」，步骤见 manual-test 5.117–5.118） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

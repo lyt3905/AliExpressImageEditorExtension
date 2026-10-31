@@ -24,6 +24,8 @@ export interface BrandSectionProps {
     dirty: boolean;
     onUrlChange: (value: string) => void;
     onSync: () => void;
+    /** 把当前注册表导出成 catalog/ 同构的 zip（手工品牌跨机器流通的唯一途径）。 */
+    onExport: () => void;
     onToggleSync: (slug: string, enabled: boolean) => void;
   };
   draft: {
@@ -92,6 +94,10 @@ export function BrandSection({
 
   const editing = edit.id === null ? null : brands.find((meta) => meta.id === edit.id) ?? null;
   const catalogState = catalog.state;
+  // 目录来的 vs 手工上传的：手工品牌永远不会被目录同步碰到，所以这里必须分开数，
+  // 否则「13 个品牌」看不出另有一批只属于这台机器的。
+  const remoteCount = brands.filter((meta) => meta.source === 'remote').length;
+  const localCount = brands.length - remoteCount;
   const catalogSummary =
     catalogState === null
       ? '读取中…'
@@ -106,8 +112,9 @@ export function BrandSection({
       title="品牌商标"
       summary={
         <>
-          <span>{brands.length} 个品牌</span>
-          <span style={{ marginLeft: 8 }}>{catalogSummary}</span>
+          <span>
+            {brands.length} 个品牌（目录 {remoteCount} / 手工 {localCount}）
+          </span>
         </>
       }
       actions={
@@ -127,6 +134,14 @@ export function BrandSection({
         </div>
         <button type="button" className="opt-link" onClick={() => setCatalogOpen((previous) => !previous)}>
           {catalogOpen ? '收起设置' : '同步设置'}
+        </button>
+        <button
+          type="button"
+          disabled={catalog.busy}
+          onClick={catalog.onExport}
+          title="把当前全部品牌（含手工上传的）导出成 catalog/ 同构的 zip：brands.json + logos/*。传到自己的 HTTPS 空间后，在「自填目录地址」填那个地址，别的客户端同步一次就能拿到手工品牌。"
+        >
+          导出目录包
         </button>
         <button type="button" className="primary" disabled={catalog.busy} onClick={catalog.onSync}>
           {catalog.busy ? '正在同步…' : '立即同步'}
@@ -155,6 +170,13 @@ export function BrandSection({
             目录来自仓库的 catalog/brands.json：仓库里加一个品牌、换一张 Logo，这里点一次同步就能拿到，
             不用重新打包插件。打开编辑器时也会自动同步（24 小时内不重复请求）。目录里的品牌 id 固定
             （remote-&lt;slug&gt;），所以更新 Logo 不会让历史画布断图。
+          </p>
+          <p className="opt-hint">
+            <strong>手工上传的品牌只在本机</strong>：它存在这个浏览器配置里，目录同步永远不会碰它，
+            所以别的机器看不到。要让它跨机器流通，点上面的「导出目录包」——导出的 zip 与仓库 catalog/
+            同构（brands.json + logos/*），传到自己的 HTTPS 空间后，在「自填目录地址」填那个地址，别的
+            客户端同步一次就全有了。首次保存/同步该域名时浏览器会问一次「允许访问该网站」，必须点允许，
+            否则请求会被直接拦掉。
           </p>
         </>
       ) : (
