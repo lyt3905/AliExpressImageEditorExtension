@@ -16,6 +16,7 @@ import {
   matchBrandByTitle,
   matchBrandByTitleDetailed,
   parseBrandTerms,
+  termMatchesTitle,
 } from '../../src/services/brand-store';
 
 function brand(partial: Partial<BrandMeta> & { id: string }): BrandMeta {
@@ -103,16 +104,65 @@ describe('matchBrandByTitleDetailed', () => {
     expect(matchBrandByTitleDetailed(brands, 'transformation ms-toys robot')?.term).toBe('MS-TOYS');
   });
 
-  it('exposes substring hits on short keywords — the usual false positive', () => {
-    // This is the case a seller cannot explain from the brand name alone:
-    // "FT" as a keyword claims any title that contains those two letters.
+  it('exposes the keyword that stood alone — even a two-letter one', () => {
+    // "FT" as a keyword is still a liability (any title with a bare FT claims it),
+    // but at least it has to appear as its own word: `FT Ratchet` counts,
+    // `FansToys` does not.
     const brands = [brand({ id: 'f', name: 'FansToys', keywords: ['FT'] })];
     const title = 'Hot Sale Transformation FansToys MP FM-04 FM04 FT Ratchet Doc Action Figure';
-    const match = matchBrandByTitleDetailed(brands, title);
-    expect(match?.term).toBe('FT');
+    expect(matchBrandByTitleDetailed(brands, title)?.term).toBe('FT');
   });
 
   it('returns null when nothing matches', () => {
     expect(matchBrandByTitleDetailed([brand({ id: 'a', keywords: ['银河社'] })], 'MP-44 Optimus')).toBeNull();
+  });
+});
+
+/**
+ * 10.21.1：拉丁字母关键词必须**整词出现**。
+ *
+ * 子串匹配把 `Fans` 认成 `FansHobby`、把 `Hasbro` 认成 `HasbroStudio` ——
+ * 字母一样，品牌不一样。中文没有词边界，所以只含中文的关键词仍然是子串。
+ */
+describe('termMatchesTitle', () => {
+  const fansHobbyTitle =
+    'In Stock Transformation FansHobby MB-23A MB23A Fright Storm Devastator Third-Party Action Figures Collection Gifts';
+
+  it('does not let a keyword match inside a longer word', () => {
+    expect(termMatchesTitle(fansHobbyTitle, 'Fans')).toBe(false);
+    expect(matchBrandByTitleDetailed([brand({ id: 'f', keywords: ['Fans'] })], fansHobbyTitle)).toBeNull();
+  });
+
+  it('still matches the keyword when it stands on its own', () => {
+    expect(termMatchesTitle('FansToys FT-04 Scoria', 'FansToys')).toBe(true);
+    expect(termMatchesTitle('Fans Toys FT-04 Scoria', 'Fans Toys')).toBe(true);
+    expect(termMatchesTitle('Fans, FT-04 Scoria', 'Fans')).toBe(true);
+    expect(termMatchesTitle('Fans-04 Scoria', 'Fans')).toBe(true);
+  });
+
+  it('keeps scanning after a glued hit', () => {
+    expect(termMatchesTitle('FansHobby vs Fans Toys', 'Fans')).toBe(true);
+  });
+
+  it('keeps substring matching for Chinese keywords', () => {
+    // 中文没有空格，也不会把两个字粘成一个词
+    expect(termMatchesTitle('现货银河社变形玩具模型', '银河社')).toBe(true);
+    expect(termMatchesTitle('变形金刚 孩之宝 正版', '孩之宝')).toBe(true);
+  });
+
+  it('treats Chinese text next to a Latin keyword as a boundary', () => {
+    expect(termMatchesTitle('Hasbro变形金刚核心级', 'Hasbro')).toBe(true);
+    expect(termMatchesTitle('HasbroStudio 出品', 'Hasbro')).toBe(false);
+  });
+
+  it('is not fooled by a longer latin word carrying the prefix', () => {
+    expect(termMatchesTitle('threezeroes edition', 'threezero')).toBe(false);
+    expect(termMatchesTitle('threezero 1/6 figure', 'threezero')).toBe(true);
+  });
+
+  it('ignores empty and blank keywords', () => {
+    expect(termMatchesTitle('anything', '')).toBe(false);
+    expect(termMatchesTitle('anything', '   ')).toBe(false);
+    expect(termMatchesTitle('', 'Fans')).toBe(false);
   });
 });

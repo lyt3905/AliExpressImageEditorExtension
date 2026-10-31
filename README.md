@@ -741,7 +741,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 54 文件 / 863 个单元测试（不联网）
+│  ├─ unit/                      # 54 文件 / 870 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -758,13 +758,16 @@ AliExpressImageEditorExtension/
 - 目录 = `catalog/brands.json` + `catalog/logos/<slug>.png`；加品牌/换图的步骤见
   [`catalog/README.md`](catalog/README.md)，改完跑 `npm run catalog:bump`（自动算 sha256、version +1）。
 - **每条品牌只有两样东西**：`name`（显示名，用来区分不同品牌，也显示在编辑器下拉里）和
-  `keywords`（**唯一**参与标题匹配的列表，不区分大小写的子串判断）。名称不参与匹配 ——
+  `keywords`（**唯一**参与标题匹配的列表）。名称不参与匹配 ——
   叫「魔方」的品牌不该因为标题里出现「魔方」就被认领，想让哪个叫法能命中就把它写进关键词。
   关键词留空 = 永不自动识别，只能在编辑器里手动选品牌。
+- **匹配是「整词」，不是子串（10.21.1）**：中文关键词按子串（「现货银河社变形玩具」里有「银河社」），
+  拉丁字母关键词必须**整词出现** —— `Fans` 不会命中 `FansHobby`、`Hasbro` 不会命中 `HasbroStudio`
+  （`Fans Toys`、`Fans,`、`Fans-04`、`Hasbro变形金刚` 都算）。所以关键词要写得够具体。
 - **命中会说明是哪个关键词**：自动识别出品牌时，编辑器状态栏写「已按标题识别品牌：X（命中关键词「Y」）」。
-  子串匹配很容易出意外（`FT`、`MP` 这类两三个字母的词能钻过任何标题），没有这句话，
+  短关键词仍是隐患（`FT`、`MP` 这类两三个字母的词，只要在标题里单独站着就能钻过去），没有这句话，
   卖家只能看到「这个标题怎么认成了那个品牌」而无法判断该改哪个词。
-- 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」，也支持每个远程品牌单独关掉同步；
+- 扩展侧：选项页「品牌商标 → 品牌目录（GitHub）」里有「立即同步」；
   **打开编辑器时**也会静默同步（24 小时内不重复请求；同一标签页最多试一次，失败不弹窗，只记录在选项页）。
 - 这一块在页面上只占**一行**：`品牌目录（GitHub）　已同步 v3 · 时间 · 镜像　[镜像设置] [立即同步]`。
   说明文字和「自填目录地址」收在「镜像设置」后面，点开才出现；同步结果与上次失败原因仍然直接显示（那是操作反馈）。
@@ -1010,7 +1013,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（56 文件 / 868 测试，其中 863 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（56 文件 / 875 测试，其中 870 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1042,6 +1045,7 @@ AliExpressImageEditorExtension/
 | 面板折叠 + 换模板不丢编号/Logo（10.18.2） | **仅自动化验证**（6 个 `compose-emit` 单测锁 `carriedLayers()`：只搬 brand、plan 没编号时搬编号、plan 已有编号时不重复搬、trim 后比较、空编号不搬、其它文字永不搬）。**折叠与提示的真机验证**：面板只剩按钮和下拉框、两行摘要能点开、切换模板生成后编号与 Logo 仍在、识别到品牌但本机没有 Logo 时应弹红字指引，步骤见 manual-test 5.113–5.115 |
 | 品牌目录：目录即权威（10.21.0） | **仅自动化验证**（`typecheck` + 56 文件 / 868 测试）：`planBrandSync` 不再有 `skipped` / `conflicts` 两个字段，新增两条断言 —— 目录顶掉同名手工品牌（`toDownload` 有它、`toRemove` 有手工那条）、本机改过名也不阻止下载；`mergeRemoteBrands` 的 `edited` 豁免被删，`tests/unit/brand-store-merge.test.ts` 改成「目录覆盖本机措辞」与「`removeIds` 点名的条目一律落地（blob 仍保留）」。**真机对照见 manual-test 5.121** |
 | 导出目录包 + 自填域名授权（10.19.0） | **仅自动化验证**（6 个 `zip` 单测：`crc32` 参考值、写出的包能按中央目录读回、size/crc 记录正确、包首尾是 `PK\x03\x04`/`PK\x05\x06`、重复路径抛、空包 22 字节；15 个导出单测：magic bytes 判扩展名、`brandSlug` 的 ASCII 化与 `brand-<id 尾段>` 回落、slug 冲突加 `-2`、缺图/非图片记进 `skipped`、全空抛错、`sha256` 与 `rev` 一致、zip 条目顺序、`version` 默认 epoch 秒、**且导出的 `brands.json` 能被真正的 `parseBrandCatalog()` 反解**）。**真机链路未跑过**：导出的 zip 放到自建 HTTPS 目录 → 另一台机器填地址 → 同步能拿到手工品牌；首次会弹「允许访问该网站」，步骤见 manual-test 5.117–5.118） |
+| 关键词要整词（10.21.1） | **仅自动化验证**（`termMatchesTitle()` 的 7 组单测 + `brand-store.test.ts` 共 20 例）：`Fans` 不命中 `FansHobby`、命中 `Fans Toys`/`Fans,`/`Fans-04`、黏连一次后继续往后找、中文关键词仍是子串（`现货银河社变形玩具`）、`Hasbro变形金刚` 命中而 `HasbroStudio` 不命中、`threezero` vs `threezeroes`、空关键词与空标题都返回 false。**真机对照见 manual-test 5.122** |
 | 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

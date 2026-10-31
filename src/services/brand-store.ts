@@ -250,23 +250,61 @@ export interface BrandTitleMatch {
   term: string;
 }
 
+/** ASCII letters and digits glue two words together in a product title. */
+const WORD_CHAR = /[a-z0-9]/;
+
 /**
- * First brand whose any term appears in the title (case-insensitive), plus the
- * term that matched.
+ * Does `term` appear in `title` as a **whole word**?
  *
- * The term matters: a substring match on a short keyword is easy to get wrong
- * ("FT" / "MP" / "Doc" all sit inside ordinary figure titles), and "为什么这个
- * 标题命中了这个品牌" is unanswerable from the brand name alone. Callers surface
- * it so the seller can see — and fix — the keyword instead of guessing.
+ * Plain substring matching is wrong for Latin keywords: `Fans` sits inside
+ * `FansHobby`, `Hasbro` inside `HasbroStudio`, `threezero` inside `threezeroes`
+ * — different brands, same letters. So an ASCII keyword only counts when the
+ * character before and after it are not letters/digits (`Fans Toys`, `Fans,`,
+ * `Fans-`). Chinese has no word boundaries: 「银河社」inside「现货银河社变形玩具」is
+ * the brand, so CJK-only keywords keep the substring rule.
+ */
+export function termMatchesTitle(title: string, term: string): boolean {
+  const needle = term.trim().toLowerCase();
+  if (!needle) return false;
+  const haystack = title.toLowerCase();
+  if (!haystack) return false;
+
+  const first = needle[0] ?? '';
+  const last = needle[needle.length - 1] ?? '';
+  const needLeft = WORD_CHAR.test(first);
+  const needRight = WORD_CHAR.test(last);
+  // No ASCII letters at all → no word boundaries to respect.
+  if (!needLeft && !needRight) return haystack.includes(needle);
+
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return false;
+    const before = at > 0 ? (haystack[at - 1] ?? '') : '';
+    const after = haystack[at + needle.length] ?? '';
+    const leftOk = !needLeft || !WORD_CHAR.test(before);
+    const rightOk = !needRight || !WORD_CHAR.test(after);
+    if (leftOk && rightOk) return true;
+    // Keep scanning: `Fans` may appear glued once and stand alone later.
+    from = at + 1;
+  }
+}
+
+/**
+ * First brand whose any term appears in the title, plus the term that matched.
+ *
+ * The term matters: a match on a short keyword is easy to get wrong ("FT" / "MP"
+ * / "Doc" all sit inside ordinary figure titles), and "为什么这个标题命中了这个
+ * 品牌" is unanswerable from the brand name alone. Callers surface it so the
+ * seller can see — and fix — the keyword instead of guessing.
  */
 export function matchBrandByTitleDetailed(
   brands: readonly BrandMeta[],
   title: string,
 ): BrandTitleMatch | null {
-  const haystack = title.toLowerCase();
   for (const brand of brands) {
     for (const term of brandTerms(brand)) {
-      if (term && haystack.includes(term.toLowerCase())) return { brand, term };
+      if (termMatchesTitle(title, term)) return { brand, term };
     }
   }
   return null;

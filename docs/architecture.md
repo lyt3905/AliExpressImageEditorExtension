@@ -1384,6 +1384,9 @@ npm run catalog:bump    # version + 1，然后同上
 `brandTerms()` 于是只剩一行 `return brand.keywords;`。想让显示名也能命中，就把它抄进关键词 ——
 这件事是显式的、可见的、能被 `catalog:bump` 和选项页看见的，而不是藏在函数里的隐式行为。
 
+**「命中」的判据见 §11.15**：拉丁字母关键词必须整词出现，中文关键词仍是子串 ——
+否则 `Fans` 会把 `FansHobby` 认成 `FansToys`。
+
 **旧数据不降级**（两个入口，都在读的时候折，不在写的时候折）：
 
 - `brand-store.ts`：`listBrands()` 把老条目上残留的 `aliases` 用 `foldLegacyTerms()` 并进
@@ -1471,6 +1474,38 @@ logos/<id>.<ext>
 - **编辑器里的静默同步没有手势**：打开编辑器时那段同步发生在 effect 里，无法弹权限框。所以
   自填域名必须在选项页**手动授权过一次**，否则编辑器里的静默同步会一直失败（用户看得见的
   是"没同步"，不是报错）。
+
+### 11.15 关键词要整词出现：`Fans` 不是 `FansHobby`
+
+10.21.0 之前，匹配是「标题里**包含**这个关键词」的不分大小写子串判断。中文没有词边界，这条
+规则对中文是对的（「现货银河社变形玩具」里确实有「银河社」）。但对拉丁字母是错的：
+
+```
+标题：In Stock Transformation FansHobby MB-23A Fright Storm Devastator …
+关键词：Fans      →  命中（"Fans" 确实是 "FansHobby" 的前四个字母）
+```
+
+`FansHobby` 和 `FansToys` 是两个不同的第三方厂牌，字母一样不代表同一个品牌。同类的坑还有
+`Hasbro` / `HasbroStudio`、`threezero` / `threezeroes`、`DLX` / `DLXStudio`。
+
+10.21.1 起 `termMatchesTitle()` 接管判断，规则按"关键词两头有没有字母数字"分两种：
+
+| 关键词 | 判据 | 例 |
+| --- | --- | --- |
+| 纯中文（如 `银河社`、`孩之宝`） | 子串包含 | `现货银河社变形玩具` ✅ |
+| 含拉丁字母（如 `Fans`、`Hasbro`、`MS-TOYS`） | **整词**：前后一个字符不能是 `[a-z0-9]` | `FansHobby` ❌ / `Fans Toys` ✅ / `Fans,` ✅ / `Fans-04` ✅ / `Hasbro变形金刚` ✅ |
+
+三个实现细节：
+
+- 只有**关键词的首字符/末字符**是字母数字时才要求那一侧的边界 —— `S.H.Figuarts` 两头都是字母
+  所以两头都要边界，`银河 Baby` 这种混排只按它真正需要的部分卡；
+- 中文、空格、标点、连字符、行首行尾都算边界，所以 `Hasbro变形金刚` 能命中（中文字符不是
+  `[a-z0-9]`）；
+- 命中一处黏连不算失败，会**继续往后找**：`FansHobby vs Fans Toys` 仍然命中 `Fans`。
+
+代价是**关键词得更具体**：`Fans` 这种词从此只能命中它自己站着出现的地方。想稳稳命中，
+就把完整写法写进 `keywords`（`FansToys` / `Fans Toys`）。`catalog/README.md` 里同步写了这条
+和数据侧的对照表。
 
 ## 12. 本地缓存：同一套素材不重算第二遍
 
