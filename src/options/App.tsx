@@ -32,7 +32,6 @@ import {
 } from '../services/watermark-store';
 import {
   loadBrandCatalogState,
-  setBrandCatalogSkipped,
   type BrandCatalogState,
 } from '../services/brand-catalog/state';
 import { syncBrandCatalog } from '../services/brand-catalog/sync';
@@ -583,8 +582,6 @@ export function OptionsApp(): JSX.Element {
         `未变 ${result.plan.unchanged.length}`,
         `移除 ${result.removed.length}`,
       ];
-      if (result.plan.conflicts.length > 0) parts.push(`本地优先 ${result.plan.conflicts.length}`);
-      if (result.plan.skipped.length > 0) parts.push(`已排除 ${result.plan.skipped.length}`);
       const failure = result.failures.map((entry) => `${entry.slug}（${entry.message}）`).join('、');
       setCatalogStatus({
         kind: result.failures.length > 0 ? 'bad' : 'ok',
@@ -596,17 +593,6 @@ export function OptionsApp(): JSX.Element {
       setCatalogBusy(false);
     }
   }, [catalogUrl, refreshBrands, refreshCatalogState, requestCatalogOrigin]);
-
-  const handleCatalogToggle = useCallback(async (slug: string, enabled: boolean) => {
-    const next = await setBrandCatalogSkipped(slug, !enabled);
-    setCatalogState(next);
-    setCatalogStatus({
-      kind: 'idle',
-      text: enabled
-        ? `「${slug}」会跟随目录更新`
-        : `「${slug}」已排除：同步既不覆盖也不删除它当前的 Logo`,
-    });
-  }, []);
 
   // ---- 缩略图的 object URL（品牌 + 水印共用一个池）
   useEffect(() => {
@@ -892,7 +878,6 @@ export function OptionsApp(): JSX.Element {
                 onUrlChange: setCatalogUrl,
                 onSync: () => void handleSyncCatalog(),
                 onExport: () => void handleExportBundle(),
-                onToggleSync: (slug, enabled) => void handleCatalogToggle(slug, enabled),
               }}
               draft={{
                 names: brandDraftNames,

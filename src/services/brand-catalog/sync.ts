@@ -180,7 +180,6 @@ export async function syncBrandCatalog(
     version: complete ? fetched.catalog.version : state.version,
     syncedAt: now(),
     baseUrlUsed: fetched.baseUrl,
-    skipped: state.skipped,
     lastError: failures.length > 0 ? `${failures.length} 个品牌同步失败` : null,
   };
   await saveState(next).catch(() => undefined);

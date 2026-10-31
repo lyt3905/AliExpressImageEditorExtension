@@ -300,9 +300,8 @@ export interface BrandMeta {
    * Where this entry came from. Missing means `local` — the seller uploaded the
    * logo on the Options page, or the entry predates the catalog.
    *
-   * The distinction is load-bearing: only `remote` entries may be updated or
-   * removed by a catalog sync, so a hand-uploaded logo is never overwritten by a
-   * list living in a GitHub repo.
+   * 10.21.0 起这只是一个**来源标注**，不再是一种特权：目录同步会整条覆盖同 id 的条目，
+   * 也会删掉与目录品牌同名的本机条目。想长期保留本机改动 → 改进目录。
    */
   source?: 'local' | 'remote';
   /** Slug in `catalog/brands.json` (remote entries only). Stable across syncs. */
@@ -312,12 +311,6 @@ export interface BrandMeta {
    * when this differs, which is what keeps the 24h background sync free.
    */
   remoteRev?: string;
-  /**
-   * The seller edited name/keywords by hand after a sync. Kept so the
-   * Options page can say so, and so a later catalog change can overwrite it
-   * knowingly instead of silently.
-   */
-  edited?: boolean;
 }
 
 // ---------------------------------------------------------------- cutout

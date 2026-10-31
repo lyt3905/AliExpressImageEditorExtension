@@ -26,8 +26,7 @@ export interface BrandSectionProps {
     onSync: () => void;
     /** 把当前注册表导出成 catalog/ 同构的 zip（手工品牌跨机器流通的唯一途径）。 */
     onExport: () => void;
-    onToggleSync: (slug: string, enabled: boolean) => void;
-  };
+    };
   draft: {
     names: Record<string, string>;
     keywords: Record<string, string>;
@@ -216,7 +215,6 @@ export function BrandSection({
         <div className="opt-list">
           {visible.map((meta) => {
             const keywords = meta.keywords;
-            const skipped = meta.slug ? (catalogState?.skipped.includes(meta.slug) ?? false) : false;
             return (
               <div className="opt-row" key={meta.id}>
                 <span className="opt-row__thumb">
@@ -234,25 +232,6 @@ export function BrandSection({
                       : `${keywords.length} 个关键词 · ${keywords.join('、')}`}
                   </span>
                 </div>
-                {/* 来源标签是"这个品牌从哪来"，不是提示，所以不带图标 */}
-                <span
-                  className="opt-brand__tag"
-                  title={
-                    meta.source === 'remote'
-                      ? '来自仓库的 catalog/brands.json，跟随目录同步'
-                      : '你手工上传的，目录同步不会覆盖或删除它'
-                  }
-                >
-                  {meta.source === 'remote' ? '来自目录' : '手工上传'}
-                </span>
-                {skipped ? (
-                  <span
-                    className="opt-brand__tag opt-brand__tag--warn"
-                    title="你取消勾选了「跟随目录同步」：同步既不覆盖也不删除它"
-                  >
-                    已暂停同步
-                  </span>
-                ) : null}
                 <button type="button" disabled={busy} onClick={() => edit.onOpen(meta.id)}>
                   编辑
                 </button>
@@ -331,20 +310,7 @@ export function BrandSection({
               <dd>
                 {editing.width}×{editing.height}
               </dd>
-              <dt>来源</dt>
-              <dd>{editing.source === 'remote' ? `目录 · ${editing.slug ?? ''}` : '本地手工上传'}</dd>
             </dl>
-            {editing.source === 'remote' && editing.slug ? (
-              <label className="opt-watermark__radio">
-                <input
-                  type="checkbox"
-                  checked={!(catalogState?.skipped ?? []).includes(editing.slug)}
-                  disabled={catalog.busy}
-                  onChange={(event) => catalog.onToggleSync(editing.slug as string, event.target.checked)}
-                />
-                跟随目录同步（取消勾选后，同步既不覆盖也不删除这个品牌当前的 Logo）
-              </label>
-            ) : null}
           </>
         ) : null}
       </Drawer>

@@ -100,17 +100,18 @@ describe('mergeRemoteBrands', () => {
     });
   });
 
-  it('lets a renamed catalog brand keep the seller wording', async () => {
+  /*
+    10.21.0：目录即权威。以前 `edited: true` 会让同步保留本机措辞，现在整条覆盖 ——
+    本机改动立刻生效，目录发新版就盖掉它。想长期保留 → 改进目录。
+  */
+  it('overwrites a locally edited brand with the catalog copy', async () => {
     await mergeRemoteBrands({ upserts: [upsert('morph-toys', { name: 'Morph Toys' })], removeIds: [] });
-    // `updateBrand` sets `edited` when the seller touches a remote brand.
-    const edited = (await listBrands()).map((entry) => ({
-      ...entry,
-      name: '摩变玩具',
-      keywords: ['摩变'],
-      edited: true,
-    }));
     await (globalThis as unknown as { chrome: typeof chrome }).chrome.storage.local.set({
-      [STORAGE_KEYS.brands]: edited,
+      [STORAGE_KEYS.brands]: (await listBrands()).map((entry) => ({
+        ...entry,
+        name: '摩变玩具',
+        keywords: ['摩变'],
+      })),
     });
 
     const merged = await mergeRemoteBrands({
@@ -118,12 +119,11 @@ describe('mergeRemoteBrands', () => {
       removeIds: [],
     });
     expect(merged[0]).toMatchObject({
-      name: '摩变玩具',
-      keywords: ['摩变'],
-      // The logo still refreshes — only the wording is protected.
+      name: 'Morph Toys',
+      keywords: ['MT'],
       remoteRev: 'rev-3',
-      edited: true,
     });
+    expect(merged[0]).not.toHaveProperty('edited');
   });
 
   it('drops the registry row but keeps the blob when a brand leaves the catalog', async () => {
@@ -139,10 +139,15 @@ describe('mergeRemoteBrands', () => {
     expect(await getBlob(remoteLogoBlobId('gone'))).not.toBeNull();
   });
 
-  it('never removes a local brand even if its id is in removeIds', async () => {
+  /*
+    10.21.0 起 `removeIds` 不再按来源过滤：同步计划会把"目录里已经消失的条目"和
+    "与目录品牌同名的手工上传条目"都放进来，两条都该落地。blob 仍然留着。
+  */
+  it('removes whatever ids the plan names, including a hand-uploaded one', async () => {
     const local = await saveBrand({ file: pngBlob(), name: 'Hand Made' });
     const merged = await mergeRemoteBrands({ upserts: [], removeIds: [local.id] });
-    expect(merged.map((entry) => entry.id)).toEqual([local.id]);
+    expect(merged.map((entry) => entry.id)).toEqual([]);
+    expect(await getBlob(local.logoBlobId)).not.toBeNull();
   });
 });
 

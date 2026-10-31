@@ -741,7 +741,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 54 文件 / 859 个单元测试（不联网）
+│  ├─ unit/                      # 54 文件 / 863 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -768,14 +768,14 @@ AliExpressImageEditorExtension/
   **打开编辑器时**也会静默同步（24 小时内不重复请求；同一标签页最多试一次，失败不弹窗，只记录在选项页）。
 - 这一块在页面上只占**一行**：`品牌目录（GitHub）　已同步 v3 · 时间 · 镜像　[镜像设置] [立即同步]`。
   说明文字和「自填目录地址」收在「镜像设置」后面，点开才出现；同步结果与上次失败原因仍然直接显示（那是操作反馈）。
-- 品牌商标列表同样是「一条摘要 + 按需展开」：每行收起时是 `Logo · 名称 · 关键词 · 手动上传/目录同步 · [编辑]`，
+- 品牌商标列表同样是「一条摘要 + 按需展开」：每行收起时是 `Logo · 名称 · 关键词 · [编辑]`，
   点「编辑」才换成名称/关键词输入框与 保存 / 删除 / 收起；保存、删除后自动收起。
   「+ 添加品牌」也收在一个按钮后面，添加成功即折回。
 - **自填镜像**：国内拉 GitHub 不稳时，把仓库 `catalog/` 镜像到自己的域名，填在选项页「自填目录地址」里，
   同步会先试它、失败再回落内置镜像。只接受 HTTPS（本机 `127.0.0.1` 可用 HTTP）。首次保存或同步
   这个域名时浏览器会弹「允许访问该网站」——**必须点允许**，否则请求会被直接拦掉（10.19.0 起走
   `optional_host_permissions` 运行时授权；编辑器里那段静默同步没有点击手势，所以这个域名必须先在这里授权过一次）。
-- **手工品牌可以跨机器**：手工上传的 Logo 只存在本机配置里，目录同步永远不碰它，所以别的机器看不到。
+- **手工品牌可以跨机器**：手工上传的 Logo 只存在本机配置里（目录里没有它的条目，所以同步不会碰它），别的机器看不到。
   点「导出目录包」得到 `brand-catalog-YYYY-MM-DD.zip`，里面就是与仓库 `catalog/` 完全同构的
   `brands.json` + `logos/*`；传到任意 HTTPS 空间、在另一台机器的「自填目录地址」填那个地址、
   同步一次，手工品牌就成了目录品牌。全流程不需要服务器（目录本身就是交换格式）。
@@ -783,7 +783,10 @@ AliExpressImageEditorExtension/
 - 真相源仍是**本地注册表**：拉不到目录时照旧用工牌缓存，不阻塞任何操作。
 - 品牌 id 固定为 `remote-<slug>`（blob 为 `brand-logo-remote-<slug>`），所以**更新 Logo 不会让历史画布断图**；
   目录里删掉某品牌只移除注册表条目，已下载的图片仍保留（老文档可能还在引用）。
-- 本地优先：手工上传的同名品牌、你在选项页改过名称/关键词的远程品牌、被你取消勾选的品牌，同步都不会覆盖。
+- **目录即权威（10.21.0）**：不再区分「手工上传」和「目录同步」。目录里有这个品牌就以目录为准 ——
+  同 id 的条目整条覆盖（名称 / 关键词 / Logo / rev），与目录品牌同名的本机条目（含手工上传的那条）会被删掉
+  （否则下拉框里两个同名品牌，谁也说不清哪个在生效）。本机改动立刻生效，但目录下次发版就会盖掉它；
+  想长期保留就改进目录，或在选项页「导出目录包」把本机现状导出去维护。
 - 读的是**功能分支**（`BRAND_CATALOG_REF = 'feat/ai-image-generation'`，功能还没发版）。合并到 `main`
   之后必须把该常量改回 `main`，否则删分支会连带断掉所有已装插件的同步。
 
@@ -990,8 +993,8 @@ AliExpressImageEditorExtension/
     就是用来对账的。
 28. `min_pictures` 是模板自己声明的底线（拼贴 = 2）。低于它时**不出图**，只给原因；这时要么补素材，
     要么换「主图 + 包装盒」那个模板。它不判断"素材够不够好看"——三张同姿态的图仍会被当成三张图。
-29. 手工上传的品牌**不会自动跨机器**：它存在本机 `chrome.storage.local` + IndexedDB 里，目录同步按
-    设计只碰 `source: 'remote'` 的条目。10.19.0 起可以「导出目录包」（与 `catalog/` 同构的 zip）放到
+29. 手工上传的品牌**不会自动跨机器**：它存在本机 `chrome.storage.local` + IndexedDB 里，目录同步只碰
+    目录里点过名的条目（10.21.0 起同名的手工条目会被目录版本顶掉）。10.19.0 起可以「导出目录包」（与 `catalog/` 同构的 zip）放到
     自己的 HTTPS 空间，再从别的机器填「自填目录地址」同步取回 —— 但那是**手动搬运**：没有后台定时
     任务、没有自动上传，导出与上传都要你自己做一次。导出时读不到图片的品牌会跳过（提示里点名），
     派生出的 slug 一旦被别的机器同步过一次就**不要改名**（改 id = 换新品牌，历史画布断图）。
@@ -1007,7 +1010,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（56 文件 / 864 测试，其中 859 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（56 文件 / 868 测试，其中 863 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（13 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1020,7 +1023,7 @@ AliExpressImageEditorExtension/
 | 真实 Chrome + AliExpress 登录页 E2E | **尚未由我验证**（本环境无法登录真实 AliExpress 卖家后台） |
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
-| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
+| 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的「目录覆盖本机」规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
 | 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（35 个单测：身份推导、**URL 规范化**（`_960x960` / `_.webp` / 查询串 / 镜像主机都算同一张图）、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65、5.120） |
 | 三姿态拼贴模板（10.13.0 → 10.14.0 真正读字段） | **仅自动化验证**（23 个单测：模板解析（viewport 原值、`collage` 别名取反、`support` 角色、`product_match`、缺三块包装规则时走默认 + 警告、`render_order` 拼错 id 报错）；`render_order` 与 `z_index` 冲突时前者赢、没有它时退回 `z_index`；逐槽定位（三个姿态 x/y 互不相同）；`selectSupportMaterials` 三条规则；三图 z 序；缺图/重复图警告；`buildBindingPrompt` 把五个提示字段写进图位段落；`parseBindingAnswer` 对 `slots` 的过滤。**三张图在画布上的实际观感未在真实 Chrome 里看过**，验收步骤见 manual-test 5.106–5.107） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
@@ -1037,6 +1040,7 @@ AliExpressImageEditorExtension/
 | 成品观感 + 底线两张图（10.18.0） | **仅自动化验证**（12 个单测）：`unionArea` 的容斥（相邻不重复、重叠只算一次）、并集/最紧留白/重心的量法、遮挡 50%、被画布切掉一半的 `cropped`、`fitCanvasFill` 在区间内不动/太满缩回/太空放大/层级差只收最小的那张/单张不做层级差、拼贴模板只有 hero 时发 `not_enough_pictures` 且不出图、两张图时 `diagnostics.canvasFill` 与 `diagnostics.aesthetic` 都有账。**"这页到底好看没好看"仍要眼睛**：三张图是否真的拉开层级、四边留白是否齐、有没有人被裁掉半个头，步骤见 manual-test 5.111–5.112） |
 | 识别与排版合成一个按钮（10.18.1） | **仅自动化验证**（`typecheck` + 815 测试不变；`src/editor/components/` 与面板接线没有单测，这是纯交互重构）。**真机必须走一遍**：面板里只有一个主按钮、点它先「正在识别素材角色…」再「正在排版…」、第二次打开不重发视觉请求、「重新识别素材角色」那条链接会真的重问、手工改过主体后生成不再被 AI 覆盖、网关挂掉时画布照样出图，步骤见 manual-test 5.64 |
 | 面板折叠 + 换模板不丢编号/Logo（10.18.2） | **仅自动化验证**（6 个 `compose-emit` 单测锁 `carriedLayers()`：只搬 brand、plan 没编号时搬编号、plan 已有编号时不重复搬、trim 后比较、空编号不搬、其它文字永不搬）。**折叠与提示的真机验证**：面板只剩按钮和下拉框、两行摘要能点开、切换模板生成后编号与 Logo 仍在、识别到品牌但本机没有 Logo 时应弹红字指引，步骤见 manual-test 5.113–5.115 |
+| 品牌目录：目录即权威（10.21.0） | **仅自动化验证**（`typecheck` + 56 文件 / 868 测试）：`planBrandSync` 不再有 `skipped` / `conflicts` 两个字段，新增两条断言 —— 目录顶掉同名手工品牌（`toDownload` 有它、`toRemove` 有手工那条）、本机改过名也不阻止下载；`mergeRemoteBrands` 的 `edited` 豁免被删，`tests/unit/brand-store-merge.test.ts` 改成「目录覆盖本机措辞」与「`removeIds` 点名的条目一律落地（blob 仍保留）」。**真机对照见 manual-test 5.121** |
 | 导出目录包 + 自填域名授权（10.19.0） | **仅自动化验证**（6 个 `zip` 单测：`crc32` 参考值、写出的包能按中央目录读回、size/crc 记录正确、包首尾是 `PK\x03\x04`/`PK\x05\x06`、重复路径抛、空包 22 字节；15 个导出单测：magic bytes 判扩展名、`brandSlug` 的 ASCII 化与 `brand-<id 尾段>` 回落、slug 冲突加 `-2`、缺图/非图片记进 `skipped`、全空抛错、`sha256` 与 `rev` 一致、zip 条目顺序、`version` 默认 epoch 秒、**且导出的 `brands.json` 能被真正的 `parseBrandCatalog()` 反解**）。**真机链路未跑过**：导出的 zip 放到自建 HTTPS 目录 → 另一台机器填地址 → 同步能拿到手工品牌；首次会弹「允许访问该网站」，步骤见 manual-test 5.117–5.118） |
 | 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
 

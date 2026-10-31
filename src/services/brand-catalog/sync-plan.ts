@@ -7,8 +7,11 @@
  * need removing, and which are already fine?
  *
  * Being pure is the point: every rule below (TTL, version short-circuit, per-brand
- * `rev`, "a hand-uploaded brand always wins", "a skipped brand is left alone") is
- * a line of the user-visible contract and has a test that reads like it.
+ * `rev`, "the catalog wins when it publishes a new version") is a line of the
+ * user-visible contract and has a test that reads like it.
+ *
+ * 10.21.0 起不再区分「手工上传」和「目录同步」：目录里有的品牌一律以目录为准，
+ * 包括把同名的那个手工品牌删掉（否则下拉框里会出现两个同名品牌）。
  */
 
 import { BRAND_CATALOG_TTL_MS } from '../../shared/constants';
@@ -46,10 +49,6 @@ export interface BrandSyncPlan {
   /** Registry ids to drop. Their blobs stay on purpose — see `sync.ts`. */
   toRemove: string[];
   unchanged: string[];
-  /** Slugs the seller unticked in the Options page. */
-  skipped: string[];
-  /** Slugs a hand-uploaded brand already covers (same name, case-insensitive). */
-  conflicts: string[];
   version: number;
 }
 
@@ -74,8 +73,6 @@ export function planBrandSync(input: PlanBrandSyncInput): BrandSyncPlan {
     toDownload: [] as CatalogSyncItem[],
     toRemove: [] as string[],
     unchanged: [] as string[],
-    skipped: [] as string[],
-    conflicts: [] as string[],
     version: catalog.version,
   };
 
@@ -93,25 +90,10 @@ export function planBrandSync(input: PlanBrandSyncInput): BrandSyncPlan {
     (brand) => brand.source === 'remote' && typeof brand.slug === 'string',
   );
   const localRemoteBySlug = new Map(localRemote.map((brand) => [brand.slug as string, brand]));
-  // A brand the seller uploaded by hand owns its name: the catalog cannot shadow
-  // it, because the local logo is what that seller actually wants on the canvas.
-  const localNames = new Set(
-    localBrands
-      .filter((brand) => brand.source !== 'remote')
-      .map((brand) => normalizeName(brand.name)),
-  );
-  const skipped = new Set(state.skipped);
   const catalogSlugs = new Set(catalog.brands.map((brand) => brand.id));
+  const catalogNames = new Set(catalog.brands.map((brand) => normalizeName(brand.name)));
 
   for (const brand of catalog.brands) {
-    if (skipped.has(brand.id)) {
-      base.skipped.push(brand.id);
-      continue;
-    }
-    if (localNames.has(normalizeName(brand.name))) {
-      base.conflicts.push(brand.id);
-      continue;
-    }
     const existing = localRemoteBySlug.get(brand.id);
     if (existing && existing.remoteRev === brand.rev) {
       base.unchanged.push(brand.id);
@@ -131,9 +113,19 @@ export function planBrandSync(input: PlanBrandSyncInput): BrandSyncPlan {
 
   for (const brand of localRemote) {
     const slug = brand.slug as string;
-    // A skipped brand is kept as-is: unticking it means "leave this one alone",
-    // not "remove it".
-    if (catalogSlugs.has(slug) || skipped.has(slug)) continue;
+    if (catalogSlugs.has(slug)) continue;
+    // 目录里已经没有这一条 → 删掉本机这行（blob 留着，历史画布还引用着）。
+    base.toRemove.push(brand.id);
+  }
+
+  /*
+    同名的本机品牌（手工上传的那条，或目录里改过名的旧行）被目录版本取代：不删的话
+    下拉框里会出现两个一模一样的中文名，而"哪个在生效"永远说不清。手工上传的 blob
+    留不留？留 —— 删行不删图，和文件里的既有约定一致。
+  */
+  for (const brand of localBrands) {
+    if (brand.source === 'remote') continue;
+    if (!catalogNames.has(normalizeName(brand.name))) continue;
     base.toRemove.push(brand.id);
   }
 

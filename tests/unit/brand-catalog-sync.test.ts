@@ -33,7 +33,7 @@ function catalog(
 }
 
 function state(overrides: Partial<BrandCatalogState> = {}): BrandCatalogState {
-  return { version: 0, syncedAt: 0, baseUrlUsed: null, skipped: [], lastError: null, ...overrides };
+  return { version: 0, syncedAt: 0, baseUrlUsed: null, lastError: null, ...overrides };
 }
 
 function localBrand(overrides: Partial<BrandMeta> = {}): BrandMeta {
@@ -118,7 +118,11 @@ describe('planBrandSync', () => {
     expect(plan.toDownload.map((item) => item.slug)).toEqual(['b']);
   });
 
-  it('lets a hand-uploaded brand win over the catalog', () => {
+  /*
+    10.21.0：不再区分「手工上传」和「目录同步」。目录里有这个品牌就以目录为准 ——
+    包括把同名的手工那条删掉，否则下拉框里会出现两个一模一样的中文名。
+  */
+  it('lets the catalog replace a hand-uploaded brand with the same name', () => {
     const plan = planBrandSync({
       catalog: catalog([{ id: 'morph-toys', name: 'Morph Toys' }]),
       baseUrl: BASE,
@@ -126,22 +130,20 @@ describe('planBrandSync', () => {
       state: state(),
       now: NOW,
     });
-    // Same name, different case and padding — still a conflict, and nothing is
-    // downloaded for it, so the seller's own logo stays on the canvas.
-    expect(plan.conflicts).toEqual(['morph-toys']);
-    expect(plan.toDownload).toEqual([]);
+    expect(plan.toDownload.map((item) => item.slug)).toEqual(['morph-toys']);
+    // 大小写与首尾空格不同也算同一个名字。
+    expect(plan.toRemove).toEqual(['brand-logo-abc']);
   });
 
-  it('leaves unticked brands alone: no download, and no removal either', () => {
+  it('never refuses a download because of a local edit', () => {
     const plan = planBrandSync({
-      catalog: catalog([{ id: 'keep' }, { id: 'skip-me' }]),
+      catalog: catalog([{ id: 'a', rev: 'r2' }], 3),
       baseUrl: BASE,
-      localBrands: [remoteBrand('skip-me', 'old'), remoteBrand('gone', 'v1')],
-      state: state({ skipped: ['skip-me', 'gone'] }),
+      localBrands: [remoteBrand('a', 'r1', { name: '改过的名字', remoteRev: 'r1' })],
+      state: state({ version: 2 }),
       now: NOW,
     });
-    expect(plan.skipped).toEqual(['skip-me']);
-    expect(plan.toDownload.map((item) => item.slug)).toEqual(['keep']);
+    expect(plan.toDownload.map((item) => item.slug)).toEqual(['a']);
     expect(plan.toRemove).toEqual([]);
   });
 
@@ -322,7 +324,6 @@ describe('syncBrandCatalog', () => {
         version: 7,
         syncedAt: NOW,
         baseUrlUsed: BASE,
-        skipped: [],
         lastError: null,
       },
     ]);

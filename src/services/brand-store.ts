@@ -160,9 +160,12 @@ export async function updateBrand(
           ...entry,
           name: patch.name !== undefined ? patch.name.trim() || entry.name : entry.name,
           keywords: patch.keywords ?? entry.keywords,
-          // A renamed/retagged catalog brand keeps the seller's wording: the
-          // next sync refreshes its logo but must not undo these edits.
-          ...(entry.source === 'remote' ? { edited: true } : {}),
+          /*
+            改完不标记任何"本地优先"状态（10.21.0）。以前这里会写 `edited: true`，
+            让下一次目录同步保留本次措辞 —— 那等于同一个品牌有两套内容来源，谁赢取决于
+            一个隐藏标记。现在的口径是：本机改动立刻生效，目录出了新版本就把这一行盖掉。
+            想长期保留就改进目录（`catalog/brands.json`），或者把这个品牌从目录里拿掉。
+          */
         }
       : entry,
   );
@@ -191,12 +194,14 @@ export async function loadBrandLogo(meta: BrandMeta): Promise<Blob | null> {
  * The one place a catalog sync writes the registry.
  *
  * Called once per sync with the whole delta, so a partial download cannot leave
- * the list half-updated. Three rules:
+ * the list half-updated. Two rules:
  *
  * - An existing entry keeps its `createdAt` (list order is "oldest first", and a
  *   brand jumping to the bottom of the Options page every day is noise).
- * - A remote entry the seller renamed or retagged keeps that wording — only the
- *   logo and `remoteRev` are refreshed.
+ * - **目录即新版本**（10.21.0）：同名 id 的条目整条被目录内容覆盖 —— 名称、关键词、
+ *   Logo、`remoteRev` 全部换成目录里的那一份。不再有 `edited` 豁免，也不再区分
+ *   「手工上传」和「目录同步」：本机改了就是改了，目录下次发版就会盖掉它。
+ *   想长期保留改动 → 改进目录；想让它彻底消失 → 从目录里删掉这一条。
  * - Removed entries lose their registry row but NOT their blob: a saved
  *   composition may still reference that logo layer, and a dangling blob id
  *   renders as an empty image.
@@ -207,9 +212,7 @@ export async function mergeRemoteBrands(input: {
 }): Promise<BrandMeta[]> {
   const list = await listBrands();
   const remove = new Set(input.removeIds);
-  // Only catalog brands may be removed by a sync; a local brand sharing the id
-  // (impossible today, cheap to guarantee) is left alone.
-  const kept = list.filter((entry) => !(remove.has(entry.id) && entry.source === 'remote'));
+  const kept = list.filter((entry) => !remove.has(entry.id));
   const position = new Map(kept.map((entry, index) => [entry.id, index]));
   const existingById = new Map(list.map((entry) => [entry.id, entry]));
 
@@ -217,17 +220,7 @@ export async function mergeRemoteBrands(input: {
   for (const upsert of input.upserts) {
     const existing = existingById.get(upsert.id);
     const entry: BrandMeta = existing
-      ? {
-          ...upsert,
-          createdAt: existing.createdAt,
-          ...(existing.edited
-            ? {
-                name: existing.name,
-                keywords: existing.keywords,
-                edited: true,
-              }
-            : {}),
-        }
+      ? { ...upsert, createdAt: existing.createdAt }
       : upsert;
     const at = position.get(upsert.id);
     if (at === undefined) merged.push(entry);

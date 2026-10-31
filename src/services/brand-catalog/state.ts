@@ -2,9 +2,9 @@
  * Catalog sync bookkeeping.
  *
  * Small on purpose: the catalog version we last applied, when we last succeeded,
- * which mirror answered, and which slugs the seller unticked. The brands
- * themselves are NOT stored here — they live in the registry
- * (`brand-store.ts`), so the editor keeps reading exactly one list.
+ * and which mirror answered. The brands themselves are NOT stored here — they
+ * live in the registry (`brand-store.ts`), so the editor keeps reading exactly one
+ * list. 10.21.0 删掉了 `skipped`：目录一旦发新版就整条覆盖，不再有"这一条别同步"的口子。
  */
 
 import { BRAND_CATALOG_URLS, STORAGE_KEYS } from '../../shared/constants';
@@ -16,8 +16,6 @@ export interface BrandCatalogState {
   syncedAt: number;
   /** Mirror that answered last time; tried first on the next run. */
   baseUrlUsed: string | null;
-  /** Slugs the seller does not want synced. */
-  skipped: string[];
   /** Last failure message, cleared by the next success. Shown in the Options page. */
   lastError: string | null;
 }
@@ -26,7 +24,6 @@ export const EMPTY_CATALOG_STATE: BrandCatalogState = {
   version: 0,
   syncedAt: 0,
   baseUrlUsed: null,
-  skipped: [],
   lastError: null,
 };
 
@@ -37,9 +34,6 @@ function normalizeState(value: unknown): BrandCatalogState {
     version: typeof candidate.version === 'number' ? candidate.version : 0,
     syncedAt: typeof candidate.syncedAt === 'number' ? candidate.syncedAt : 0,
     baseUrlUsed: typeof candidate.baseUrlUsed === 'string' ? candidate.baseUrlUsed : null,
-    skipped: Array.isArray(candidate.skipped)
-      ? candidate.skipped.filter((entry): entry is string => typeof entry === 'string')
-      : [],
     lastError: typeof candidate.lastError === 'string' ? candidate.lastError : null,
   };
 }
@@ -57,20 +51,6 @@ export async function saveBrandCatalogState(state: BrandCatalogState): Promise<v
   await chrome.storage.local.set({
     [STORAGE_KEYS.brandCatalog]: normalizeState(state),
   });
-}
-
-/** Tick / untick one slug in the Options page. Returns the saved state. */
-export async function setBrandCatalogSkipped(
-  slug: string,
-  skipped: boolean,
-): Promise<BrandCatalogState> {
-  const state = await loadBrandCatalogState();
-  const set = new Set(state.skipped);
-  if (skipped) set.add(slug);
-  else set.delete(slug);
-  const next: BrandCatalogState = { ...state, skipped: [...set] };
-  await saveBrandCatalogState(next);
-  return next;
 }
 
 /**
