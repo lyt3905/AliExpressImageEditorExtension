@@ -949,6 +949,10 @@ AliExpressImageEditorExtension/
     CDN url 没变时不会失效**（跟图片下载器是同一个「url 即内容」的假设），出口是面板上的
     「清除本地缓存」。上限：抠图 40 条 / AI 识别结论 16 条 / 成品图 12 条，按最旧先丢。
     缓存的成品图**只能下载**，不会被自动放回画布 —— 画布仍是会话级的，刷新后靠文档恢复。
+    10.20.1 起图片身份走 **URL 规范化**（同一个 `kf/<hash>` 不管带 `_960x960` / `_.webp` / 查询串、
+    也不管来自哪个 AliExpress 镜像主机，都算同一张图），所以**装上新版后每个商品第一次打开仍会
+    重算一次**（旧条目是用未规范化的原文当 key 存下的），第二次起才复用；真正不缓存时
+    DevTools Console 会有 `[AIEE]` 开头的线索。
 19. 品牌 Logo 的锁定只挡**画布上的误操作**（点不中、拖不动），不挡删除：锁着的 Logo 仍可在图层面板点 ✕
     删掉，切品牌也会先删掉旧 Logo。位置记忆按品牌存在 `aiee:logo-placement`，没有"恢复默认位置"的按钮 ——
     拖歪了只能自己拖回去（清了这条存储就会回到右下角默认位）。
@@ -1017,7 +1021,7 @@ AliExpressImageEditorExtension/
 | AI 作图（模板排版） | **仅自动化验证**（模板 lint / alpha 采样 / 特写与盒子求解 / plan→图层 / 衬板图层，共 145 个单测；**画布上的实际观感未在真实 Chrome 里看过**，第一次点建议用一张窄高商品图） |
 | 视觉绑定（glm-5.3） | **真网关实测 PASS**（2 用例：多图一请求 + JSON 解析；端到端 binder 判对 hero/box 并映射回 material id。但 `probeAlphaProfile` / `blobToThumbnailDataUrl` 这两段 OffscreenCanvas 代码未在 Chrome 中跑过） |
 | 品牌目录同步（GitHub） | **仅自动化验证**（schema 校验 / 镜像回退与超时 / 同步计划四种 reason / 注册表合并的本地优先规则 / 旧 `aliases` 折算 / 自填镜像排序去重 / 静默同步按标签页限一次，共 46 个单测，全部用注入端口跑，不联网。**真机链路未跑过**：需要先把 `catalog/` 推到 `main`，再在选项页点「立即同步」） |
-| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（29 个单测：身份推导、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65） |
+| 本地缓存（抠图 / AI / 成品图） | **仅自动化验证**（35 个单测：身份推导、**URL 规范化**（`_960x960` / `_.webp` / 查询串 / 镜像主机都算同一张图）、key 稳定性与失效、垃圾输入降级、裁剪上限、写入/读回/清除、索引在而 blob 不在；存储全部用注入端口。**真 IndexedDB 里的往返未在 Chrome 中跑过**，验收步骤见 manual-test 5.60–5.65、5.120） |
 | 三姿态拼贴模板（10.13.0 → 10.14.0 真正读字段） | **仅自动化验证**（23 个单测：模板解析（viewport 原值、`collage` 别名取反、`support` 角色、`product_match`、缺三块包装规则时走默认 + 警告、`render_order` 拼错 id 报错）；`render_order` 与 `z_index` 冲突时前者赢、没有它时退回 `z_index`；逐槽定位（三个姿态 x/y 互不相同）；`selectSupportMaterials` 三条规则；三图 z 序；缺图/重复图警告；`buildBindingPrompt` 把五个提示字段写进图位段落；`parseBindingAnswer` 对 `slots` 的过滤。**三张图在画布上的实际观感未在真实 Chrome 里看过**，验收步骤见 manual-test 5.106–5.107） |
 | 品牌 Logo 置顶 / 锁定 / 位置记忆 | **仅自动化验证**（11 个单测：默认角落与比例、位置表解析与降级、scale 夹紧、`locked` 走 `COMMIT_LAYER` 且可撤销。**画布上的手感未在真实 Chrome 里点过**：点不中 / 解锁后能拖 / 记忆生效 / 生成主图后仍在原位，步骤见 manual-test 5.70–5.73） |
 | 视觉接口三项保存（10.8.1 修复） | **仅自动化验证**（3 个单测：只补一个字段时其余两项保留、单独存视觉不动账号字段、空 Key 回落默认。修复前 `src/background/service-worker.ts` 的 `saveSettings` 处理器漏传 `vision`，值永远存不进去。真机对照步骤见 manual-test 5.78） |

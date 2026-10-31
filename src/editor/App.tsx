@@ -396,6 +396,13 @@ export function App(): JSX.Element {
    * is deterministic for cutouts), so re-generating does not re-scan.
    */
   const alphaProbeRef = useRef(createAlphaProbeCache());
+  /**
+   * Which pending result key we already complained about.
+   *
+   * 成品图缓存"有时候不写"是最难从界面上看出来的事（画布上一切正常），所以"还没解码完"
+   * 这条早退路径要留一条 console 线索 —— 但只留一次，否则每次渲染都刷。
+   */
+  const decodeWarnedRef = useRef<string | null>(null);
 
   /** Templates are listed once: the registry is static data. */
   const templateOptions = useMemo(
@@ -1773,7 +1780,21 @@ export function App(): JSX.Element {
       (layer): layer is ImageLayer => layer.kind !== 'text' && layer.kind !== 'plate',
     );
     if (pictures.length === 0) return;
-    if (!pictures.every((layer) => imageForLayer(layer) !== undefined)) return;
+    /*
+      还没解码完就先等（下一次渲染会重进这里）。但"等着"必须留痕：这条路径以前是完全
+      静默的，于是"某个商品怎么都不进缓存"在界面上和"缓存成功"长得一模一样。
+    */
+    const undecoded = pictures.filter((layer) => imageForLayer(layer) === undefined);
+    if (undecoded.length > 0) {
+      if (decodeWarnedRef.current !== pendingResultKey) {
+        decodeWarnedRef.current = pendingResultKey;
+        console.warn(
+          '[AIEE] 这次还没有写成品图缓存：有图层没解码完',
+          undecoded.map((layer) => ({ id: layer.id, kind: layer.kind, materialId: layer.materialId })),
+        );
+      }
+      return;
+    }
 
     const key = pendingResultKey;
     setPendingResultKey(null);

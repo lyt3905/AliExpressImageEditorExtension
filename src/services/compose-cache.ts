@@ -55,6 +55,7 @@ import {
   CUTOUT_CACHE_PREFIX,
   STORAGE_KEYS,
 } from '../shared/constants';
+import { canonicalImageUrl } from '../shared/image-url';
 import { deleteBlob, getBlob, putBlob } from './indexed-db';
 
 /** The parts of a session image that can identify it across sessions. */
@@ -89,7 +90,17 @@ export function imageIdentity(image: CacheableImage): string {
     pictures never hit). Fall through to the file-name form instead, which is
     what those images actually have.
   */
-  if (url && !url.startsWith('blob:')) return `url:${url}`;
+  if (url && !url.startsWith('blob:')) {
+    /*
+      扫描图的身份必须走规范化（10.20.1）。原文是 `<img>.currentSrc`，同一个资产在不同次
+      打开时可能是 `…/kf/S986e….jpg`、`…_960x960.jpg`、`…_.webp`，甚至换一个镜像主机
+      （`ae01.alicdn.com` ↔ `ae-pic-a1.aliexpress-media.com`）。拿原文当 key 等于每次都是
+      一张新图：抠图不复用、成品图的 hero/box 身份跟着变，"有的商品怎么都不缓存"就是这么来的。
+      `canonicalImageUrl()` 与扫描器去重共用同一套规则；规范化失败（极少）时退回原文 ——
+      宁可保守地少命中一次，也不要算错把两张不同的图当成一张。
+    */
+    return `url:${canonicalImageUrl(url) || url}`;
+  }
 
   const bytes = Number.isFinite(image.bytes) ? Math.round(image.bytes as number) : 0;
   if (bytes > 0) {

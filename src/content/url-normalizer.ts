@@ -7,11 +7,13 @@
  *   https://ae01.alicdn.com/kf/Sabc.jpg_.webp
  * All three are the same picture; we cut the filename at the first image
  * extension so that dedupe actually works.
+ *
+ * 这两个函数搬到了 `src/shared/image-url.ts`（编辑器算缓存身份也要用同一套规则 ——
+ * 见那个文件里的说明），这里只是转出去，内容脚本与测试仍然从这里拿。
  */
 
-const IMAGE_EXTENSION = /\.(jpe?g|png|webp|bmp|avif|gif)(?![a-z0-9])/i;
+export { normalizeImageUrl, stripImageDecoration } from '../shared/image-url';
 
-/** Non-alphanumeric boundaries so `icon-cart.png`, `logo.png` and `alt="icon"` all match. */
 const DECORATIVE_HINT =
   /(?:^|[^a-z0-9])(icon|ico|logo|sprite|flag|avatar|badge|arrow|close|delete|plus|add|edit|loading|spinner|placeholder|qrcode|qr-code|watermark|blank|transparent|empty|default)(?:[^a-z0-9]|$)/i;
 
@@ -28,36 +30,6 @@ export function isDecorativeUrl(value: unknown): boolean {
   if (/\.svg(\?|#|$)/i.test(url)) return true;
   if (/\.gif(\?|#|$)/i.test(url)) return true;
   return false;
-}
-
-/** Strip the decoration suffixes AliExpress CDNs append to image paths. */
-export function stripImageDecoration(pathname: string): string {
-  const match = IMAGE_EXTENSION.exec(pathname);
-  if (!match) return pathname;
-  return pathname.slice(0, match.index + match[0].length);
-}
-
-/**
- * Normalise an image URL into a stable dedupe key.
- * Returns '' when the input cannot be normalised.
- */
-export function normalizeImageUrl(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  let value = raw.trim();
-  if (!value) return '';
-  if (value.startsWith('//')) value = `https:${value}`;
-  if (!/^https?:\/\//i.test(value)) return '';
-
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return '';
-  }
-
-  const host = parsed.host.toLowerCase();
-  const pathname = stripImageDecoration(parsed.pathname);
-  return `${parsed.protocol.toLowerCase()}//${host}${pathname}`;
 }
 
 /** True when a URL or its alt/label text looks like page chrome rather than a product photo. */

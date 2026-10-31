@@ -1507,6 +1507,28 @@ id 是确定性的（`cutout-cache-<hash>` / `compose-result-<key>`），索引�
 看起来只是"这个商品的缓存时好时坏"。粘贴、从本地补图这两种素材以前正是踩在这里。判断顺序
 因此是：真 url → `label|bytes|宽x高` → 会话内 blobId。
 
+**url 身份要规范化，不能拿 `<img>.currentSrc` 原文当 key**（10.20.1 起）。AliExpress 把同一个
+资产挂在一串带装饰的地址上，同一次打开里浏览器挑哪个取决于 `srcset`、DPR 和它自己支持的
+格式：
+
+| 同一次会话可能出现的写法 | 规范化之后 |
+| --- | --- |
+| `…/kf/S986e…l.jpg` | `…/kf/S986e…l.jpg` |
+| `…/kf/S986e…l.jpg_960x960.jpg` | 同上 |
+| `…/kf/S986e…l.jpg_.webp` | 同上 |
+| `…/kf/S986e…l.jpg_Q90.jpg?width=960` | 同上 |
+| `https://ae01.alicdn.com/kf/S986e…l.jpg` | 主机折叠成 `ae-cdn` |
+
+拿原文当 key，同一张照片在两次打开之间就变成两张不同的图：抠图不复用、成品图键里的
+hero/box 身份跟着变、界面上表现为"这个商品怎么都不缓存"。所以 `imageIdentity()` 走
+`src/shared/image-url.ts` 的 `canonicalImageUrl()` —— 与内容脚本去重（`normalizeImageUrl()`
+算图片 id）**共用同一套规则**，唯一差别是缓存身份把 AliExpress 的镜像主机折叠成 `ae-cdn`
+（`ae01.alicdn.com` / `ae-pic-a1.aliexpress-media.com` / `ae04…` 都是同一个 `kf/<hash>`），
+而页面内去重保留真实主机（不该把两个站点的图在扫描阶段就合并）。
+
+顺带把"早退也留痕"补上了：成品图缓存那条"等所有图片图层解码完"的路径以前完全静默，现在
+第一次卡住会打一行 `console.warn`（带没解码的图层 id / kind / materialId）。
+
 ### 12.4 失效规则：缓存键要盖住「变了的后果」，不多也不少
 
 两个键的范围不一样，这是刻意的：

@@ -56,8 +56,45 @@ const png = (name: string): Blob => new Blob([name], { type: 'image/png' });
 
 describe('imageIdentity', () => {
   it('uses the source url when there is one', () => {
-    expect(imageIdentity({ url: 'https://ae01.alicdn.com/a.jpg', bytes: 12 })).toBe(
-      'url:https://ae01.alicdn.com/a.jpg',
+    expect(imageIdentity({ url: 'https://shop.example.com/a.jpg', bytes: 12 })).toBe(
+      'url:https://shop.example.com/a.jpg',
+    );
+  });
+
+  /*
+    10.20.1：扫描图的身份来自 `<img>.currentSrc`，同一张照片在不同次打开时可能是
+    `…/kf/x.jpg`、`…_960x960.jpg`、`…_.webp`，甚至换一个镜像主机。这些必须算同一张图，
+    否则每次打开都当新图：抠图不复用、成品图键跟着变。
+  */
+  it('collapses the decoration suffixes AliExpress appends to one asset', () => {
+    const forms = [
+      'https://ae-pic-a1.aliexpress-media.com/kf/S986e012cf2604d5cbc42dd5c9b89611bl.jpg',
+      'https://ae-pic-a1.aliexpress-media.com/kf/S986e012cf2604d5cbc42dd5c9b89611bl.jpg_960x960.jpg',
+      'https://ae-pic-a1.aliexpress-media.com/kf/S986e012cf2604d5cbc42dd5c9b89611bl.jpg_.webp',
+      'https://ae-pic-a1.aliexpress-media.com/kf/S986e012cf2604d5cbc42dd5c9b89611bl.jpg_Q90.jpg?width=960',
+    ].map((url) => imageIdentity({ url }));
+    expect(new Set(forms).size).toBe(1);
+    expect(forms[0]).toBe('url:https://ae-cdn/kf/S986e012cf2604d5cbc42dd5c9b89611bl.jpg');
+  });
+
+  it('treats the AliExpress CDN mirrors as the same host', () => {
+    const mirrors = [
+      'https://ae01.alicdn.com/kf/Abc123.jpg',
+      'https://ae04.alicdn.com/kf/Abc123.jpg',
+      'https://ae-pic-a1.aliexpress-media.com/kf/Abc123.jpg',
+    ].map((url) => imageIdentity({ url }));
+    expect(new Set(mirrors).size).toBe(1);
+  });
+
+  it('keeps different assets apart', () => {
+    expect(imageIdentity({ url: 'https://ae01.alicdn.com/kf/A.jpg' })).not.toBe(
+      imageIdentity({ url: 'https://ae01.alicdn.com/kf/B.jpg' }),
+    );
+  });
+
+  it('does not touch hosts that are not the AliExpress CDN', () => {
+    expect(imageIdentity({ url: 'https://cdn.example.com/kf/A.jpg_100x100.jpg' })).toBe(
+      'url:https://cdn.example.com/kf/A.jpg',
     );
   });
 
