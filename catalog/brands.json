@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "updatedAt": "2026-10-28",
+  "version": 4,
+  "updatedAt": "2026-10-31",
   "brands": [
     {
       "id": "animaster",
@@ -116,6 +116,18 @@
       "logo": {
         "file": "logos/ms-toys.png",
         "sha256": "1e5bd84a73ba133bba845d5c9e8a97d5a59db94901f899c3a4127a377e211e26"
+      }
+    },
+    {
+      "id": "newage",
+      "name": "NewAge",
+      "keywords": [
+        "NewAge",
+        "New Age"
+      ],
+      "logo": {
+        "file": "logos/newage.png",
+        "sha256": "062d77eb871095e3588b3452d38ce7b92371f6bc4e8156cde68bc8ac84f638a9"
       }
     },
     {

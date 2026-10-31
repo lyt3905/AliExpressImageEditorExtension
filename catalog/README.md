@@ -56,6 +56,7 @@ catalog/
 | `bandai` | 万代 | 万代、BANDAI |
 | `threezero` | 三零 | 三零、threezero、ThreeZero、three zero |
 | `galaxy-toys` | 银河玩具社 | 银河玩具社、银河社、Galaxy Toys、Galaxy |
+| `newage` | NewAge | NewAge、New Age |
 | `shfiguarts` | SHF | SHF、S.H.Figuarts、SHFiguarts、S.H. Figuarts |
 | `hasbro` | 孩之宝 | 孩之宝、Hasbro |
 | `dlx` | DLX | DLX、DLX Collectible Figure |
@@ -63,6 +64,7 @@ catalog/
 
 **匹配是"标题里出现该词"的子串判断（不分大小写），只有 `keywords` 参与**，所以别往里放太短的词：
 `MS` 单独一条会把 `items`、`customs` 这类标题全命中，所以魔方只留了 `MS-TOYS` / `MS TOYS`。
+同理 NewAge 只写 `NewAge` / `New Age`，没写玩家常说的 `NA` —— 两个字母会命中 `Nan`、`Canvas` 之类。
 两个字的词已经够用（`万代`、`三零`），一个字母或两个字母的缩写尽量带上连字符或点。
 `name` 不参与匹配，所以上面每个品牌的关键词里都顺手写了中文名 —— 少写一个，那个叫法就认不出来了。
 
