@@ -247,6 +247,18 @@ export const MAX_WATERMARK_BYTES = 8 * 1024 * 1024;
 export const LOGO_MARGIN = 32;
 
 /**
+ * How far the **bottom edge** of a default-placed brand logo sits above the canvas
+ * bottom, as a fraction of the canvas height.
+ *
+ * Not `LOGO_MARGIN`: sellers put a bottom banner ("In Stock / PureSun Toys" strip,
+ * a promotion bar) in the last ~15% of the canvas, and a logo tucked into the very
+ * corner lands on top of it. 0.18 parks the logo just above that strip — still a
+ * bottom-right stamp, but it does not collide with the banner. Remembered
+ * placements still win; this only decides where a brand lands the first time.
+ */
+export const LOGO_BOTTOM_RATIO = 0.18;
+
+/**
  * Longest side of a default-placed brand logo, as a fraction of the canvas.
  *
  * A logo is a stamp in a corner, not a picture: 26% keeps it readable at 800px

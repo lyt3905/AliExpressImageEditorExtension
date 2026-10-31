@@ -1645,8 +1645,12 @@ hero/box 身份跟着变、界面上表现为"这个商品怎么都不缓存"。
 （`Record<brandId, {x, y, scale}>`）。
 
 - **按品牌分开**，不共用一个位置：词标是 5:1、吉祥物是 1:1，共用一份会把其中一个摆到画布外。
-- **默认位置**（`defaultLogoPlacement`）：右下角、留 `LOGO_MARGIN = 32`，最长边压到画布的
-  `LOGO_DEFAULT_LONGEST_RATIO = 0.26`。右下角是卖家放品牌章的惯例，也躲开顶部的编号和居中的水印。
+- **默认位置**（`defaultLogoPlacement`）：右边缘留 `LOGO_MARGIN = 32`，最长边压到画布的
+  `LOGO_DEFAULT_LONGEST_RATIO = 0.26`，**下边缘**停在距底部 `LOGO_BOTTOM_RATIO = 0.18` 的位置
+  （不是贴角）。右上是编号、正中是水印；右下角那一条 15% 左右是卖家放底部横幅
+  （「In Stock / PureSun Toys」那种色带）的地方，Logo 贴角就会压在横幅上 —— 10.21.2 起改成
+  停在横幅上方，锚点从"中心距底 32px"变成"下边缘距底 18%"，所以**越高的 Logo 中心越靠上**，
+  这与"印章坐在横幅上沿"的视觉一致。摆过一次之后记忆值优先，这条只决定第一次落点。
 - **写入时机**：`handleCommitLayer` 里，patch 带 x/y/scale 且图层是 `brand` 时，`brandIdOf(materialId)`
   反推品牌 id 再写回。和 `codePlacement` 同一套做法（只在松手时写，拖动过程不碰存储）。
 - **读改写的代价**：`saveLogoPlacement` 每次都先读回整张表再合入自己这一条，而不是拿着内存里的旧表直接覆盖 ——
@@ -1666,7 +1670,7 @@ hero/box 身份跟着变、界面上表现为"这个商品怎么都不缓存"。
 
 ### 13.4 测试边界
 
-- `tests/unit/logo-placement.test.ts`（9 例）：默认位置的角落 / 26% 比例 / 未知尺寸回落、`parseLogoPlacementMap`
+- `tests/unit/logo-placement.test.ts`（10 例）：默认位置的右缘 / 26% 比例 / **下边缘停在 `LOGO_BOTTOM_RATIO`（留给底部横幅）** / 未知尺寸回落、`parseLogoPlacementMap`
   对垃圾输入的降级、缺字段条目被丢弃、scale 夹紧、空 brandId 被忽略。
 - `tests/unit/editor-reducer.test.ts` 里两条 `layer lock`：`COMMIT_LAYER { locked }` 能进文档、是一个可撤销步骤、
   撤销能恢复锁，且不改变图层身份。

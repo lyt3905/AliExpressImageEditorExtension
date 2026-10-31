@@ -12,6 +12,7 @@
 
 import {
   CANVAS_SIZE,
+  LOGO_BOTTOM_RATIO,
   LOGO_DEFAULT_LONGEST_RATIO,
   LOGO_MARGIN,
   LOGO_MAX_SCALE,
@@ -29,20 +30,24 @@ export interface LogoPlacement {
 export type LogoPlacementMap = Record<string, LogoPlacement>;
 
 /**
- * Where a logo goes the first time: bottom-right corner, capped to
+ * Where a logo goes the first time: bottom-right, capped to
  * `LOGO_DEFAULT_LONGEST_RATIO` of the canvas.
  *
  * Bottom-right on purpose — it is the corner sellers put a brand stamp in, and it
- * is away from the product code (top) and the watermark (centred).
+ * is away from the product code (top) and the watermark (centred). Vertically it
+ * stops at `LOGO_BOTTOM_RATIO` from the bottom rather than hugging the corner:
+ * that last strip of the canvas belongs to the bottom banner, and a logo sitting
+ * on top of it is the thing this default is meant to avoid.
  */
 export function defaultLogoPlacement(width: number, height: number): LogoPlacement {
   const sourceWidth = width > 0 ? width : CANVAS_SIZE;
   const sourceHeight = height > 0 ? height : CANVAS_SIZE;
   const longest = Math.max(sourceWidth, sourceHeight);
   const scale = longest > 0 ? (CANVAS_SIZE * LOGO_DEFAULT_LONGEST_RATIO) / longest : 1;
+  const bottomMargin = CANVAS_SIZE * LOGO_BOTTOM_RATIO;
   return {
     x: CANVAS_SIZE - LOGO_MARGIN - (sourceWidth * scale) / 2,
-    y: CANVAS_SIZE - LOGO_MARGIN - (sourceHeight * scale) / 2,
+    y: CANVAS_SIZE - bottomMargin - (sourceHeight * scale) / 2,
     scale,
   };
 }
