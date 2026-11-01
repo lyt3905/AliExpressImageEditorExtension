@@ -72,6 +72,7 @@ async function scanTab(tabId: number): Promise<{
   strategy: string;
   productCode: string | null;
   productTitle: string | null;
+  onlyKits: boolean;
 }> {
   await ensureContentScript(tabId);
   const message: ExtensionMessage = { type: 'SCAN_ACTIVE_TAB', requestId: createRequestId('scan') };
@@ -81,6 +82,7 @@ async function scanTab(tabId: number): Promise<{
     strategy: string;
     productCode: string | null;
     productTitle: string | null;
+    onlyKits: boolean;
   }>;
   try {
     response = await sendToTab<{
@@ -88,6 +90,7 @@ async function scanTab(tabId: number): Promise<{
       strategy: string;
       productCode: string | null;
       productTitle: string | null;
+      onlyKits: boolean;
     }>(tabId, message);
   } catch (error) {
     throw new AppError(ErrorCode.CONTENT_SCRIPT_UNAVAILABLE, `内容脚本无响应：${messageOf(error)}`);
@@ -118,7 +121,7 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
 
   await setBadge('…', `${EXTENSION_TITLE}：正在扫描商品主图…`);
 
-  const { images, strategy, productCode, productTitle } = await scanTab(tabId);
+  const { images, strategy, productCode, productTitle, onlyKits } = await scanTab(tabId);
   console.log('[AIEE] scanned', images.length, 'images via', strategy);
 
   await setBadge('…', `${EXTENSION_TITLE}：正在下载 ${images.length} 张图片…`);
@@ -175,6 +178,7 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
     images: sessionImages,
     productCode,
     productTitle,
+    onlyKits,
   });
   await putSession(record);
   await saveSessionMeta({
@@ -185,6 +189,7 @@ export async function runScanFlow(tab: chrome.tabs.Tab): Promise<void> {
     imageIds: record.imageIds,
     ...(record.productCode ? { productCode: record.productCode } : {}),
     ...(record.productTitle ? { productTitle: record.productTitle } : {}),
+    ...(record.onlyKits ? { onlyKits: true } : {}),
   });
 
   await openEditorTab(sessionId);

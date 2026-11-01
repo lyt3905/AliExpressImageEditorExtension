@@ -466,6 +466,29 @@ export const MAX_SHADOW_OFFSET = 100;
 /** Longest label shown for a text layer in the layer list before truncation. */
 export const TEXT_LAYER_LABEL_MAX = 24;
 
+// ------------------------------------------------------------- 「Only Kits」
+
+/**
+ * Wording of the auto-created kit-only text layer.
+ *
+ * A constant because the same string is written by the layer constructor
+ * (`createOnlyKitsTextLayer`), matched for de-duplication on hydrate, and kept
+ * alive across 自动排版 (`carriedLayers`) — three places that must agree, or the
+ * seller ends up with the label twice or with none.
+ */
+export const ONLY_KITS_TEXT = 'Only Kits';
+
+/**
+ * Clearance in logical px between the bottom of the 编号 text and the top of
+ * 「Only Kits」.
+ *
+ * The two are stacked (spec: 不能遮挡编号) and nothing else enforces it: a seller
+ * who drags the code down later may of course overlap them, but the initial
+ * placement must not. 16px reads as a deliberate line break at 48px type without
+ * looking like a separate paragraph.
+ */
+export const ONLY_KITS_GAP = 16;
+
 // ---------------------------------------------------------------- transform
 
 /** Degrees one press of「左转 / 右转」turns the selected layer. */

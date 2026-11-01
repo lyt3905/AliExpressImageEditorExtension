@@ -4,12 +4,17 @@ import {
   MAX_SHADOW_BLUR,
   MAX_SHADOW_OFFSET,
   MIN_SHADOW_OFFSET,
+  ONLY_KITS_GAP,
+  ONLY_KITS_TEXT,
   TEXT_LAYER_DEFAULTS,
+  TEXT_STYLE_KEYS,
 } from '../../src/shared/constants';
 import type { EditorLayer, EditorMaterial, ImageLayer, TextLayer } from '../../src/shared/types';
 import {
   createEditorState,
   createLayerFromMaterial,
+  createOnlyKitsTextLayer,
+  createProductCodeTextLayer,
   createTextLayer,
   editorReducer,
   estimateTextHeight,
@@ -568,5 +573,129 @@ describe('estimateTextHeight', () => {
 
   it('counts an empty text as a single line', () => {
     expect(estimateTextHeight({ text: '', fontSize: 24 })).toBe(24);
+  });
+
+  it('counts visual lines when an unbroken product code wraps inside its width', () => {
+    const code = createProductCodeTextLayer('ABCDEFGHIJ', { width: 30, fontSize: 10 });
+
+    // The non-DOM fallback advances each glyph by 0.6em: five glyphs fit in
+    // 30px, so ten glyphs occupy two visual lines. Counting only explicit \n
+    // would return 10 and let Only Kits cover the second line.
+    expect(estimateTextHeight(code)).toBe(20);
+  });
+});
+
+describe('createOnlyKitsTextLayer', () => {
+  /** `y` is the centre of the box, so the visible edges have to be derived. */
+  function visibleBounds(layer: TextLayer): { top: number; bottom: number; height: number } {
+    const height = estimateTextHeight(layer) * layer.scale;
+    return { top: layer.y - height / 2, bottom: layer.y + height / 2, height };
+  }
+
+  function sampleCodeLayer(patch: Partial<TextLayer> = {}): TextLayer {
+    return {
+      ...createProductCodeTextLayer('ABB-1234', undefined, { x: 400, y: 120, scale: 1.25 }),
+      ...patch,
+    };
+  }
+
+  it('prints the 套件 wording on an independent text layer', () => {
+    const code = sampleCodeLayer();
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(layer.kind).toBe('text');
+    expect(layer.text).toBe(ONLY_KITS_TEXT);
+    expect(layer.id).not.toBe(code.id);
+    expect(new Set([createOnlyKitsTextLayer(code).id, layer.id]).size).toBe(2);
+  });
+
+  it('copies every text style field, the width, the scale and the horizontal centre', () => {
+    const code = sampleCodeLayer({
+      align: 'left',
+      fill: '#FF0033',
+      fontFamily: 'Arial',
+      fontSize: 60,
+      fontStyle: 'bold',
+      shadowBlur: 12,
+      shadowColor: '#112233',
+      shadowOffsetX: -4,
+      shadowOffsetY: 6,
+      shadowOpacity: 0.4,
+      scale: 0.9,
+      stroke: '#000000',
+      strokeWidth: 4,
+      width: 620,
+      x: 512,
+    });
+
+    const layer = createOnlyKitsTextLayer(code);
+
+    for (const key of TEXT_STYLE_KEYS) {
+      expect(layer[key], `style field ${key}`).toBe(code[key]);
+    }
+    expect(layer.x).toBe(code.x);
+    expect(layer.scale).toBe(code.scale);
+  });
+
+  it('stacks below the 编号 with a visible gap instead of covering it', () => {
+    const code = sampleCodeLayer();
+    const layer = createOnlyKitsTextLayer(code);
+
+    const codeBounds = visibleBounds(code);
+    const bounds = visibleBounds(layer);
+
+    expect(bounds.top).toBeCloseTo(codeBounds.bottom + ONLY_KITS_GAP, 6);
+    expect(bounds.top).toBeGreaterThanOrEqual(codeBounds.bottom + ONLY_KITS_GAP);
+    // A box that merely starts below the code must not overlap it either.
+    expect(bounds.top).toBeGreaterThan(codeBounds.bottom);
+  });
+
+  it('keeps the gap below a multi-line 编号', () => {
+    const code = sampleCodeLayer({ text: 'ABB-1234\nCAT-99' });
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(visibleBounds(layer).top).toBeCloseTo(visibleBounds(code).bottom + ONLY_KITS_GAP, 6);
+  });
+
+  it('keeps the gap below a 编号 that wraps without an explicit newline', () => {
+    const code = sampleCodeLayer({ text: 'ABCDEFGHIJ', width: 30, fontSize: 10, scale: 1 });
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(visibleBounds(code).height).toBe(20);
+    expect(visibleBounds(layer).top).toBeCloseTo(visibleBounds(code).bottom + ONLY_KITS_GAP, 6);
+  });
+
+  it('falls back to the 编号 default style and default placement without a code layer', () => {
+    const layer = createOnlyKitsTextLayer();
+    const reference = createProductCodeTextLayer(ONLY_KITS_TEXT);
+
+    expect(layer.x).toBe(reference.x);
+    expect(layer.y).toBe(reference.y);
+    expect(layer.scale).toBe(reference.scale);
+    for (const key of TEXT_STYLE_KEYS) {
+      expect(layer[key], `style field ${key}`).toBe(reference[key]);
+    }
+  });
+
+  it('honours the remembered style and 编号 placement when there is no code layer', () => {
+    const layer = createOnlyKitsTextLayer(
+      undefined,
+      { fill: '#0000FF', fontSize: 72 },
+      { x: 300, y: 90, scale: 0.8 },
+    );
+
+    expect(layer.fill).toBe('#0000FF');
+    expect(layer.fontSize).toBe(72);
+    expect(layer.x).toBe(300);
+    expect(layer.y).toBe(90);
+    expect(layer.scale).toBe(0.8);
+  });
+
+  it('copies rotation and mirror properties from the 编号 layer', () => {
+    const layer = createOnlyKitsTextLayer(sampleCodeLayer({ flipX: true, flipY: true, rotation: 90 }));
+
+    expect(layer.rotation).toBe(90);
+    expect(layer.flipX).toBe(true);
+    expect(layer.flipY).toBe(true);
   });
 });

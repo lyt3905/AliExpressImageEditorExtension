@@ -10,10 +10,11 @@
  * document is editor business; `services/` must not import from `editor/`.
  */
 
-import { TEXT_LAYER_DEFAULTS } from '../../shared/constants';
+import { ONLY_KITS_TEXT, TEXT_LAYER_DEFAULTS } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, PlateLayer, TextLayer } from '../../shared/types';
 import type { CompositionPlan } from '../../services/composition/planner';
-import { createLayerId, createPlateLayer } from './editor-reducer';
+import type { MeasureText } from '../../services/composition/text-fit';
+import { createLayerId, createOnlyKitsTextLayer, createPlateLayer } from './editor-reducer';
 
 function toImageLayer(image: CompositionPlan['images'][number]): ImageLayer {
   return {
@@ -95,33 +96,54 @@ export function planToLayers(plan: CompositionPlan): EditorLayer[] {
 }
 
 /**
- * Layers that survive a compose: brand logos and the product-code text.
+ * Layers that survive a compose: brand logos, the product-code text and the
+ * 「Only Kits」 label.
  *
- * Both are **document layers the seller owns**, not part of the layout: a logo
+ * All three are **document layers the seller owns**, not part of the layout: a logo
  * they placed (and possibly unlocked and moved) must not vanish because they
  * pressed 生成主图, and the code text is the same story — it came from the listing
- * title, not from the template.
+ * title, not from the template. The 「Only Kits」 label is created from that same
+ * title by the editor, so 自动排版 losing it would read as "it stopped matching the
+ * title".
  *
  * The code is only carried when the plan does not already place it: 「主图 + 包装盒」
  * has a `text_zone`, so its code comes from the plan (position decided by the
  * template). The collage template deliberately has no text zone, and that is
  * exactly the case this function exists for — without it, switching templates
  * makes the code disappear, which reads as "it stopped extracting from the title".
+ * The label follows the identical rule, matched by trimmed text, so a template that
+ * does place `ONLY_KITS_TEXT` is not duplicated.
  *
- * Order: carried code sits above the plan (it used to be the top-most text) and
- * below brand logos, matching `EditorStage`, which paints brand layers last.
+ * Order: carried code sits above the plan (it used to be the top-most text), the
+ * label directly under it, and both below brand logos, matching `EditorStage`,
+ * which paints brand layers last.
  */
 export function carriedLayers(
   plan: CompositionPlan,
   existing: readonly EditorLayer[],
   productCode: string | null | undefined,
+  measure?: MeasureText,
 ): EditorLayer[] {
   const code = (productCode ?? '').trim();
   const planHasCode = code !== '' && plan.texts.some((text) => text.text.trim() === code);
+  const planHasOnlyKits = plan.texts.some((text) => text.text.trim() === ONLY_KITS_TEXT);
   const logos = existing.filter((layer) => layer.kind === 'brand');
   const codeLayers =
     code === '' || planHasCode
       ? []
       : existing.filter((layer) => layer.kind === 'text' && layer.text.trim() === code);
-  return [...codeLayers, ...logos];
+  const plannedCode = planHasCode
+    ? plan.texts.find((text) => text.text.trim() === code)
+    : undefined;
+  const plannedCodeLayer = plannedCode ? toTextLayer(plannedCode) : undefined;
+  const onlyKitsLayers = planHasOnlyKits
+    ? []
+    : existing
+        .filter((layer): layer is TextLayer => layer.kind === 'text' && layer.text.trim() === ONLY_KITS_TEXT)
+        .map((layer) =>
+          plannedCodeLayer
+            ? { ...createOnlyKitsTextLayer(plannedCodeLayer, undefined, undefined, measure), id: layer.id }
+            : layer,
+        );
+  return [...codeLayers, ...onlyKitsLayers, ...logos];
 }

@@ -27,6 +27,8 @@ export interface LayerPanelProps {
   onRotatePreview: (layerId: string, rotation: number) => void;
   /** Knob release / arrow key: one history step. */
   onRotateCommit: (layerId: string, rotation: number) => void;
+  /** 全部镜像: every 原图 / 抠图 in one step — not tied to the selection. */
+  onFlipAllImages: () => void;
 }
 
 const KIND_LABEL: Record<EditorLayer['kind'], string> = {
@@ -78,6 +80,7 @@ export function LayerPanel({
   onTransform,
   onRotatePreview,
   onRotateCommit,
+  onFlipAllImages,
 }: LayerPanelProps): JSX.Element {
   // The panel lists the topmost layer first, mirroring the visual stack.
   const ordered = [...layers].reverse();
@@ -118,6 +121,7 @@ export function LayerPanel({
             onCommand={onTransform}
             onRotatePreview={onRotatePreview}
             onRotateCommit={onRotateCommit}
+            onFlipAllImages={onFlipAllImages}
           />
         ) : layers.length > 0 ? (
           <p className="transform-controls__hint transform-controls__hint--idle">

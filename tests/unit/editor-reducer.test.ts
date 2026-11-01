@@ -6,8 +6,11 @@ import {
   computeInitialPlacement,
   createEditorState,
   createLayerFromMaterial,
+  createPlateLayer,
+  createTextLayer,
   deleteLayer,
   editorReducer,
+  flipAllImagesX,
   insertLayerBelow,
   moveLayer,
   type EditorAction,
@@ -250,5 +253,85 @@ describe('layer lock', () => {
     const layer = state.history.present.layers[0] as ImageLayer;
     expect(layer.id).toBe('logo');
     expect(layer.kind).toBe('brand');
+  });
+});
+
+describe('FLIP_ALL_IMAGES_X', () => {
+  it('toggles each 原图 / 抠图 flipX independently', () => {
+    // One unset flag and one already mirrored: the batch is a toggle per layer,
+    // not "set everything to true".
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('original-1') },
+      { type: 'ADD_LAYER', layer: makeLayer('cutout-1', { kind: 'cutout', flipX: true }) },
+      { type: 'FLIP_ALL_IMAGES_X' },
+    ]);
+
+    expect(state.history.present.layers.map((layer) => layer.flipX)).toEqual([true, false]);
+  });
+
+  it('leaves 品牌 / 文字 / 衬板 layers untouched (same references)', () => {
+    const brand = makeLayer('brand-1', { kind: 'brand' });
+    const text = createTextLayer();
+    const plate = createPlateLayer({ width: 200, height: 120, fill: '#F5F5F5', cornerRadius: 8 });
+
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('original-1') },
+      { type: 'ADD_LAYER', layer: brand },
+      { type: 'ADD_LAYER', layer: text },
+      { type: 'ADD_LAYER', layer: plate },
+      { type: 'FLIP_ALL_IMAGES_X' },
+    ]);
+
+    const [original, nextBrand, nextText, nextPlate] = state.history.present.layers;
+    expect(original?.flipX).toBe(true);
+    expect(nextBrand).toBe(brand);
+    expect(nextText).toBe(text);
+    expect(nextPlate).toBe(plate);
+  });
+
+  it('records the whole batch as exactly one history step, and undo reverts every flag', () => {
+    const before = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('original-1') },
+      { type: 'ADD_LAYER', layer: makeLayer('cutout-1', { kind: 'cutout', flipX: true }) },
+    ]);
+
+    const flipped = editorReducer(before, { type: 'FLIP_ALL_IMAGES_X' });
+    expect(flipped.history.past.length).toBe(before.history.past.length + 1);
+    expect(flipped.history.present.layers.map((layer) => layer.flipX)).toEqual([true, false]);
+
+    const undone = editorReducer(flipped, { type: 'UNDO' });
+    expect(undone.history.present.layers.map((layer) => layer.flipX)).toEqual([undefined, true]);
+  });
+
+  it('keeps the current selection across the batch', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('original-1') },
+      { type: 'ADD_LAYER', layer: makeLayer('cutout-1', { kind: 'cutout' }) },
+      { type: 'FLIP_ALL_IMAGES_X' },
+    ]);
+
+    // ADD_LAYER selects the added layer; flipping every picture keeps it selected.
+    expect(state.selectedLayerId).toBe('cutout-1');
+    expect(state.history.present.layers.map((layer) => layer.flipX)).toEqual([true, true]);
+  });
+
+  it('is a no-op that keeps the same state reference on an empty canvas', () => {
+    const state = createEditorState();
+    const next = editorReducer(state, { type: 'FLIP_ALL_IMAGES_X' });
+
+    expect(next).toBe(state);
+    expect(state.history.past).toHaveLength(0);
+  });
+
+  it('returns the same document and state when there is nothing to mirror', () => {
+    // 品牌 Logo, 文字 and 衬板 alone are not a reason to spend an undo step.
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('brand-1', { kind: 'brand' }) },
+      { type: 'ADD_LAYER', layer: createTextLayer() },
+    ]);
+    const document = state.history.present;
+
+    expect(flipAllImagesX(document)).toBe(document);
+    expect(editorReducer(state, { type: 'FLIP_ALL_IMAGES_X' })).toBe(state);
   });
 });

@@ -5,6 +5,7 @@ import {
   AUTO_COMPOSE_GRACE_MS,
   CANVAS_SIZE,
   FILL_AUTO_CLOSE_MS,
+  ONLY_KITS_TEXT,
   PAGE_FILL_MAX_BYTES,
   STORAGE_KEYS,
 } from '../shared/constants';
@@ -17,6 +18,7 @@ import type {
   ImageLayer,
   LayerPatch,
   PageFillResult,
+  TextLayer,
 } from '../shared/types';
 import { DEFAULT_TEXT_STYLE, pickTextStyle, type TextStyleDefaults } from '../shared/text-style';
 import { downloadBlobInPage } from '../services/downloader';
@@ -85,6 +87,7 @@ import { autoComposeStep, countForeignLayers } from './state/auto-compose';
 import {
   createEditorState,
   createLayerFromMaterial,
+  createOnlyKitsTextLayer,
   createProductCodeTextLayer,
   createTextLayer,
   editorReducer,
@@ -674,6 +677,54 @@ export function App(): JSX.Element {
         }
       }
 
+      /*
+        「Only Kits」 rides on the title, not on the code — a kit listing without a
+        code still gets the label — so it is gated by its own session flag.
+
+        Same one-shot marker as the code above, for the same reason: deleting the
+        label and refreshing must not force it back onto the canvas. A label that
+        came back from the saved document is never doubled, because the marker is
+        only consulted when nothing is on the canvas yet (`kitsAlreadyThere`).
+      */
+      const kitsAlreadyThere = layers.some(
+        (layer) => layer.kind === 'text' && layer.text.trim() === ONLY_KITS_TEXT,
+      );
+      if (session?.onlyKits === true && !kitsAlreadyThere) {
+        const kitsAddedKey = sessionId ? `aiee:only-kits-added:${sessionId}` : null;
+        let kitsAddedBefore = false;
+        if (kitsAddedKey) {
+          try {
+            const stored = await chrome.storage.local.get(kitsAddedKey);
+            kitsAddedBefore = Boolean(stored?.[kitsAddedKey]);
+            if (!kitsAddedBefore) void chrome.storage.local.set({ [kitsAddedKey]: true });
+          } catch {
+            /* storage unavailable -> fall back to adding it, best effort */
+          }
+        }
+
+        if (!kitsAddedBefore) {
+          const codeLayer =
+            productCode !== undefined
+              ? layers.find(
+                  (layer): layer is TextLayer =>
+                    layer.kind === 'text' && layer.text.trim() === productCode,
+                )
+              : undefined;
+          const kitsLayer = createOnlyKitsTextLayer(
+            codeLayer,
+            textStyleRef.current,
+            codePlacementRef.current,
+            measureTextWithCanvas(),
+          );
+          autoAddedLayerIdsRef.current.add(kitsLayer.id);
+          // Directly BELOW the code in the stack: the two are one block, so the
+          // label should also lose the z-fight if the seller ever drags it up.
+          const codeIndex = codeLayer ? layers.indexOf(codeLayer) : -1;
+          if (codeIndex >= 0) layers.splice(codeIndex, 0, kitsLayer);
+          else layers.push(kitsLayer);
+        }
+      }
+
       dispatch({ type: 'LOAD_DOCUMENT', document: { layers } });
     };
 
@@ -1111,7 +1162,10 @@ export function App(): JSX.Element {
       watermark does — see `carriedLayers()` for why the code is only carried when
       the template has no text zone of its own.
     */
-    const layers = [...planLayers, ...carriedLayers(plan, document.layers, session?.productCode)];
+    const layers = [
+      ...planLayers,
+      ...carriedLayers(plan, document.layers, session?.productCode, measureTextWithCanvas()),
+    ];
     /*
       Select the hero on the way in, so the transformer lands on the subject instead
       of on nothing or on the backdrop plate — with nothing selected, the first drag
@@ -1672,6 +1726,15 @@ export function App(): JSX.Element {
     [document],
   );
 
+  /**
+   * 全部镜像: the reducer toggles every 原图 / 抠图 as one document, so the whole
+   * batch costs the user one undo. No layer lookup here on purpose — the button
+   * works on the canvas, not on the selection.
+   */
+  const handleFlipAllImages = useCallback(() => {
+    dispatch({ type: 'FLIP_ALL_IMAGES_X' });
+  }, []);
+
   const handleMoveLayer = useCallback((layerId: string, direction: 'up' | 'down') => {
     dispatch({ type: 'MOVE_LAYER', layerId, direction });
   }, []);
@@ -2161,6 +2224,7 @@ export function App(): JSX.Element {
           onTransform={handleTransform}
           onRotatePreview={handleRotatePreview}
           onRotateCommit={handleRotateCommit}
+          onFlipAllImages={handleFlipAllImages}
         />
       </div>
     </div>

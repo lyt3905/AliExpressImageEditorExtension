@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { AliExpressPageAdapter } from '../../src/content/aliexpress-page-adapter';
+import { AliExpressPageAdapter, hasKitsWord } from '../../src/content/aliexpress-page-adapter';
 
 /** Builds a fake `Document` whose `location` carries the given search string. */
 function docWithSearch(search: string): Document {
@@ -94,5 +94,50 @@ describe('extractProductCode — the numeric product id is NOT a code', () => {
       docWithTitle('Hot Sale MTS-TF-SS86-0001 Figures', '?productId=1000001234567890'),
     );
     expect(adapter.extractProductCode()).toBe('MTS-TF-SS86-0001');
+  });
+});
+
+describe('hasKitsWord — 整词 kit / kits, case-insensitive', () => {
+  it('matches kit and kits as whole words in any casing', () => {
+    for (const title of ['Only Kits Figure Set', '1/144 KITS', 'kit', 'KIT', 'Kit', 'a Kit here']) {
+      expect(hasKitsWord(title), title).toBe(true);
+    }
+  });
+
+  it('does not match longer words that merely contain the letters', () => {
+    // 误命中 these once and the canvas grows an 「Only Kits」 label on a toolkit.
+    for (const title of ['toolkit', 'kitchen', 'kitsune', 'Kitting', 'kitschy', 'toolkits']) {
+      expect(hasKitsWord(title), title).toBe(false);
+    }
+  });
+
+  it('treats empty and missing titles as "no kit word"', () => {
+    for (const title of ['', '   ', null, undefined]) {
+      expect(hasKitsWord(title), String(title)).toBe(false);
+    }
+  });
+
+  it('finds the word next to digits, punctuation and CJK text', () => {
+    // Real titles glue the word to numbers and CJK chars with no spaces.
+    for (const title of ['1/144比例KIT模型', 'MG-1/100-kits', 'Figure Set (KITS) 5pcs']) {
+      expect(hasKitsWord(title), title).toBe(true);
+    }
+  });
+});
+
+describe('AliExpressPageAdapter.hasKitsTitle — reads the 标题 input', () => {
+  it('is true when the title carries the whole word', () => {
+    expect(new AliExpressPageAdapter(docWithTitle('Only Kits Figure Set')).hasKitsTitle()).toBe(true);
+    expect(new AliExpressPageAdapter(docWithTitle('1/144 KITS Model Kit')).hasKitsTitle()).toBe(true);
+  });
+
+  it('is false for a title without the word', () => {
+    expect(new AliExpressPageAdapter(docWithTitle('MG-1/100 Gundam Figure')).hasKitsTitle()).toBe(false);
+    expect(new AliExpressPageAdapter(docWithTitle('Premium Toolkit')).hasKitsTitle()).toBe(false);
+  });
+
+  it('is false when there is no 标题 input or it is empty', () => {
+    expect(new AliExpressPageAdapter(docWithSearch('')).hasKitsTitle()).toBe(false);
+    expect(new AliExpressPageAdapter(docWithTitle('   ')).hasKitsTitle()).toBe(false);
   });
 });

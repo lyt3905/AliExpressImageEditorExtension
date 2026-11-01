@@ -35,6 +35,28 @@ const TITLE_INPUT_SELECTOR = 'input[name="title"][type="text"], input[field="tit
  */
 const TITLE_CODE = /([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)/;
 
+/**
+ * `kit` / `kits` as a whole English word, any casing.
+ *
+ * `\b` on both sides is what keeps `toolkit`, `kitchen`, `kitsune` and `Kitting`
+ * out: those have word characters right where the boundary must be. Digits count
+ * as word characters, so `1/144` still separates and `kit144` does not match —
+ * which is the conservative side to err on, since a false positive prints an
+ * 「Only Kits」 label onto a listing that sells something else.
+ */
+const KITS_WORD = /\bkits?\b/i;
+
+/**
+ * Does the title advertise a kit (模型套件)?
+ *
+ * Kept as a free function so the matching rule is unit-testable without a DOM, and
+ * so the content script, diagnostics and tests all read the same rule.
+ */
+export function hasKitsWord(title: string | null | undefined): boolean {
+  if (!title) return false;
+  return KITS_WORD.test(title);
+}
+
 export class AliExpressPageAdapter implements PageImageAdapter {
   private readonly doc: Document;
   private readonly scanOptions: ScanOptions;
@@ -85,6 +107,17 @@ export class AliExpressPageAdapter implements PageImageAdapter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Whether the 标题 advertises a kit — drives the auto-created 「Only Kits」 layer.
+   *
+   * Reads the same 标题 input as `extractProductTitle()`, so a title that has no
+   * product code still answers here: the two signals are independent, and the kit
+   * label must not depend on a code being present.
+   */
+  hasKitsTitle(): boolean {
+    return hasKitsWord(this.extractProductTitle());
   }
 
   /**

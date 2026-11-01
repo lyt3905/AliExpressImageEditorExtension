@@ -77,6 +77,15 @@ export interface EditorSessionMeta {
   productCode?: string;
   /** Product title from the 标题 input, used for brand keyword matching. */
   productTitle?: string;
+  /**
+   * The 标题 advertised a kit (`kit` / `kits` as a whole word).
+   *
+   * Independent of `productCode` on purpose: a title without any code must still
+   * carry the flag, because the flag is what makes the editor create the
+   * 「Only Kits」 text layer. Absent means "not a kit" — everything reading it
+   * must tolerate `undefined`.
+   */
+  onlyKits?: boolean;
 }
 
 /** Full session payload persisted in IndexedDB. */

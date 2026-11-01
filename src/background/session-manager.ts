@@ -21,6 +21,7 @@ export function buildSessionRecord(input: {
   images: SessionImage[];
   productCode?: string | null;
   productTitle?: string | null;
+  onlyKits?: boolean | null;
 }): EditorSessionRecord {
   return {
     id: input.id,
@@ -31,6 +32,10 @@ export function buildSessionRecord(input: {
     images: input.images,
     ...(input.productCode ? { productCode: input.productCode } : {}),
     ...(input.productTitle ? { productTitle: input.productTitle } : {}),
+    // Deliberately its own spread rather than riding on `productCode`: a kit title
+    // often has no code at all, and dropping the flag there would mean no
+    // 「Only Kits」 layer on exactly the listings that need one.
+    ...(input.onlyKits ? { onlyKits: true } : {}),
   };
 }
 

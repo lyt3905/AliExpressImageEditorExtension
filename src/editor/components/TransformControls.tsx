@@ -1,7 +1,11 @@
 /**
  * 镜像 / 旋转 controls for the currently selected layer.
  *
- * One layer at a time, because that is what the panel's selection already means.
+ * The rotate knob and 水平镜像 act on ONE layer, because that is what the panel's
+ * selection already means. 全部镜像 is the exception: it mirrors every 原图 /
+ * 抠图 in the canvas at once (one undo step), so it is a callback without a
+ * layer id and has no is-active state of its own.
+ *
  * Shown for every layer kind — a rotated or mirrored text is as reasonable as a
  * rotated cutout — and every control here produces exactly ONE history step:
  * the buttons commit on click, the knob commits when the drag ends.
@@ -19,6 +23,8 @@ export interface TransformControlsProps {
   onRotatePreview: (layerId: string, rotation: number) => void;
   /** Pointer release / arrow key — exactly one history entry. */
   onRotateCommit: (layerId: string, rotation: number) => void;
+  /** 全部镜像 — every 原图 / 抠图 in one undoable step, independent of the selection. */
+  onFlipAllImages: () => void;
 }
 
 /** Which button lights up for each mirror flag. */
@@ -29,7 +35,6 @@ const MIRROR_BUTTONS: Array<{
   title: string;
 }> = [
   { command: 'flip-x', label: '水平镜像', axis: 'flipX', title: '左右镜像（水平翻转）。再点一次还原' },
-  { command: 'flip-y', label: '垂直镜像', axis: 'flipY', title: '上下镜像（垂直翻转）。再点一次还原' },
 ];
 
 export function TransformControls({
@@ -37,6 +42,7 @@ export function TransformControls({
   onCommand,
   onRotatePreview,
   onRotateCommit,
+  onFlipAllImages,
 }: TransformControlsProps): JSX.Element {
   return (
     <section className="transform-controls">
@@ -76,6 +82,17 @@ export function TransformControls({
               {button.label}
             </button>
           ))}
+          {/*
+            Deliberately no `is-active`: the batch mixes mirrored and unmirrored
+            layers, so "on" would be a guess. The `title` spells out the scope.
+          */}
+          <button
+            type="button"
+            title="水平翻转全部原图与抠图（可撤销）"
+            onClick={onFlipAllImages}
+          >
+            全部镜像
+          </button>
         </div>
       </div>
 

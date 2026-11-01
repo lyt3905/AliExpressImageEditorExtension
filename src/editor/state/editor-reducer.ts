@@ -14,6 +14,8 @@ import {
   MIN_SHADOW_BLUR,
   MIN_SHADOW_OFFSET,
   MIN_STROKE_WIDTH,
+  ONLY_KITS_GAP,
+  ONLY_KITS_TEXT,
   TEXT_LAYER_DEFAULTS,
 } from '../../shared/constants';
 import type {
@@ -25,6 +27,7 @@ import type {
   PlateLayer,
   TextLayer,
 } from '../../shared/types';
+import type { MeasureText } from '../../services/composition/text-fit';
 import {
   clampNumber,
   finiteNumber,
@@ -140,6 +143,28 @@ export function moveLayer(doc: EditorDocument, layerId: string, direction: 'up' 
   return { layers };
 }
 
+/**
+ * Toggle the horizontal mirror of every 原图 / 抠图 layer in one document.
+ *
+ * This is the "全部镜像" button: the product photos are mirrored together, so
+ * the batch must be one document (and therefore one undo step) rather than one
+ * `COMMIT_LAYER` per layer. Each layer toggles its own current flag — a photo
+ * that is already mirrored flips back — brand logos, text, 衬板 and the
+ * watermark frame are left alone, and they keep their identity in the new array.
+ *
+ * Returns the very same document when nothing is flippable: the caller uses that
+ * reference to decide whether an undo step is worth pushing at all.
+ */
+export function flipAllImagesX(doc: EditorDocument): EditorDocument {
+  let changed = false;
+  const layers = doc.layers.map((layer) => {
+    if (layer.kind !== 'original' && layer.kind !== 'cutout') return layer;
+    changed = true;
+    return { ...layer, flipX: layer.flipX !== true };
+  });
+  return changed ? { layers } : doc;
+}
+
 /** Centre the layer and scale its longest side to ~INSERT_MAX_SIDE without stretching. */
 export function computeInitialPlacement(
   sourceWidth: number,
@@ -208,6 +233,13 @@ export type EditorAction =
   | { type: 'UPDATE_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'COMMIT_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'MOVE_LAYER'; layerId: string; direction: 'up' | 'down' }
+  /**
+   * 全部镜像: toggle `flipX` on every 原图 / 抠图 layer as ONE history step.
+   *
+   * Not a loop of `COMMIT_LAYER`: six photos would become six undos, and the
+   * user pressed one button.
+   */
+  | { type: 'FLIP_ALL_IMAGES_X' }
   | { type: 'SELECT_LAYER'; layerId: string | null }
   | { type: 'CLEAR' }
   | { type: 'UNDO' }
@@ -264,6 +296,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'MOVE_LAYER': {
       const next = moveLayer(state.history.present, action.layerId, action.direction);
+      return next === state.history.present ? state : { ...state, history: pushHistory(state.history, next) };
+    }
+
+    case 'FLIP_ALL_IMAGES_X': {
+      const next = flipAllImagesX(state.history.present);
+      // Nothing flippable: keep the same state object so no dead undo step lands
+      // on the stack (and React skips the re-render).
       return next === state.history.present ? state : { ...state, history: pushHistory(state.history, next) };
     }
 
@@ -353,14 +392,106 @@ export function createProductCodeTextLayer(
 }
 
 /**
+ * Build the 「Only Kits」 label that goes with a kit listing's 编号.
+ *
+ * It is a second line UNDER the code, so the one rule that matters is that it
+ * cannot cover it. `y` is the layer's centre in this model and a layer's height
+ * scales with it, so the placement is derived from the code's *visible* bottom
+ * (`estimateTextHeight` × its own scale — the same approximation `EditorStage`
+ * corrects once Konva has measured the real node) and then moves down by the
+ * label's own half height. Everything horizontal is inherited instead: width,
+ * scale and the centre line, so the two lines read as one block.
+ *
+ * With no code layer there is nothing to sit under, so the label takes the 编号
+ * defaults — style and remembered placement both (spec: 「使用编号图层的默认样式和
+ * 默认位置」).
+ */
+export function createOnlyKitsTextLayer(
+  codeLayer?: TextLayer,
+  defaults?: Partial<TextStyleDefaults>,
+  placement?: { x: number; y: number; scale: number },
+  measure?: MeasureText,
+): TextLayer {
+  const base = createProductCodeTextLayer(ONLY_KITS_TEXT, defaults, placement);
+  if (!codeLayer) return base;
+
+  const scale = codeLayer.scale;
+  const codeBottom = codeLayer.y + (estimateTextHeight(codeLayer, measure) * scale) / 2;
+  const ownHeight = estimateTextHeight(
+    {
+      text: ONLY_KITS_TEXT,
+      width: codeLayer.width,
+      fontSize: codeLayer.fontSize,
+      fontFamily: codeLayer.fontFamily,
+      fontStyle: codeLayer.fontStyle,
+    },
+    measure,
+  ) * scale;
+  return {
+    ...base,
+    text: ONLY_KITS_TEXT,
+    x: codeLayer.x,
+    y: codeBottom + ONLY_KITS_GAP + ownHeight / 2,
+    width: codeLayer.width,
+    fontSize: codeLayer.fontSize,
+    fontFamily: codeLayer.fontFamily,
+    fill: codeLayer.fill,
+    fontStyle: codeLayer.fontStyle,
+    align: codeLayer.align,
+    scale,
+    stroke: codeLayer.stroke,
+    strokeWidth: codeLayer.strokeWidth,
+    shadowColor: codeLayer.shadowColor,
+    shadowBlur: codeLayer.shadowBlur,
+    shadowOffsetX: codeLayer.shadowOffsetX,
+    shadowOffsetY: codeLayer.shadowOffsetY,
+    shadowOpacity: codeLayer.shadowOpacity,
+    rotation: codeLayer.rotation,
+    flipX: codeLayer.flipX,
+    flipY: codeLayer.flipY,
+  };
+}
+
+/**
  * Approximate height before Konva has measured the node.
  *
  * Konva's default `lineHeight` is 1, so an unwrapped line is roughly `fontSize`
  * tall. `EditorStage` measures the real height right after the first paint and
  * corrects the node's `offsetY` with it.
  */
-export function estimateTextHeight(layer: Pick<TextLayer, 'text' | 'fontSize'>): number {
-  const lines = layer.text.split('\n').length;
+export function estimateTextHeight(
+  layer: Pick<TextLayer, 'text' | 'fontSize'> &
+    Partial<Pick<TextLayer, 'width' | 'fontFamily' | 'fontStyle'>>,
+  measure: MeasureText = (text, font) => text.length * font.size * 0.6,
+): number {
+  const width = layer.width;
+  if (!Number.isFinite(width) || !width || width <= 0) {
+    return Math.max(1, layer.text.split('\n').length) * layer.fontSize;
+  }
+
+  const font = {
+    family: layer.fontFamily || TEXT_LAYER_DEFAULTS.fontFamily,
+    size: layer.fontSize,
+    weight: layer.fontStyle?.includes('bold') ? ('bold' as const) : ('normal' as const),
+  };
+  let lines = 0;
+  for (const paragraph of layer.text.split('\n')) {
+    if (!paragraph) {
+      lines += 1;
+      continue;
+    }
+    let line = '';
+    for (const char of paragraph) {
+      const candidate = line + char;
+      if (line && measure(candidate, font) > width) {
+        lines += 1;
+        line = char;
+      } else {
+        line = candidate;
+      }
+    }
+    lines += 1;
+  }
   return Math.max(1, lines) * layer.fontSize;
 }
 
