@@ -243,6 +243,68 @@ describe('parseBindingAnswer', () => {
     expect(binding?.slotMaterialIds).toEqual({});
   });
 
+  it('reads the per-candidate framed map so every letter gets a verdict', () => {
+    // The seller's report (m09576): the page had TWO copies of the same finished
+    // poster, the model only named one, and the other stayed in the candidate pool.
+    // A keyed map forces a verdict for every letter the prompt listed.
+    const wider = [
+      { key: 'A', materialId: 'm-a' },
+      { key: 'B', materialId: 'm-b' },
+      { key: 'C', materialId: 'm-c' },
+    ];
+    const binding = parseBindingAnswer(
+      {
+        hero: 'C',
+        package_found: false,
+        hero_confidence: 0.8,
+        framed: { A: true, B: true, C: false },
+        reason: 'A、B 是同一张成品海报',
+      },
+      wider,
+    );
+    expect(binding?.skippedIds).toEqual(['m-a', 'm-b']);
+  });
+
+  it('ignores framed verdicts that are false, unknown or not a real boolean', () => {
+    const binding = parseBindingAnswer(
+      {
+        hero: 'A',
+        package_found: false,
+        hero_confidence: 0.8,
+        framed: { A: false, B: 'true', Z: true },
+        reason: '-',
+      },
+      candidates,
+    );
+    expect(binding?.skippedIds).toEqual([]);
+  });
+
+  it('unions the framed map with the legacy skip list without duplicates', () => {
+    const binding = parseBindingAnswer(
+      {
+        hero: 'A',
+        package_found: false,
+        hero_confidence: 0.8,
+        framed: { B: true },
+        skip: ['B', 'b'],
+        reason: '-',
+      },
+      candidates,
+    );
+    expect(binding?.skippedIds).toEqual(['m-box']);
+  });
+
+  it('treats "framed hero" as no answer at all', () => {
+    // Same rule as `skip`: an answer that both picks A and calls A framed is
+    // unusable, otherwise the finished poster lands in the biggest slot.
+    expect(
+      parseBindingAnswer(
+        { hero: 'A', package_found: false, hero_confidence: 0.9, framed: { A: true }, reason: '-' },
+        candidates,
+      ),
+    ).toBeNull();
+  });
+
   it('treats package_found=false as "no package", even with a letter', () => {
     const binding = parseBindingAnswer(
       { hero: 'A', package: 'B', hero_confidence: 0.5, package_found: false, reason: '无包装' },
@@ -408,12 +470,16 @@ describe('buildBindingPrompt', () => {
     expect(prompt).toContain('null');
   });
 
-  it('asks for a skip list of shop-frame photos and shows it in the answer shape', () => {
+  it('asks for a per-candidate framed verdict, not just a list of the obvious one', () => {
     const prompt = buildBindingPrompt([{ key: 'A', label: '商品正面图' }]);
     expect(prompt).toContain('店铺边框水印');
-    expect(prompt).toContain('"skip":[]');
-    // The instruction has to say what to do when nothing is framed, otherwise the
-    // model invents an entry to fill the field.
-    expect(prompt).toContain('没有带边框水印的图就把 skip 写成空数组');
+    expect(prompt).toContain('"framed":{"A":false,"B":true}');
+    // Every letter must get a verdict: a free-form list lets the model stop after
+    // the most obvious copy and leave the second finished poster in the pool.
+    expect(prompt).toContain('每一张');
+    expect(prompt).toContain('每张都要有明确答案');
+    // And the "nothing is framed" case must be spelled out, otherwise the model
+    // invents an entry to fill the field.
+    expect(prompt).toContain('每一张都填 false');
   });
 });

@@ -1261,12 +1261,17 @@ export function App(): JSX.Element {
               box = binding.boxId;
               setHeroId(binding.heroId);
               setBoxId(binding.boxId);
+              const skippedNames = binding.skippedIds
+                .map((id) => cutouts.find((material) => material.id === id)?.label)
+                .filter((label): label is string => Boolean(label));
               setBindNote(
                 `AI：${binding.reason}（置信度 ${Math.round(binding.confidence * 100)}%）${
                   binding.boxId ? '' : ' · 未识别到包装盒'
                 }${
                   binding.skippedIds.length > 0
-                    ? ` · 已跳过 ${binding.skippedIds.length} 张带店铺边框水印`
+                    ? ` · 已跳过 ${binding.skippedIds.length} 张带店铺边框水印${
+                        skippedNames.length > 0 ? `（${skippedNames.join('、')}）` : ''
+                      }`
                     : ''
                 }`,
               );
