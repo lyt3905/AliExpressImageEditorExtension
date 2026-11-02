@@ -102,9 +102,12 @@ export function buildBindingPrompt(
     '- 哪一张适合做"特写主体"（hero）：单件商品、有清晰立面、适合放大裁切；',
     '- 哪一张是"包装盒"（package）：外包装、盒体、可见盒面。',
     '',
-    '先看这一步：有没有哪一张整图被"店铺边框水印"包住——一圈花边 / 圆角白卡 / 角标贴纸 /',
-    '上下文字条，商品本身并没有这些东西。这类图不能用来拼图（通常就排在第一张）。把它们的',
-    '编号放进 skip；skip 里的图不要再拿去当 hero、package 或任何图位。',
+    '先逐张检查"店铺边框水印"：整圈淡色边框 / 圆角白卡 / 底部一整条彩色色带（常见 "In Stock"',
+    '之类字样）/ 角标贴纸 —— 这些是卖家自家成品海报留下的痕迹，商品本身没有这些东西。',
+    'A–F **每一张**都要看一眼，不能只报最明显的那一张：同一款海报的主图和副图往往是同一张成品图，',
+    '两张（甚至更多）都带边框水印时要全部标出来。',
+    '结果写进 framed：这张带边框水印填 true，没有填 false，每张都要有明确答案。',
+    '标了 true 的图不能用来拼图 —— 不要当 hero、不要当 package、不要进任何图位。',
   ];
 
   if (slots.length > 0) {
@@ -148,13 +151,13 @@ export function buildBindingPrompt(
     '只输出一个 JSON，不要解释，格式：',
     slots.length > 0
       ? heroSlotId
-        ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"slots":{"图位名":"C"},"size":{"图位名":0.18},"reason":"一句话"}'
-        : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"slots":{"图位名":"C"},"reason":"一句话"}'
-      : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"skip":[],"reason":"一句话"}',
+        ? '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"framed":{"A":false,"B":true},"slots":{"图位名":"C"},"size":{"图位名":0.18},"reason":"一句话"}'
+        : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"framed":{"A":false,"B":true},"slots":{"图位名":"C"},"reason":"一句话"}'
+      : '{"hero":"A","package":"B","hero_confidence":0.9,"package_found":true,"framed":{"A":false,"B":true},"reason":"一句话"}',
     '',
     '如果没有任何一张是包装盒，package 填 null、package_found 填 false。',
     '不要把同一张图同时当作 hero 和 package。',
-    '没有带边框水印的图就把 skip 写成空数组 []。',
+    '没有任何一张带边框水印时，framed 里每一张都填 false（不要省略这个字段）。',
   );
   return lines.join('\n');
 }
@@ -189,7 +192,7 @@ export function parseBindingAnswer(
     is the same outcome as "the model could not decide" and keeps one wrong pick
     from silently winning.
   */
-  const skippedIds = parseSkippedIds(record.skip, byKey);
+  const skippedIds = mergeIds(parseFramedIds(record.framed, byKey), parseSkippedIds(record.skip, byKey));
   const skipped = new Set(skippedIds);
 
   const heroKey = asKey(record.hero);
@@ -234,6 +237,40 @@ export function parseBindingAnswer(
     confidence,
     reason,
   };
+}
+
+/**
+ * `framed` in the answer: a per-candidate verdict map (`{"A":false,"B":true}`).
+ *
+ * This replaced the free-form `skip` array as the primary shape (10.21.3) because an
+ * array lets the model stop after the one it found most obvious — with two copies of
+ * the same finished poster on the page, that leaves the second one in the candidate
+ * pool. A keyed map has to be filled in for every letter the prompt listed, so "did
+ * you look at this one" stops being optional. `skip` is still accepted (union) so an
+ * older answer shape keeps working.
+ */
+function parseFramedIds(raw: unknown, byKey: ReadonlyMap<string, string>): string[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const ids: string[] = [];
+  for (const [rawKey, verdict] of Object.entries(raw as Record<string, unknown>)) {
+    if (verdict !== true) continue;
+    const key = asKey(rawKey);
+    if (!key) continue;
+    const materialId = byKey.get(key);
+    if (!materialId || ids.includes(materialId)) continue;
+    ids.push(materialId);
+  }
+  return ids;
+}
+
+function mergeIds(...groups: ReadonlyArray<readonly string[]>): string[] {
+  const merged: string[] = [];
+  for (const group of groups) {
+    for (const id of group) {
+      if (!merged.includes(id)) merged.push(id);
+    }
+  }
+  return merged;
 }
 
 /**
