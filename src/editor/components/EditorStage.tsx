@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
 import { Image as KonvaImage, Layer, Rect, Stage, Text as KonvaText, Transformer } from 'react-konva';
 import {
@@ -8,6 +8,12 @@ import {
   WATERMARK_LAYER_ID,
 } from '../../shared/constants';
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
+import {
+  colorChannels,
+  needsFilterPass,
+  normalizeImageEffects,
+  shadowColorWithOpacity,
+} from '../../services/image-effects';
 import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
 import { estimateTextHeight } from '../state/editor-reducer';
 import { axisScale, splitSignedScale } from '../state/transform';
@@ -103,6 +109,65 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
    */
   const textNodesRef = useRef<Map<string, Konva.Text>>(new Map());
   const [textHeights, setTextHeights] = useState<Record<string, number>>({});
+
+  /*
+    Picture nodes, by layer id (`glow:<id>` for the glow copy).
+
+    Kept for one reason: Konva only applies pixel filters to a CACHED node, and
+    `cache()` is imperative. Everything else about a picture is declarative, so
+    this map exists purely to call `cache()` / `clearCache()` at the right time —
+    once per change of image or filter settings, not once per render.
+  */
+  const pictureNodesRef = useRef<Map<string, Konva.Image>>(new Map());
+  const pictureCacheRef = useRef<
+    Map<string, { image: unknown; filter: string; wants: boolean }>
+  >(new Map());
+
+  const registerPicture = useCallback((key: string, node: Konva.Image | null) => {
+    if (node) pictureNodesRef.current.set(key, node);
+    else pictureNodesRef.current.delete(key);
+  }, []);
+
+  useEffect(() => {
+    const nodes = pictureNodesRef.current;
+    const caches = pictureCacheRef.current;
+    const touched = new Set<string>();
+    const sync = (
+      key: string,
+      node: Konva.Image | undefined,
+      image: HTMLImageElement | undefined,
+      wants: boolean,
+      filter: string,
+    ) => {
+      if (!node || !image) return;
+      touched.add(key);
+      const previous = caches.get(key);
+      if (previous && previous.image === image && previous.filter === filter && previous.wants === wants) {
+        return;
+      }
+      if (wants) node.cache({ pixelRatio: 1 });
+      else node.clearCache();
+      caches.set(key, { image, filter, wants });
+      node.getLayer()?.batchDraw();
+    };
+    for (const layer of layers) {
+      if (layer.kind === 'text' || layer.kind === 'plate') continue;
+      const image = imageForLayer(layer);
+      const effects = normalizeImageEffects(layer.effects);
+      sync(
+        layer.id,
+        nodes.get(layer.id),
+        image,
+        needsFilterPass(effects),
+        `${effects.grayscale}|${effects.brightness}`,
+      );
+      const glowOn = effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
+      sync(`glow:${layer.id}`, nodes.get(`glow:${layer.id}`), image, glowOn, effects.glowColor);
+    }
+    // A deleted layer (or a glow that was switched off) must not keep a cache
+    // alive: the node is gone, so the entry would only leak pixel buffers.
+    for (const key of [...caches.keys()]) if (!touched.has(key)) caches.delete(key);
+  });
 
   const previewScale = stageSize / CANVAS_SIZE;
   const previewScaleRef = useRef(previewScale);
@@ -541,66 +606,133 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               panel still lists it, which is where the unlock lives.
             */
             const locked = Boolean(layer.locked);
+            const effects = normalizeImageEffects(layer.effects);
+            const shadowOn =
+              effects.shadowOpacity > 0 &&
+              (effects.shadowBlur > 0 || effects.shadowOffsetX !== 0 || effects.shadowOffsetY !== 0);
+            const glowOn =
+              effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
+            const filterOn = effects.grayscale || effects.brightness !== 0;
+            const tint = colorChannels(effects.glowColor);
             return (
-              <KonvaImage
-                key={layer.id}
-                id={layer.id}
-                image={image}
-                x={layer.x}
-                y={layer.y}
-                offsetX={layer.sourceWidth / 2}
-                offsetY={layer.sourceHeight / 2}
-                scaleX={axisScale(layer, 'x')}
-                scaleY={axisScale(layer, 'y')}
-                rotation={layer.rotation}
-                listening={!locked}
-                draggable={!locked}
-                /*
-                  No `hitFunc`: a picture is grabbable over its whole box, exactly
-                  like a plain photo. An alpha-accurate hit area (only the opaque
-                  pixels count) sounds nicer and was shipped in 10.3.5 — but for a
-                  cut-out with wide transparent margins every grab became a search
-                  for a solid pixel, which is why cut-out material felt stuck while
-                  ordinary photos dragged fine. One path for both is worth more
-                  than the corner case it fixes; to move a layer that is covered by
-                  something opaque, select it in the layer panel or hold Alt.
-                */
-                onClick={() => onSelect(layer.id)}
-                onTap={() => onSelect(layer.id)}
-                /*
-                  The picture the pointer went down on is the picture that moves.
-                  Handing every drag inside the selection to the selection is what
-                  made a stack of overlapping pictures untouchable: the top one
-                  never moved, the selected one did. Alt is the explicit way to say
-                  "the selection, not what I hit".
-                */
-                onDragStart={(event) => beginLayerDrag(layer.id, event)}
-                onDragEnd={(event) => {
-                  // A drag this layer merely grabbed on behalf of the selection
-                  // must not move it or commit a history step.
-                  if (suppressDragEndRef.current === layer.id) {
-                    suppressDragEndRef.current = null;
-                    return;
+              <Fragment key={layer.id}>
+                {/*
+                  Glow is a SECOND copy of the same picture, painted underneath:
+                  Konva cannot dilate an alpha channel, so the hard rim comes from
+                  the copy's own shadow and the soft falloff from its blur. The
+                  copy is tinted to one flat colour (Konva's RGB filter multiplies
+                  the channels, which keeps the alpha shape and drops the detail) —
+                  that is exactly what a glow is: the silhouette, not the photo.
+                  It never listens to the pointer; the picture on top still owns
+                  every click and drag.
+                */}
+                {glowOn ? (
+                  <KonvaImage
+                    ref={(node) => registerPicture(`glow:${layer.id}`, node)}
+                    image={image}
+                    x={layer.x}
+                    y={layer.y}
+                    offsetX={layer.sourceWidth / 2}
+                    offsetY={layer.sourceHeight / 2}
+                    scaleX={axisScale(layer, 'x')}
+                    scaleY={axisScale(layer, 'y')}
+                    rotation={layer.rotation}
+                    listening={false}
+                    opacity={effects.glowOpacity}
+                    filters={[Konva.Filters.RGB]}
+                    red={tint.red}
+                    green={tint.green}
+                    blue={tint.blue}
+                    shadowColor={shadowColorWithOpacity(effects.glowColor, effects.glowOpacity)}
+                    shadowBlur={effects.glowBlur + effects.glowRadius}
+                    shadowOffsetX={0}
+                    shadowOffsetY={0}
+                    shadowForStrokeEnabled={false}
+                  />
+                ) : null}
+                <KonvaImage
+                  ref={(node) => registerPicture(layer.id, node)}
+                  id={layer.id}
+                  image={image}
+                  x={layer.x}
+                  y={layer.y}
+                  offsetX={layer.sourceWidth / 2}
+                  offsetY={layer.sourceHeight / 2}
+                  scaleX={axisScale(layer, 'x')}
+                  scaleY={axisScale(layer, 'y')}
+                  rotation={layer.rotation}
+                  opacity={effects.opacity}
+                  /*
+                    Pixel filters need a cache, and a cache is only valid for the
+                    pixels it was built from — the `registerPicture` + effect pair
+                    below re-caches when the image or the filter settings change,
+                    instead of on every render (a 640px preview re-filtering six
+                    pictures per frame is what makes a slider feel broken).
+                  */
+                  filters={filterOn ? [Konva.Filters.Grayscale, Konva.Filters.Brighten] : undefined}
+                  grayscale={effects.grayscale}
+                  /*
+                    Konva's filter is `Brighten` with a MULTIPLIER (1 = untouched),
+                    not a −1…1 offset, so the document's field is mapped here:
+                    −1 → 0 (black), 0 → 1 (untouched), +1 → 2 (blown out).
+                  */
+                  brightness={Math.max(0, 1 + effects.brightness)}
+                  shadowColor={
+                    shadowOn ? shadowColorWithOpacity(effects.shadowColor, effects.shadowOpacity) : undefined
                   }
-                  onDragEnd(layer.id, event.target.x(), event.target.y());
-                }}
-                onTransformEnd={(event) => {
-                  const node = event.target as Konva.Image;
-                  const signedX = node.scaleX();
-                  const signedY = node.scaleY();
-                  // Normalise the node back to scale 1 so `scale` stays the single source of truth.
-                  node.scaleX(1);
-                  node.scaleY(1);
-                  onTransformEnd(layer.id, {
-                    x: node.x(),
-                    y: node.y(),
-                    // The transformer reports a SIGNED scale for a mirrored
-                    // layer; the document keeps magnitude and mirror apart.
-                    ...splitSignedScale(signedX, signedY),
-                    rotation: node.rotation(),
-                  });
-                }}
-              />
+                  shadowBlur={shadowOn ? effects.shadowBlur : 0}
+                  shadowOffsetX={shadowOn ? effects.shadowOffsetX : 0}
+                  shadowOffsetY={shadowOn ? effects.shadowOffsetY : 0}
+                  shadowForStrokeEnabled={false}
+                  listening={!locked}
+                  draggable={!locked}
+                  /*
+                    No `hitFunc`: a picture is grabbable over its whole box, exactly
+                    like a plain photo. An alpha-accurate hit area (only the opaque
+                    pixels count) sounds nicer and was shipped in 10.3.5 — but for a
+                    cut-out with wide transparent margins every grab became a search
+                    for a solid pixel, which is why cut-out material felt stuck while
+                    ordinary photos dragged fine. One path for both is worth more
+                    than the corner case it fixes; to move a layer that is covered by
+                    something opaque, select it in the layer panel or hold Alt.
+                  */
+                  onClick={() => onSelect(layer.id)}
+                  onTap={() => onSelect(layer.id)}
+                  /*
+                    The picture the pointer went down on is the picture that moves.
+                    Handing every drag inside the selection to the selection is what
+                    made a stack of overlapping pictures untouchable: the top one
+                    never moved, the selected one did. Alt is the explicit way to say
+                    "the selection, not what I hit".
+                  */
+                  onDragStart={(event) => beginLayerDrag(layer.id, event)}
+                  onDragEnd={(event) => {
+                    // A drag this layer merely grabbed on behalf of the selection
+                    // must not move it or commit a history step.
+                    if (suppressDragEndRef.current === layer.id) {
+                      suppressDragEndRef.current = null;
+                      return;
+                    }
+                    onDragEnd(layer.id, event.target.x(), event.target.y());
+                  }}
+                  onTransformEnd={(event) => {
+                    const node = event.target as Konva.Image;
+                    const signedX = node.scaleX();
+                    const signedY = node.scaleY();
+                    // Normalise the node back to scale 1 so `scale` stays the single source of truth.
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    onTransformEnd(layer.id, {
+                      x: node.x(),
+                      y: node.y(),
+                      // The transformer reports a SIGNED scale for a mirrored
+                      // layer; the document keeps magnitude and mirror apart.
+                      ...splitSignedScale(signedX, signedY),
+                      rotation: node.rotation(),
+                    });
+                  }}
+                />
+              </Fragment>
             );
           })}
 

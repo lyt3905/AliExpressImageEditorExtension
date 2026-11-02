@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_HISTORY } from '../../src/shared/constants';
+import { DEFAULT_IMAGE_EFFECTS, IMAGE_EFFECT_LIMITS, MAX_HISTORY } from '../../src/shared/constants';
 import type { EditorMaterial, ImageLayer } from '../../src/shared/types';
+import { normalizeImageEffects } from '../../src/services/image-effects';
 import {
   addLayer,
   computeInitialPlacement,
@@ -256,8 +257,72 @@ describe('layer lock', () => {
   });
 });
 
-describe('FLIP_ALL_IMAGES_X', () => {
-  it('toggles each 原图 / 抠图 flipX independently', () => {
+describe('picture effects', () => {
+  it('keeps a committed effect block in the document, normalised', () => {
+    let state = reduce(createEditorState(), [{ type: 'ADD_LAYER', layer: makeLayer('photo') }]);
+
+    state = editorReducer(state, {
+      type: 'COMMIT_LAYER',
+      layerId: 'photo',
+      // Out of range on purpose: the reducer owns the clamp, not the panel.
+      patch: { effects: normalizeImageEffects({ opacity: 2, glowBlur: 999, glowOpacity: 0.4 }) },
+    });
+
+    const layer = state.history.present.layers[0] as ImageLayer;
+    expect(layer.effects?.opacity).toBe(1);
+    expect(layer.effects?.glowBlur).toBe(IMAGE_EFFECT_LIMITS.glowBlur);
+    expect(layer.effects?.glowOpacity).toBe(0.4);
+  });
+
+  it('is one undoable step, and undo restores the previous effects', () => {
+    let state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: makeLayer('photo', { effects: normalizeImageEffects({ grayscale: true }) }) },
+    ]);
+    const depth = state.history.past.length;
+
+    state = editorReducer(state, {
+      type: 'COMMIT_LAYER',
+      layerId: 'photo',
+      patch: { effects: normalizeImageEffects({ opacity: 0.6 }) },
+    });
+    expect(state.history.past).toHaveLength(depth + 1);
+    expect((state.history.present.layers[0] as ImageLayer).effects?.grayscale).toBe(false);
+
+    state = editorReducer(state, { type: 'UNDO' });
+    expect((state.history.present.layers[0] as ImageLayer).effects?.grayscale).toBe(true);
+  });
+
+  it('never leaves an effect block on a text layer', () => {
+    const text = createTextLayer();
+    const state = reduce(createEditorState(), [
+      { type: 'ADD_LAYER', layer: text },
+      {
+        type: 'COMMIT_LAYER',
+        layerId: text.id,
+        patch: { effects: normalizeImageEffects({ opacity: 0.2 }) },
+      },
+    ]);
+    const stored = state.history.present.layers[0];
+    expect(stored.kind).toBe('text');
+    expect(stored).not.toHaveProperty('effects');
+  });
+
+  it('repairs a stored block that a older build left out of range', () => {
+    const broken = makeLayer('photo');
+    // Written straight into the document, as a restored JSON blob would be.
+    broken.effects = { ...DEFAULT_IMAGE_EFFECTS, opacity: 12, shadowBlur: 999 } as ImageLayer['effects'];
+
+    const state = reduce(createEditorState(), [
+      { type: 'LOAD_DOCUMENT', document: { layers: [broken] } },
+    ]);
+
+    const layer = state.history.present.layers[0] as ImageLayer;
+    expect(layer.effects?.opacity).toBe(1);
+    expect(layer.effects?.shadowBlur).toBe(IMAGE_EFFECT_LIMITS.shadowBlur);
+  });
+});
+
+describe('FLIP_ALL_IMAGES_X', () => {  it('toggles each 原图 / 抠图 flipX independently', () => {
     // One unset flag and one already mirrored: the batch is a toggle per layer,
     // not "set everything to true".
     const state = reduce(createEditorState(), [

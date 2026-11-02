@@ -15,6 +15,7 @@ import type {
   EditorMaterial,
   EditorSessionMeta,
   ExportInput,
+  ImageEffects,
   ImageLayer,
   LayerPatch,
   PageFillResult,
@@ -615,6 +616,13 @@ export function App(): JSX.Element {
   const selectedTextLayer = useMemo(() => {
     const layer = findLayer(document, state.selectedLayerId);
     return layer?.kind === 'text' ? layer : null;
+  }, [document, state.selectedLayerId]);
+
+  /** Non-null only while the current selection is a picture — drives the effect panel. */
+  const selectedImageLayer = useMemo(() => {
+    const layer = findLayer(document, state.selectedLayerId);
+    if (!layer) return null;
+    return layer.kind === 'text' || layer.kind === 'plate' ? null : layer;
   }, [document, state.selectedLayerId]);
 
   // ---- hydrate the persisted composition once the session is ready
@@ -1657,6 +1665,18 @@ export function App(): JSX.Element {
   );
 
   /**
+   * Commit one picture-effect edit (one history step per slider / toggle).
+   *
+   * Deliberately not routed through `handleCommitLayer`: that one remembers text
+   * styles plus code / logo placements, and an effect has none of those side
+   * effects. It must also NOT write `text-defaults` — a glow on one photo says
+   * nothing about the next photo the seller drops in.
+   */
+  const handleCommitEffects = useCallback((layerId: string, effects: ImageEffects) => {
+    dispatch({ type: 'COMMIT_LAYER', layerId, patch: { effects } });
+  }, []);
+
+  /**
    * Lock / unlock a layer from the layer panel.
    *
    * Unlocking selects the logo, so the transformer lands on it and the very next
@@ -2219,12 +2239,14 @@ export function App(): JSX.Element {
           }
           selectedLayerId={state.selectedLayerId}
           selectedTextLayer={selectedTextLayer}
+          selectedImageLayer={selectedImageLayer}
           onSelect={handleSelect}
           onMove={handleMoveLayer}
           onDelete={handleDeleteLayer}
           onToggleLock={handleToggleLock}
           onMoveEnd={() => undefined}
           onCommitText={handleCommitLayer}
+          onCommitEffects={handleCommitEffects}
           onResetTextStyle={handleResetTextStyle}
           onTransform={handleTransform}
           onRotatePreview={handleRotatePreview}

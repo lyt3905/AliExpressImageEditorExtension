@@ -28,6 +28,7 @@ import type {
   TextLayer,
 } from '../../shared/types';
 import type { MeasureText } from '../../services/composition/text-fit';
+import { isNormalizedEffects, normalizeImageEffects } from '../../services/image-effects';
 import {
   clampNumber,
   finiteNumber,
@@ -112,7 +113,37 @@ export function deleteLayer(doc: EditorDocument, layerId: string): EditorDocumen
  * the discriminated `kind` that `updateLayer` preserves.
  */
 function mergeLayer(layer: EditorLayer, patch: LayerPatch): EditorLayer {
-  return { ...layer, ...patch, id: layer.id, kind: layer.kind } as EditorLayer;
+  // Text and plate layers have no effect block: a patch that carries one (the
+  // picture panel is not the only caller of `updateLayer`) must not leave the
+  // field behind on a node the stage would then try to filter.
+  if (layer.kind === 'text' || layer.kind === 'plate') {
+    const { effects: _effects, ...rest } = patch;
+    return { ...layer, ...rest, id: layer.id, kind: layer.kind } as EditorLayer;
+  }
+  const merged = { ...layer, ...patch, id: layer.id, kind: layer.kind } as ImageLayer;
+  // Normalise while writing, not while painting: a slider that sends
+  // `opacity: 3` must not reach the document, or a reload would paint with an
+  // out-of-range value that Konva silently clamps differently than the panel.
+  if (patch.effects !== undefined) merged.effects = normalizeImageEffects(patch.effects);
+  return merged;
+}
+
+/**
+ * Coerce a document that came back from storage.
+ *
+ * Documents are written by an older build whenever a new field lands, so a
+ * restored `effects` block can be partial or out of range. Doing this here means
+ * the stage and the panel can both trust `layer.effects` as soon as it exists.
+ */
+export function sanitizeDocument(document: EditorDocument): EditorDocument {
+  let changed = false;
+  const layers = document.layers.map((layer) => {
+    if (layer.kind === 'text' || layer.kind === 'plate' || layer.effects === undefined) return layer;
+    if (isNormalizedEffects(layer.effects)) return layer;
+    changed = true;
+    return { ...layer, effects: normalizeImageEffects(layer.effects) };
+  });
+  return changed ? { layers } : document;
 }
 
 export function updateLayer(doc: EditorDocument, layerId: string, patch: LayerPatch): EditorDocument {
@@ -335,7 +366,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return state.exporting === action.exporting ? state : { ...state, exporting: action.exporting };
 
     case 'LOAD_DOCUMENT':
-      return { ...createEditorState(action.document), showWhiteBackground: state.showWhiteBackground };
+      return {
+        ...createEditorState(sanitizeDocument(action.document)),
+        showWhiteBackground: state.showWhiteBackground,
+      };
 
     default:
       return state;

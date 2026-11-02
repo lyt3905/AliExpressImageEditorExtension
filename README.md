@@ -351,6 +351,34 @@ npm run check:dist
 
 ---
 
+## 图片效果（透明度 / 亮度 / 灰度 / 阴影 / 发光）
+
+选中一个图片图层（原图、抠图、品牌 Logo 都算），右栏文字属性下面会出现「图片效果」。
+它是目前唯一**完全不经过视觉模型**的观感手段：不用重新抠图、不用请求网关，改完立刻在画布上看见效果。
+
+| 组 | 控件 | 范围 |
+| --- | --- | --- |
+| 基础 | 不透明度 / 亮度 / 灰度 | 0–100% / −100–100 / 开关 |
+| 阴影 | 颜色、模糊、不透明度、偏移 X/Y | 模糊 ≤ 60、偏移 ±40（800 逻辑 px） |
+| 发光 | 颜色、硬边、外晕、不透明度 | 硬边 ≤ 40、外晕 ≤ 80 |
+
+- 十二个字段定义在 `ImageEffects`（`src/shared/types.ts`），**全部必填**，默认值只有一份
+  （`DEFAULT_IMAGE_EFFECTS`）：`undefined` 会让舞台、面板、导出各自猜一套，而 `opacity: undefined`
+  在 Konva 里就是完全透明 —— 图直接消失。
+- **写进去就归一化**：`COMMIT_LAYER` 进来先夹紧，`LOAD_DOCUMENT` 恢复老草稿时再修一遍
+  （`normalizeImageEffects()` / `sanitizeDocument()`），所以读的人可以信任 `layer.effects`。
+- **发光是同一张图的第二个副本**：用 `Filters.RGB` 把通道乘成单一颜色（alpha 形状保留、照片细节消失），
+  副本自己带阴影形成外圈柔光，`listening={false}` 所以点击/拖拽仍然落在上面那张原图上。
+  Konva 没有 alpha 膨胀滤镜，「硬边」是用阴影半径近似出来的。
+- **像素滤镜必须缓存**：`Grayscale` / `Brighten` 只在 `cache()` 过的节点上生效，所以舞台按签名
+  维护缓存，滑块拖动时不会每帧重算六张图。Konva 的滤镜名是 `Brighten`（参数是**乘数**，1 = 不变），
+  文档里的 −1…1 偏移量在节点上映射成 0…2。
+- **效果不继承**：文字面板会把每次修改写回 `text-defaults`，图片效果**明确不这么做** ——
+  某张照片偏暗所以提亮，不代表下一张也要提亮。没有 `image-defaults.ts`，「重置效果」只重置当前这一张。
+- 效果**不进**缓存键、也不影响排版：它是图层属性，和位置/旋转同级。
+
+---
+
 ## 本地图片上传 / 粘贴抠图
 
 除了扫描到的商品图，编辑器还接受两种本地来源，二者走**完全相同**的一条路径：
@@ -744,7 +772,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 54 文件 / 875 个单元测试（不联网）
+│  ├─ unit/                      # 56 文件 / 927 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -1013,6 +1041,10 @@ AliExpressImageEditorExtension/
     看不到，也没有导出/导入。它记的是"哪个商品回填成功过"，不记"换了哪张图"（画布是会话级的，
     回填上去了就只有商品页上那一份）。「未确认」那一档不是失败：图确实进了面板，只是没等到服务端
     完成信号 —— 值得去商品页看一眼。清空是不可撤销的（要确认一次），清掉之后唯一的凭证就只剩订单。
+31. 图片效果的「发光硬边」是用**阴影半径近似**出来的，不是真正的 alpha 形态学膨胀：够用，但和
+    Photoshop 的「外发光 + 扩展」不是同一件事。像素滤镜（灰度 / 亮度）要求节点先 `cache()`，
+    画布上同时有多张大图时会明显变慢；图越大越明显。效果既不进抠图/AI/成品图缓存键，也不影响排版
+    计算 —— 它只是一个图层属性，和位置、旋转同级。
 
 ---
 
@@ -1021,7 +1053,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（56 文件 / 880 测试，其中 875 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（58 文件 / 932 测试，其中 927 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1056,5 +1088,6 @@ AliExpressImageEditorExtension/
 | 品牌 Logo 默认位置上移（10.21.2） | **仅自动化验证**（`logo-placement.test.ts` 10 例）：右边缘留 32px、最长边 26%、**下边缘正好停在距底 18%**（底部横幅留白 ≥ 15%）、未知尺寸回落画布、记忆表对垃圾输入的降级。**真机对照见 manual-test 5.70 / 5.72**（Logo 应落在底部横幅上沿而不是压着横幅） |
 | 关键词要整词（10.21.1） | **仅自动化验证**（`termMatchesTitle()` 的 7 组单测 + `brand-store.test.ts` 共 20 例）：`Fans` 不命中 `FansHobby`、命中 `Fans Toys`/`Fans,`/`Fans-04`、黏连一次后继续往后找、中文关键词仍是子串（`现货银河社变形玩具`）、`Hasbro变形金刚` 命中而 `HasbroStudio` 不命中、`threezero` vs `threezeroes`、空关键词与空标题都返回 false。**真机对照见 manual-test 5.122** |
 | 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
+| 图片效果（10.22.0） | **仅自动化验证**（`image-effects.test.ts` 15 例 + `editor-reducer` 4 例）：垃圾输入回默认、逐字段夹紧、`NaN`/`Infinity` 不落文档、半写入块按字段兜底、`grayscale` 只认真布尔、颜色短写展开、零模糊阴影不算效果、`COMMIT_LAYER {effects}` 被夹紧且可撤销、文字层不留 `effects`、`LOAD_DOCUMENT` 修好坏值（含 `isNormalizedEffects()` 那个"两边都归一化所以比不出差别"的坑）。**滤镜 / 阴影 / 发光的实际观感未在真实 Chrome 里看过**：本仓库 devDeps 没有 puppeteer / playwright，步骤见 manual-test 5.123 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

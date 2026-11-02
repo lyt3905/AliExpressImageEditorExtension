@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { TEXT_LAYER_LABEL_MAX } from '../../shared/constants';
-import type { EditorLayer, LayerPatch, TextLayer } from '../../shared/types';
+import type { EditorLayer, ImageEffects, ImageLayer, LayerPatch, TextLayer } from '../../shared/types';
 import type { TransformCommand } from '../state/transform';
+import { ImagePropertiesEditor } from './ImagePropertiesEditor';
 import { TextPropertiesEditor } from './TextPropertiesEditor';
 import { TransformControls } from './TransformControls';
 
@@ -12,6 +13,8 @@ export interface LayerPanelProps {
   selectedLayerId: string | null;
   /** Set when the current selection is a text layer — drives the properties editor. */
   selectedTextLayer: TextLayer | null;
+  /** Set when the current selection is a picture — drives the effect editor. */
+  selectedImageLayer: ImageLayer | null;
   onSelect: (layerId: string | null) => void;
   onMove: (layerId: string, direction: 'up' | 'down') => void;
   onDelete: (layerId: string) => void;
@@ -19,6 +22,8 @@ export interface LayerPanelProps {
   onToggleLock: (layerId: string) => void;
   onMoveEnd: () => void;
   onCommitText: (layerId: string, patch: LayerPatch) => void;
+  /** One history step per committed slider / toggle. */
+  onCommitEffects: (layerId: string, effects: ImageEffects) => void;
   /** Reset the selected text layer to the factory style and forget the preference. */
   onResetTextStyle: (layerId: string) => void;
   /** 左转 / 右转 / 镜像 for the selected layer — one history step each. */
@@ -70,12 +75,14 @@ export function LayerPanel({
   watermark,
   selectedLayerId,
   selectedTextLayer,
+  selectedImageLayer,
   onSelect,
   onMove,
   onDelete,
   onToggleLock,
   onMoveEnd,
   onCommitText,
+  onCommitEffects,
   onResetTextStyle,
   onTransform,
   onRotatePreview,
@@ -135,6 +142,10 @@ export function LayerPanel({
             onCommit={onCommitText}
             onResetStyle={onResetTextStyle}
           />
+        ) : null}
+
+        {selectedImageLayer ? (
+          <ImagePropertiesEditor layer={selectedImageLayer} onCommit={onCommitEffects} />
         ) : null}
 
         {/*

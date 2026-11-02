@@ -127,10 +127,47 @@ export interface ImagePayload {
   sourceHeight: number;
 }
 
+/**
+ * Per-picture visual effects (10.22.0).
+ *
+ * Every field is required: `undefined` would force every reader to re-invent the
+ * default, and there are three readers (stage, panel, exporter). A picture layer
+ * without `effects` simply behaves like `DEFAULT_IMAGE_EFFECTS`, so documents
+ * written before this feature existed stay valid.
+ *
+ * Units are logical px on the 800x800 canvas (same as every other length in the
+ * document) and plain 0–1 factors for the alpha-ish fields.
+ */
+export interface ImageEffects {
+  /** 0–1. 1 = fully opaque. */
+  opacity: number;
+  /** −1–1. 0 = untouched; +1 = white, −1 = black (Konva `Filters.Brightness`). */
+  brightness: number;
+  grayscale: boolean;
+  shadowColor: string;
+  /** Blur radius in logical px; 0 with both offsets at 0 means "no shadow". */
+  shadowBlur: number;
+  /** 0–1. Folded into the shadow colour's alpha — Konva has no shadow opacity. */
+  shadowOpacity: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  glowColor: string;
+  /**
+   * Hard rim in logical px. Konva cannot dilate an alpha channel, so the rim is
+   * approximated by the glow copy's own shadow — see `image-effects.ts`.
+   */
+  glowRadius: number;
+  /** Soft falloff in logical px. */
+  glowBlur: number;
+  glowOpacity: number;
+}
+
 /** A picture on the canvas: an original scan, a cutout result, or a brand logo. */
 export interface ImageLayer extends BaseLayer, ImagePayload {
   kind: 'original' | 'cutout' | 'brand';
   scale: number;
+  /** Effects applied to this picture only; absent = `DEFAULT_IMAGE_EFFECTS`. */
+  effects?: ImageEffects;
   /**
    * Layer cannot be grabbed, selected or transformed on the canvas.
    *
@@ -222,6 +259,11 @@ export interface LayerPatch {
   flipY?: boolean;
   /** Picture layers only: lock / unlock the layer from the layer panel. */
   locked?: boolean;
+  /**
+   * Picture layers only. Replaced as a whole (never merged field by field) so a
+   * panel slider can reset a group to its defaults without sending every field.
+   */
+  effects?: ImageEffects;
   text?: string;
   width?: number;
   fontSize?: number;

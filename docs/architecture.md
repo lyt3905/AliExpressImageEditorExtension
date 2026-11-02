@@ -1929,4 +1929,85 @@ snapshotOf({ serverUrl, username, catalogUrl, vision }) // JSON.stringify(trim +
 而是一小段有分支的逻辑。回填记录同理（`tests/unit/fill-log.test.ts`，17 例）：键的推导、
 同一个商品的合并、垃圾输入降级、上限与清空都是会错的地方。
 
+## 16. 图片效果：只作用于这一张图
+
+一张图能不能"亮一点 / 只剩灰 / 带一圈红光"，在技术方案里是 P1（第五优先级的形状类改动），
+在卖家手里却是"这张照片拍暗了"的现场补救。它是目前唯一**完全不依赖视觉模型**的观感手段：
+不需要重新抠图、不需要请求网关、改完立刻能在画布上看见。
+
+### 16.1 十二个字段，一个整体
+
+`ImageEffects`（`src/shared/types.ts`）是**全部必填**的一块：
+
+| 组 | 字段 | 单位 / 范围 |
+| --- | --- | --- |
+| 基础 | `opacity` | 0–1（面板显示百分比） |
+| 基础 | `brightness` | −1–1，0 = 不动 |
+| 基础 | `grayscale` | 布尔 |
+| 阴影 | `shadowColor` / `shadowBlur` / `shadowOpacity` / `shadowOffsetX` / `shadowOffsetY` | `#rrggbb` / 0–60 逻辑 px / 0–1 / ±40 逻辑 px |
+| 发光 | `glowColor` / `glowRadius` / `glowBlur` / `glowOpacity` | `#rrggbb` / 0–40 / 0–80 逻辑 px / 0–1 |
+
+必填不是洁癖：`undefined` 会让**三个**读者（舞台、面板、导出）各自发明默认值，而其中任何一个
+猜错都很难看出来 —— `opacity: undefined` 在 Konva 里画成完全透明，等于图消失了。所以默认值只有
+一份（`DEFAULT_IMAGE_EFFECTS`），缺省即整套默认。
+
+上限（`IMAGE_EFFECT_LIMITS`）的理由是**每次模糊都是一次逐像素卷积**：5000px 的模糊在 800px 画布上
+会把标签页卡死，而 60px 已经足够做投影、80px 足够做外晕。
+
+### 16.2 写进去就归一化，不是画的时候才修
+
+`normalizeImageEffects()` 在**两个入口**被调用：
+
+- `COMMIT_LAYER` 的 `mergeLayer()` —— 面板送来 `opacity: 3` 也会被夹成 1 再进文档；
+- `LOAD_DOCUMENT` 的 `sanitizeDocument()` —— 旧版本写的半个块、越界值在这里修好。
+
+这里踩过一个坑，值得留下来：`sanitizeDocument()` 最初用 `imageEffectsEqual()` 判断"要不要修"，
+而那个函数**两边都归一化**再比 —— 存下来的 `opacity: 12` 和修好的 `opacity: 1` 在它眼里相同，
+于是坏值原样留在文档里（测试 `repairs a stored block that a older build left out of range` 抓到的
+就是这个）。现在改用 `isNormalizedEffects()`：拿**原始值**和归一化结果逐字段比，没有差别才放过。
+
+### 16.3 发光为什么要多画一个节点
+
+Konva 的 `shadow*` 只能给节点投**一个**阴影，而"发光"与"投影"经常要同时出现。所以发光不是一个
+特效参数，而是**同一张图的第二个副本**，画在原图下面：
+
+1. 副本用 `Filters.RGB` 把通道乘成单一颜色 —— alpha 形状保留、照片细节消失，正好是"轮廓"；
+2. 副本自己的 `shadowBlur` 提供外圈柔光（`glowBlur + glowRadius`），`glowOpacity` 同时作为副本
+   透明度与阴影的 alpha；
+3. `listening={false}`：点击、拖拽、变换全部落在上面那张原图上。
+
+Konva 没有"膨胀 alpha"的滤镜，所以 `glowRadius`（硬边）是用阴影半径近似出来的，不是真正的
+形态学膨胀 —— 这一点写在这里，免得下次有人照着"硬边厚度"去调参数却对不上像素。
+
+### 16.4 像素滤镜必须缓存，缓存必须失效
+
+`Filters.Grayscale` / `Filters.Brighten` 只在**被缓存**的节点上生效，而 `cache()` 是命令式的。
+舞台因此维护两个 ref：`pictureNodesRef`（`id` → 节点，发光副本用 `glow:<id>`）与
+`pictureCacheRef`（记录"这份缓存是为哪张图、哪组参数建的"）。每次渲染后对比签名，只有变了才
+`cache()` / `clearCache()` —— 一次渲染重算六张图的滤镜，滑块就会像卡住一样。
+
+顺带一个单位陷阱：Konva 的滤镜叫 `Brighten`，参数是**乘数**（1 = 不变），不是文档里那个 −1…1
+的偏移量。映射写在节点上（`brightness={Math.max(0, 1 + effects.brightness)}`），文档字段不跟着变。
+
+### 16.5 不是"记住的样式"
+
+文字面板的每一次修改都会写回 `text-defaults`，因为"下一条文字像上一条"是刻意的。图片效果**明确
+不这么做**：某张照片偏暗所以提亮 +30，不代表下一张也要提亮 —— 那会悄悄毁掉一张正常曝光的商品图。
+所以没有 `image-defaults.ts`，重置只重置当前这一张（`onCommit(layerId, DEFAULT_IMAGE_EFFECTS)`），
+面板底部也写了一句话说明这件事。
+
+### 16.6 测试边界
+
+`tests/unit/image-effects.test.ts`（15 例）锁归一化：垃圾输入回默认、逐字段夹紧、`NaN`/`Infinity`
+不落文档、半写入块按字段兜底、`grayscale` 只认真正的布尔、颜色短写展开与小写、`hasVisibleEffects`
+的"零模糊阴影不算效果"、`needsFilterPass` 只对像素滤镜为真、`shadowColorWithOpacity` 的 alpha 折叠。
+
+`tests/unit/editor-reducer.test.ts` 的 `picture effects`（4 例）锁文档行为：`COMMIT_LAYER {effects}`
+进文档且被夹紧、是一次可撤销步骤、文字层不会留下 `effects` 字段、`LOAD_DOCUMENT` 会修好坏值。
+
+**没有在真实浏览器里看过**：本仓库 devDeps 里没有 puppeteer / playwright，滤镜、阴影、发光的
+实际观感只能靠 `docs/manual-test.md` 5.123 手验（改亮度看是否变亮、开灰度看是否只剩明度、开发光
+看是否只多一圈、导出 PNG 里效果是否还在）。
+
+
 

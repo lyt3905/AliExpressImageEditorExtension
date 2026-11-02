@@ -1,5 +1,7 @@
 /** Shared constants. Keep every magic number in one place. */
 
+import type { ImageEffects } from './types';
+
 /** Logical canvas size. All business coordinates use this space. */
 export const CANVAS_SIZE = 800;
 
@@ -270,6 +272,44 @@ export const LOGO_DEFAULT_LONGEST_RATIO = 0.26;
 /** Scale bounds for a remembered logo placement (reject a corrupt / silly value). */
 export const LOGO_MIN_SCALE = 0.02;
 export const LOGO_MAX_SCALE = 8;
+
+// ------------------------------------------------------------ picture effects
+
+/**
+ * What a picture looks like before anybody touches it (10.22.0).
+ *
+ * Spelled out as a constant rather than "all zeros": opacity defaults to 1 and
+ * colour to black, and a reader that guessed those would draw a black shadow of
+ * everything the moment a slider moved by one pixel.
+ */
+export const DEFAULT_IMAGE_EFFECTS: ImageEffects = {
+  opacity: 1,
+  brightness: 0,
+  grayscale: false,
+  shadowColor: '#000000',
+  shadowBlur: 0,
+  shadowOpacity: 0,
+  shadowOffsetX: 0,
+  shadowOffsetY: 0,
+  glowColor: '#ff0000',
+  glowRadius: 0,
+  glowBlur: 0,
+  glowOpacity: 0,
+};
+
+/**
+ * Hard bounds for the effect fields, in logical px.
+ *
+ * The numbers are "enough to be useful, small enough that a typo cannot freeze
+ * the preview": every blur is a per-pixel pass over the picture's bounding box,
+ * so a 5000px blur would hang the tab on an 800px canvas.
+ */
+export const IMAGE_EFFECT_LIMITS = {
+  shadowBlur: 60,
+  shadowOffset: 40,
+  glowRadius: 40,
+  glowBlur: 80,
+} as const;
 
 /** Accepted watermark mime types. */
 export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
