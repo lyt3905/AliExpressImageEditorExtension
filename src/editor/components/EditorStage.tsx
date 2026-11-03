@@ -18,6 +18,12 @@ import {
   pictureCacheSignature,
   shadowColorWithOpacity,
 } from '../../services/image-effects';
+import {
+  buildOutlineBitmap,
+  outlineCacheKey,
+  outlineSpecOf,
+  OUTLINE_WORK_MAX,
+} from '../../services/alpha-outline';
 import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
 import { estimateTextHeight } from '../state/editor-reducer';
 import { axisScale, splitSignedScale } from '../state/transform';
@@ -59,8 +65,26 @@ export interface EditorStageHandle {
   setLayerRotation(layerId: string, rotation: number): void;
 }
 
+/**
+ * One rasterised outline bitmap plus the geometry needed to place it.
+ *
+ * `workScale` converts the bitmap's padding (in working-bitmap px) into logical
+ * canvas px, so a 512px preview bitmap and a full-size export agree on where the
+ * rim ends.
+ */
+interface OutlineBuild {
+  canvas: HTMLCanvasElement;
+  pad: number;
+  workScale: number;
+}
+
 export interface EditorStageProps {
   layers: EditorLayer[];
+  /**
+   * 文档背景色（`#rrggbb`）。预览与导出都用它 —— 导出走的是同一个舞台，
+   * 单独再铺一层背景色迟早会和屏幕上不一样。
+   */
+  background: string;
   /** Only picture layers resolve to images — text never enters this map. */
   imageForLayer: (layer: ImageLayer) => HTMLImageElement | undefined;
   /** Locked watermark frame drawn above every user layer (null = none). */
@@ -89,6 +113,7 @@ export interface EditorStageProps {
 export function EditorStage(props: EditorStageProps): JSX.Element {
   const {
     layers,
+    background,
     imageForLayer,
     watermark,
     watermarkImage,
@@ -194,6 +219,46 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     // A deleted layer (or a glow that was switched off) must not keep a cache
     // alive: the node is gone, so the entry would only leak pixel buffers.
     for (const key of [...caches.keys()]) if (!touched.has(key)) caches.delete(key);
+  });
+
+  /*
+    Alpha outlines (`alpha-outline.ts`) are rasterised, not declarative: they are a
+    dilation of the picture's own alpha, which Konva cannot express as attributes.
+    So they live in a cache keyed by picture + parameters, built once and reused
+    until something that changes pixels changes.
+
+    Building is synchronous (a 512px pass is ~1ms for the distance transform, and
+    the canvas readback dominates) and only runs for pictures that ask for a rim, so
+    a slider drag re-rasterises one small bitmap per commit rather than per frame.
+  */
+  const outlineCacheRef = useRef<Map<string, OutlineBuild>>(new Map());
+  const [, setOutlineRevision] = useState(0);
+
+  useEffect(() => {
+    const cache = outlineCacheRef.current;
+    const wanted = new Set<string>();
+    let built = false;
+    for (const layer of layers) {
+      if (layer.kind === 'text' || layer.kind === 'plate') continue;
+      const effects = normalizeImageEffects(layer.effects);
+      const spec = outlineSpecOf(effects);
+      const image = imageForLayer(layer);
+      if (!spec || !image) continue;
+      const key = outlineCacheKey(`${layer.blobId}|${layer.sourceWidth}x${layer.sourceHeight}`, spec);
+      wanted.add(key);
+      if (cache.has(key)) continue;
+      const built2 = buildOutlineBitmap(image, spec, OUTLINE_WORK_MAX);
+      if (!built2) continue;
+      cache.set(key, {
+        canvas: built2.canvas,
+        pad: built2.pad,
+        workScale: built2.scale,
+      });
+      built = true;
+    }
+    // Drop entries nobody asks for any more (layer deleted, outline switched off).
+    for (const key of [...cache.keys()]) if (!wanted.has(key)) cache.delete(key);
+    if (built) setOutlineRevision((value) => value + 1);
   });
 
   const previewScale = stageSize / CANVAS_SIZE;
@@ -405,13 +470,27 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
       >
         <Layer scaleX={previewScale} scaleY={previewScale}>
           {/* Switched on only while exporting: the export is always white-background. */}
+          {/*
+            文档背景：预览时就在最底层铺一块，导出时那层 `export-background` 只是
+            把它"提到最上面重画一遍"（导出会隐藏其它非内容节点）。两块用同一个颜色，
+            所以屏幕与 PNG 不会有色差。
+          */}
+          <Rect
+            name="document-background"
+            x={0}
+            y={0}
+            width={CANVAS_SIZE}
+            height={CANVAS_SIZE}
+            fill={background}
+            listening={false}
+          />
           <Rect
             name="export-background"
             x={0}
             y={0}
             width={CANVAS_SIZE}
             height={CANVAS_SIZE}
-            fill="#ffffff"
+            fill={background}
             listening={false}
             visible={false}
           />
@@ -641,6 +720,17 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               (effects.shadowBlur > 0 || effects.shadowOffsetX !== 0 || effects.shadowOffsetY !== 0);
             const glowOn =
               effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
+            const outlineSpec = outlineSpecOf(effects);
+            const outlineBuild =
+              outlineSpec
+                ? outlineCacheRef.current.get(
+                    outlineCacheKey(
+                      `${layer.blobId}|${layer.sourceWidth}x${layer.sourceHeight}`,
+                      outlineSpec,
+                    ),
+                  )
+                : undefined;
+            const outlineOn = Boolean(outlineBuild);
             /*
               The filter list is built from what the user actually asked for:
               both Konva filters are unconditional functions, so adding
@@ -663,6 +753,27 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                   It never listens to the pointer; the picture on top still owns
                   every click and drag.
                 */}
+                {/*
+                  真实 Alpha 扩张描边：一张"只画环带 + 外晕"的位图垫在下面。
+                  它不是滤镜，所以不走 cache；位图已经包含四周 padding，节点用
+                  `width/height + offset` 把内容区对上主体，翻转与旋转靠同一组
+                  `scaleX/scaleY/rotation` 表达。
+                */}
+                {outlineOn && outlineBuild ? (
+                  <KonvaImage
+                    image={outlineBuild.canvas}
+                    x={layer.x}
+                    y={layer.y}
+                    width={layer.sourceWidth + 2 * outlineBuild.pad * outlineBuild.workScale}
+                    height={layer.sourceHeight + 2 * outlineBuild.pad * outlineBuild.workScale}
+                    offsetX={layer.sourceWidth / 2 + outlineBuild.pad * outlineBuild.workScale}
+                    offsetY={layer.sourceHeight / 2 + outlineBuild.pad * outlineBuild.workScale}
+                    scaleX={axisScale(layer, 'x')}
+                    scaleY={axisScale(layer, 'y')}
+                    rotation={layer.rotation}
+                    listening={false}
+                  />
+                ) : null}
                 {glowOn ? (
                   <KonvaImage
                     ref={(node) => registerPicture(`glow:${layer.id}`, node)}

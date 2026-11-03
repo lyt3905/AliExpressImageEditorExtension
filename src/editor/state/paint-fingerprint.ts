@@ -11,6 +11,8 @@
  */
 
 import type { EditorLayer, WatermarkLayer } from '../../shared/types';
+import { DEFAULT_DOCUMENT_BACKGROUND } from '../../shared/constants';
+import { normalizeBackgroundColor } from '../../services/document-background';
 import { imageRenderSignature } from '../../services/image-effects';
 
 /** 一位数就够用的小数往返，避免 0.30000000000000004 这类噪声进键。 */
@@ -112,8 +114,14 @@ export function paintParts(
   layers: readonly EditorLayer[],
   identityByMaterialId: ReadonlyMap<string, string>,
   watermark: WatermarkLayer | null,
+  background: string = DEFAULT_DOCUMENT_BACKGROUND,
 ): string[] {
-  const parts: string[] = [];
+  /*
+    背景色进指纹（10.23.0）：海报模板铺的是近黑底，同一批素材在黑白底上生成的两张海报
+    是完全不同的两张图 —— 少了这一段，"下载缓存成品"会把白底那版当成本次的。
+    它排在最前，因为它是画布本身，先于任何图层。
+  */
+  const parts: string[] = [`background:${normalizeBackgroundColor(background)}`];
   if (watermark) {
     parts.push(`watermark:${watermark.blobId}@${geometryOf(watermark)}`);
   }
@@ -133,8 +141,9 @@ export function paintFingerprintOf(
   layers: readonly EditorLayer[],
   identityByMaterialId: ReadonlyMap<string, string>,
   watermark: WatermarkLayer | null,
+  background: string = DEFAULT_DOCUMENT_BACKGROUND,
 ): string[] | null {
   const hasPicture = layers.some((layer) => layer.kind !== 'text' && layer.kind !== 'plate');
   if (!hasPicture) return null;
-  return paintParts(layers, identityByMaterialId, watermark);
+  return paintParts(layers, identityByMaterialId, watermark, background);
 }

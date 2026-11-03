@@ -23,6 +23,7 @@ import { CutoutQueue } from '../../services/cutout-queue';
 import { HttpCutoutClient } from '../../services/cutout-client';
 import { createComposeCache, imageIdentity } from '../../services/compose-cache';
 import { blobDigest } from '../../services/content-digest';
+import { normalizeBackgroundColor } from '../../services/document-background';
 import { getBlob, getSession, patchSessionImage, putBlob, putSession } from '../../services/indexed-db';
 import { readBlobSize } from '../../services/image-size';
 import { loadSettings } from '../../services/settings';
@@ -114,14 +115,21 @@ async function loadStoredDocument(sessionId: string): Promise<EditorDocument> {
   try {
     const key = documentKey(sessionId);
     const stored = await chrome.storage.local.get(key);
-    const value = stored?.[key] as { layers?: unknown[] } | undefined;
+    const value = stored?.[key] as { layers?: unknown[]; background?: unknown } | undefined;
     if (value && Array.isArray(value.layers)) {
       // Text layers are rebuilt field by field; picture layers keep their stored
       // shape and are filtered by material availability by the caller.
       const layers = value.layers
         .map(restoreStoredLayer)
         .filter((layer): layer is EditorLayer => layer !== null);
-      return { layers };
+      /*
+        背景是文档属性，必须跟图层一起恢复：海报模板铺的是近黑底，恢复时丢掉它就会
+        变成白底 + 一片灰白主体，看着像"模板没生效"。老文档没有这个字段 → 字段缺省，
+        与"显式白色"是同一种状态（`document-background.ts`）。
+      */
+      const background =
+        value.background === undefined ? undefined : normalizeBackgroundColor(value.background);
+      return background === undefined ? { layers } : { layers, background };
     }
   } catch {
     /* ignore */

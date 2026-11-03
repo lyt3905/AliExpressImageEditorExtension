@@ -179,6 +179,22 @@ export interface ImageEffects {
   /** Soft falloff in logical px. */
   glowBlur: number;
   glowOpacity: number;
+  /**
+   * Alpha outline (`alpha-outline.ts`, 10.23.0): a real band *outside* the
+   * subject's silhouette, plus an optional soft halo beyond it.
+   *
+   * Deliberately separate from `glow*`: the glow is "the picture again with a big
+   * shadow", whose hard edge is the silhouette itself. A poster rim has to sit
+   * outside that silhouette, which needs a dilation pass — so changing the glow
+   * fields must never silently change how an existing document looks.
+   */
+  outlineColor: string;
+  /** Rim thickness in logical px; 0 = no outline (and the old glow stays as it was). */
+  outlineWidth: number;
+  /** Soft halo beyond the rim, logical px; requires `outlineWidth > 0`. */
+  outlineGlow: number;
+  /** 0–1, multiplies rim and halo together. */
+  outlineOpacity: number;
 }
 
 /** A picture on the canvas: an original scan, a cutout result, or a brand logo. */
@@ -301,6 +317,16 @@ export interface LayerPatch {
 
 export interface EditorDocument {
   layers: EditorLayer[];
+  /**
+   * Canvas background colour (`#rrggbb`). Absent = white, which is what every
+   * document written before 10.23.0 means.
+   *
+   * A document property rather than an editor setting: it is part of what the
+   * user sees and exports, it has to survive undo/redo and a reload, and a poster
+   * template must be able to set it. `EditorState.showWhiteBackground` only
+   * toggles the on-screen checkerboard.
+   */
+  background?: string;
 }
 
 export type MaterialKind = 'original' | 'cutout' | 'brand';

@@ -1,5 +1,6 @@
 import type { EditorMaterial } from '../../shared/types';
 import type { CompositionPlan } from '../../services/composition/planner';
+import { DOCUMENT_BACKGROUND_PRESETS } from '../../shared/constants';
 
 export interface ComposeTemplateOption {
   key: string;
@@ -12,6 +13,9 @@ export interface ComposePanelProps {
   templates: ComposeTemplateOption[];
   templateKey: string;
   onTemplateChange: (key: string) => void;
+  /** 画布背景色（文档属性，`#rrggbb`）。 */
+  background: string;
+  onBackgroundChange: (color: string) => void;
   /**
    * Cut-out materials only: composition works on transparent sources.
    *
@@ -46,6 +50,8 @@ export function ComposePanel({
   templates,
   templateKey,
   onTemplateChange,
+  background,
+  onBackgroundChange,
   cutouts,
   busy,
   plan,
@@ -103,6 +109,39 @@ export function ComposePanel({
               ))}
             </select>
           </label>
+
+          {/*
+            画布背景（10.23.0）：海报模板铺近黑底，白底模板保持 #FFFFFF。
+
+            放在模板下面而不是"图片效果"里，是因为它属于**这张画布**而不是某一层：
+            改它是一次可撤销的文档改动，跟着成品缓存键一起变。
+          */}
+          <div className="compose-field compose-field--background">
+            <span>画布背景</span>
+            <div className="compose-background">
+              <input
+                className="compose-background__swatch"
+                type="color"
+                value={background}
+                onChange={(event) => onBackgroundChange(event.target.value)}
+                aria-label="画布背景色"
+                title="导出 PNG 的底色；不影响水印与品牌图层"
+              />
+              <div className="compose-background__presets" role="group" aria-label="背景预设">
+                {DOCUMENT_BACKGROUND_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`compose-background__preset${background.toLowerCase() === preset.toLowerCase() ? ' compose-background__preset--on' : ''}`}
+                    style={{ background: preset }}
+                    onClick={() => onBackgroundChange(preset)}
+                    title={preset === '#FFFFFF' ? '白底（旧模板的默认）' : preset}
+                    aria-label={`背景 ${preset}`}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
 
           {/*
             主体素材 / 包装盒两个下拉框已经去掉（10.18.4）。

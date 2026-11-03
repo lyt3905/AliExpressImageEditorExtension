@@ -64,6 +64,7 @@ import {
   type CachedBinding,
 } from '../services/compose-cache';
 import { brandPaintIdentity, paintFingerprintOf } from './state/paint-fingerprint';
+import { backgroundOf } from '../services/document-background';
 import { loadSettings } from '../services/settings';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
 import {
@@ -1001,7 +1002,12 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    * 旧条目自然命不中 —— 不需要维护"哪些操作要清缓存"这张表。
    */
   const resultKey = useMemo(() => {
-    const parts = paintFingerprintOf(document.layers, paintIdentityByMaterialId, watermark.layer);
+    const parts = paintFingerprintOf(
+      document.layers,
+      paintIdentityByMaterialId,
+      watermark.layer,
+      backgroundOf(document),
+    );
     return parts ? hashKey(['result', ...parts]) : null;
   }, [document.layers, paintIdentityByMaterialId, watermark.layer]);
 
@@ -1204,7 +1210,13 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
     const hero = [...planLayers]
       .reverse()
       .find((layer) => layer.kind !== 'text' && layer.kind !== 'plate');
-    dispatch({ type: 'APPLY_PLAN', layers, selectLayerId: hero?.id ?? null });
+    dispatch({
+      type: 'APPLY_PLAN',
+      layers,
+      selectLayerId: hero?.id ?? null,
+      // 模板自己声明了底色就一起换；没声明时保留当前文档背景。
+      ...(plan.canvas.background ? { background: plan.canvas.background } : {}),
+    });
     setSelectionIsExplicit(false);
     setComposePlan(plan);
   }, [document, session]);
@@ -1698,6 +1710,16 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    * gesture is the one the seller just asked for; locking the selection away also
    * drops the handles so nothing lingers on a layer that cannot move.
    */
+  /**
+   * 画布背景是一次可撤销的文档改动（`SET_DOCUMENT_BACKGROUND`）。
+   *
+   * 不写进 `aiee:settings`：它属于**这张画布**，跟着撤销栈与成品缓存键走；
+   * 下一次从别的模板开始应该是那个模板自己的底色。
+   */
+  const handleBackgroundChange = useCallback((color: string) => {
+    dispatch({ type: 'SET_DOCUMENT_BACKGROUND', color });
+  }, []);
+
   const handleToggleLock = useCallback(
     (layerId: string) => {
       const layer = findLayer(document, layerId);
@@ -2219,6 +2241,8 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
             templates={templateOptions}
             templateKey={templateKey}
             onTemplateChange={setTemplateKey}
+            background={backgroundOf(document)}
+            onBackgroundChange={handleBackgroundChange}
             cutouts={cutouts}
             busy={composeBusy}
             plan={composePlan}
@@ -2245,6 +2269,7 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
         <div className={`canvas-panel${state.showWhiteBackground ? ' canvas-panel--white' : ''}`}>
           <EditorStage
             layers={document.layers}
+            background={backgroundOf(document)}
             imageForLayer={imageForLayer}
             watermark={watermark.layer}
             watermarkImage={watermark.image}

@@ -29,6 +29,7 @@ import type {
 } from '../../shared/types';
 import type { MeasureText } from '../../services/composition/text-fit';
 import { isNormalizedEffects, normalizeImageEffects } from '../../services/image-effects';
+import { normalizeBackgroundColor } from '../../services/document-background';
 import {
   clampNumber,
   finiteNumber,
@@ -60,6 +61,11 @@ export interface EditorState {
   exporting: boolean;
 }
 
+/** Rebuild a document with a new layer array, keeping everything else (背景). */
+function withLayers(doc: EditorDocument, layers: EditorLayer[]): EditorDocument {
+  return { ...doc, layers };
+}
+
 export function emptyDocument(): EditorDocument {
   return { layers: [] };
 }
@@ -76,7 +82,7 @@ export function createEditorState(document: EditorDocument = emptyDocument()): E
 // ---------------------------------------------------------------- pure layer operations
 
 export function addLayer(doc: EditorDocument, layer: EditorLayer): EditorDocument {
-  return { layers: [...doc.layers, layer] };
+  return withLayers(doc, [...doc.layers, layer]);
 }
 
 /**
@@ -97,12 +103,12 @@ export function insertLayerBelow(
   const index = doc.layers.findIndex((entry) => entry.id === belowLayerId);
   if (index < 0) return addLayer(doc, layer);
   const layers = [...doc.layers.slice(0, index), layer, ...doc.layers.slice(index)];
-  return { layers };
+  return withLayers(doc, layers);
 }
 
 export function deleteLayer(doc: EditorDocument, layerId: string): EditorDocument {
   const layers = doc.layers.filter((layer) => layer.id !== layerId);
-  return layers.length === doc.layers.length ? doc : { layers };
+  return layers.length === doc.layers.length ? doc : withLayers(doc, layers);
 }
 
 /**
@@ -137,13 +143,32 @@ function mergeLayer(layer: EditorLayer, patch: LayerPatch): EditorLayer {
  */
 export function sanitizeDocument(document: EditorDocument): EditorDocument {
   let changed = false;
+  const background =
+    document.background === undefined ? undefined : normalizeBackgroundColor(document.background);
+  if (document.background !== undefined && background !== document.background) changed = true;
   const layers = document.layers.map((layer) => {
     if (layer.kind === 'text' || layer.kind === 'plate' || layer.effects === undefined) return layer;
     if (isNormalizedEffects(layer.effects)) return layer;
     changed = true;
     return { ...layer, effects: normalizeImageEffects(layer.effects) };
   });
-  return changed ? { layers } : document;
+  if (!changed) return document;
+  return { ...document, layers, ...(background !== undefined ? { background } : {}) };
+}
+
+/**
+ * Set the canvas background as a document change.
+ *
+ * Normalised on the way in: the colour input can emit `#abc`, a template can carry
+ * `#FFFFFF`, and an undo stack full of near-identical spellings would make two
+ * identical-looking steps look different. White is stored as the literal default so
+ * "no background field" and "explicitly white" stay one state.
+ */
+export function setDocumentBackground(doc: EditorDocument, color: unknown): EditorDocument {
+  const next = normalizeBackgroundColor(color);
+  const current = normalizeBackgroundColor(doc.background);
+  if (next === current && doc.background !== undefined) return doc;
+  return { ...doc, background: next };
 }
 
 export function updateLayer(doc: EditorDocument, layerId: string, patch: LayerPatch): EditorDocument {
@@ -153,7 +178,7 @@ export function updateLayer(doc: EditorDocument, layerId: string, patch: LayerPa
     changed = true;
     return mergeLayer(layer, patch);
   });
-  return changed ? { layers } : doc;
+  return changed ? withLayers(doc, layers) : doc;
 }
 
 /**
@@ -171,7 +196,7 @@ export function moveLayer(doc: EditorDocument, layerId: string, direction: 'up' 
   const [moved] = layers.splice(index, 1);
   if (!moved) return doc;
   layers.splice(target, 0, moved);
-  return { layers };
+  return withLayers(doc, layers);
 }
 
 /**
@@ -193,7 +218,7 @@ export function flipAllImagesX(doc: EditorDocument): EditorDocument {
     changed = true;
     return { ...layer, flipX: layer.flipX !== true };
   });
-  return changed ? { layers } : doc;
+  return changed ? withLayers(doc, layers) : doc;
 }
 
 /** Centre the layer and scale its longest side to ~INSERT_MAX_SIDE without stretching. */
@@ -259,7 +284,7 @@ export type EditorAction =
    * first drag goes to whatever is under the pointer — usually the backdrop plate,
    * which moves invisibly behind the product and reads as "拖动没反应".
    */
-  | { type: 'APPLY_PLAN'; layers: EditorLayer[]; selectLayerId?: string | null }
+  | { type: 'APPLY_PLAN'; layers: EditorLayer[]; selectLayerId?: string | null; background?: string }
   | { type: 'DELETE_LAYER'; layerId: string }
   | { type: 'UPDATE_LAYER'; layerId: string; patch: LayerPatch }
   | { type: 'COMMIT_LAYER'; layerId: string; patch: LayerPatch }
@@ -276,6 +301,7 @@ export type EditorAction =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'SET_BACKGROUND'; showWhite: boolean }
+  | { type: 'SET_DOCUMENT_BACKGROUND'; color: string }
   | { type: 'SET_EXPORTING'; exporting: boolean }
   | { type: 'LOAD_DOCUMENT'; document: EditorDocument };
 
@@ -296,7 +322,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'APPLY_PLAN': {
       if (action.layers.length === 0) return state;
-      const document: EditorDocument = { layers: action.layers };
+      const document: EditorDocument = {
+        ...state.history.present,
+        layers: action.layers,
+        ...(action.background !== undefined
+          ? { background: normalizeBackgroundColor(action.background) }
+          : {}),
+      };
       const selected = action.selectLayerId ?? null;
       return {
         ...state,
@@ -342,7 +374,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'CLEAR': {
       if (state.history.present.layers.length === 0) return state;
-      return { ...state, history: pushHistory(state.history, emptyDocument()), selectedLayerId: null };
+      return {
+        ...state,
+        history: pushHistory(state.history, { ...emptyDocument(), background: state.history.present.background }),
+        selectedLayerId: null,
+      };
     }
 
     case 'UNDO': {
@@ -361,6 +397,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'SET_BACKGROUND':
       return state.showWhiteBackground === action.showWhite ? state : { ...state, showWhiteBackground: action.showWhite };
+
+    case 'SET_DOCUMENT_BACKGROUND': {
+      // One undo step per committed colour: the picker fires on every drag tick, so
+      // the panel commits on change (not on input) — see ImagePropertiesEditor.
+      const next = setDocumentBackground(state.history.present, action.color);
+      if (next === state.history.present) return state;
+      return { ...state, history: pushHistory(state.history, next) };
+    }
 
     case 'SET_EXPORTING':
       return state.exporting === action.exporting ? state : { ...state, exporting: action.exporting };

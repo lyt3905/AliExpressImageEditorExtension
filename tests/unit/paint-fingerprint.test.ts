@@ -192,3 +192,22 @@ describe('paintFingerprintOf', () => {
     expect(brandPaintIdentity('material-brand-test-brand', 'v1', 'brand-logo-x')).not.toBe(v1);
   });
 });
+
+describe('canvas background', () => {
+  it('puts the background first, before any layer', () => {
+    const parts = paintParts([picture('pic')], IDENTITIES, null);
+    expect(parts[0]).toBe('background:#ffffff');
+  });
+
+  it('changes the fingerprint when the background changes', () => {
+    const white = paintParts([picture('pic')], IDENTITIES, null, '#ffffff');
+    const dark = paintParts([picture('pic')], IDENTITIES, null, '#171719');
+    expect(white).not.toEqual(dark);
+  });
+
+  it('treats a missing or unreadable background as white', () => {
+    const fallback = paintParts([picture('pic')], IDENTITIES, null, 'nope');
+    const white = paintParts([picture('pic')], IDENTITIES, null, '#ffffff');
+    expect(fallback).toEqual(white);
+  });
+});

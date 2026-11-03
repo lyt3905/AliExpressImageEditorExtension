@@ -379,6 +379,25 @@ npm run check:dist
 
 ---
 
+## 画布背景与 Alpha 描边（10.23.0）
+
+海报模板铺的是近黑底，白底模板仍是白色，所以**底色是画布属性**，不是某一层的效果：
+
+- 面板上「画布背景」有一个取色器 + 四个预设（`#ffffff` / `#171719` / `#0e0e10` / `#f5f5f7`）。
+- 改底色是**一次可撤销的文档改动**（`SET_DOCUMENT_BACKGROUND`），跟着撤销栈走；模板声明了
+  `canvas.background` 时，`APPLY_PLAN` 会把图层与底色作为**同一步**换掉。
+- 底色参与三处：预览（`EditorStage` 最下层那个 `Rect`）、导出 PNG（`export-background`）、
+  成品缓存键（`background:<color>`）——所以换底色之后「下载缓存成品」不会再把上一版给你。
+
+图片还多了一项**描边**（`outlineColor` / `outlineWidth` / `outlineGlow` / `outlineOpacity`）：
+
+- 与「发光」是两件事：发光画的是剪影本身 + 一圈光晕，硬边就是剪影；描边要落在剪影**外面**，
+  是一圈实心色环（默认红 `#ff2638`、4px），海报就是靠它把主体从暗底上摘出来。
+- 色环是**算出来的**，不是阴影近似：按 alpha 做距离场（chamfer 3-4），`d ≤ 宽度` 画实心环，
+  `宽度 < d ≤ 宽度+外晕` 走 smoothstep 衰减，四周加 padding 以免被图片自己的边框裁掉。
+- 工作位图长边封在 512px（`OUTLINE_WORK_MAX`），预览按显示比例缩放，导出时按同一比例放大
+  （见已知限制 38）。
+
 ## 本地图片上传 / 粘贴抠图
 
 除了扫描到的商品图，编辑器还接受两种本地来源，二者走**完全相同**的一条路径：
@@ -1070,12 +1089,16 @@ AliExpressImageEditorExtension/
 
 ---
 
+38. 描边的色环是在**512px 工作位图**上算的（`OUTLINE_WORK_MAX`）：导出 800×800 时按比例放大，
+    边缘会比 1:1 计算略软一点；参数改一下就要重算一次距离场，所以连续拖动滑块时画布会有轻微延迟。
+    它也不参与排版：描边不进碰撞盒、不算商品面积，`measure-layout` 的六个数字都是按剪影量的。
+
 ## 验证状态
 
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（62 文件 / 982 测试，其中 977 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（64 文件 / 1009 测试，其中 1004 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1110,6 +1133,7 @@ AliExpressImageEditorExtension/
 | 品牌 Logo 默认位置上移（10.21.2） | **仅自动化验证**（`logo-placement.test.ts` 10 例）：右边缘留 32px、最长边 26%、**下边缘正好停在距底 18%**（底部横幅留白 ≥ 15%）、未知尺寸回落画布、记忆表对垃圾输入的降级。**真机对照见 manual-test 5.70 / 5.72**（Logo 应落在底部横幅上沿而不是压着横幅） |
 | 关键词要整词（10.21.1） | **仅自动化验证**（`termMatchesTitle()` 的 7 组单测 + `brand-store.test.ts` 共 20 例）：`Fans` 不命中 `FansHobby`、命中 `Fans Toys`/`Fans,`/`Fans-04`、黏连一次后继续往后找、中文关键词仍是子串（`现货银河社变形玩具`）、`Hasbro变形金刚` 命中而 `HasbroStudio` 不命中、`threezero` vs `threezeroes`、空关键词与空标题都返回 false。**真机对照见 manual-test 5.122** |
 | 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
+| 画布背景 + Alpha 描边（10.23.0 / M1） | **仅自动化验证**（`document-background` 8 例 + `alpha-outline` 10 例 + `editor-reducer` 6 例背景 + `paint-fingerprint` 3 例）：底色归一化兜底、撤销/重做/`APPLY_PLAN`/`LOAD_DOCUMENT`、底色进成品键；描边是**像素断言**（环只在外侧、主体不被染红、外晕单调衰减、细长主体、全透明返回 null、padding 正确）。**观感未在真实 Chrome 里看过**：步骤见 manual-test 5.139 |
 | 图片效果（10.22.0） | **仅自动化验证**（`image-effects.test.ts` 15 例 + `editor-reducer` 4 例）：垃圾输入回默认、逐字段夹紧、`NaN`/`Infinity` 不落文档、半写入块按字段兜底、`grayscale` 只认真布尔、颜色短写展开、零模糊阴影不算效果、`COMMIT_LAYER {effects}` 被夹紧且可撤销、文字层不留 `effects`、`LOAD_DOCUMENT` 修好坏值（含 `isNormalizedEffects()` 那个"两边都归一化所以比不出差别"的坑）。**滤镜 / 阴影 / 发光的实际观感未在真实 Chrome 里看过**：本仓库 devDeps 没有 puppeteer / playwright，步骤见 manual-test 5.123 |
 | 审查报告 11.md 的七条修复（10.22.1） | **仅自动化验证**（新增 `image-filters.test.ts` 12 例 + `compose-cache` 6 例 + `composition-alpha-scan` 2 例 + `composition-solvers` 1 例 + `composition-planner` 2 例 + `upload-images` 1 例）：Konva 真实滤镜函数跑像素（`Brighten` 作偏移量、0 中性、1 全白、`Grayscale` 无条件转灰、`RGB` 着色、滤镜名单只按开关）、`local:#<sha256>` 身份与同字节不同内容不撞、`occlusionRatio` 把完全被挡的盒子算成不可见、Alpha 网格不比主体更细、`pictureCacheSignature`/`glowCacheSignature` 对阴影与发光每个字段敏感、成品键随 support 图/水印/品牌/效果变化且与顺序无关、运行期 `reserved_zone_overlap`。**浏览器像素与拖动同步仍未自动化**，步骤见 manual-test 5.124–5.126 |
 | 二次复核第三轮（10.22.3） | **仅自动化验证**（`compose-cache` 41 例 + `composition-occlusion` 9 例 + `paint-fingerprint` 7 例 + `composition-planner` 23 例）：v1 索引整份丢弃、两个不同 Logo / 两张不同原图在身份表里查不到时仍算出不同键、128 列条纹掩码被全遮时遮挡率 > 98%（旧实现 3%）、10px 宽主体压进 800×88 底栏深度 88px 且面积 < 2% 仍报警、正常素材下包装盒可见率 100% 且不误报 `box_visibility_below_min`、`box_visibility_below_min` 不再重复两次。**浏览器端到端与"衬板/水印压包装盒"仍未自动化**，步骤见 manual-test 5.131–5.134 |

@@ -231,6 +231,59 @@ describe('editorReducer history', () => {
   });
 });
 
+describe('document background', () => {
+  it('stores a normalized colour as one undoable step', () => {
+    let state = reduce(createEditorState(), [{ type: 'SET_DOCUMENT_BACKGROUND', color: '#ABC' }]);
+    expect(state.history.present.background).toBe('#aabbcc');
+    expect(canUndo(state.history)).toBe(true);
+    state = reduce(state, [{ type: 'UNDO' }]);
+    expect(state.history.present.background).toBeUndefined();
+  });
+
+  it('does not push history when the colour is already that colour', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'SET_DOCUMENT_BACKGROUND', color: '#171719' },
+      { type: 'SET_DOCUMENT_BACKGROUND', color: '#171719'.toUpperCase() },
+    ]);
+    expect(state.history.present.background).toBe('#171719');
+    expect(canUndo(state.history)).toBe(true);
+    expect(canRedo(state.history)).toBe(false);
+  });
+
+  it('keeps the background across layer operations', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'SET_DOCUMENT_BACKGROUND', color: '#171719' },
+      { type: 'ADD_LAYER', layer: makeLayer('layer-1') },
+      { type: 'DELETE_LAYER', layerId: 'layer-1' },
+    ]);
+    expect(state.history.present.background).toBe('#171719');
+  });
+
+  it('applies the plan background together with the layers, as one step', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'APPLY_PLAN', layers: [makeLayer('layer-9')], selectLayerId: null, background: '#0e0e10' },
+    ]);
+    expect(state.history.present.layers.map((layer) => layer.id)).toEqual(['layer-9']);
+    expect(state.history.present.background).toBe('#0e0e10');
+    expect(canUndo(state.history)).toBe(true);
+  });
+
+  it('keeps the current background when the plan does not declare one', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'SET_DOCUMENT_BACKGROUND', color: '#171719' },
+      { type: 'APPLY_PLAN', layers: [makeLayer('layer-9')], selectLayerId: null },
+    ]);
+    expect(state.history.present.background).toBe('#171719');
+  });
+
+  it('repairs a broken stored background when the document is loaded', () => {
+    const state = reduce(createEditorState(), [
+      { type: 'LOAD_DOCUMENT', document: { layers: [], background: 'nope' } },
+    ]);
+    expect(state.history.present.background).toBe('#ffffff');
+  });
+});
+
 describe('layer lock', () => {
   it('toggles `locked` through a COMMIT_LAYER patch and leaves it in the document', () => {
     let state = reduce(createEditorState(), [

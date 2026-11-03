@@ -295,6 +295,10 @@ export const DEFAULT_IMAGE_EFFECTS: ImageEffects = {
   glowRadius: 0,
   glowBlur: 0,
   glowOpacity: 0,
+  outlineColor: '#ff2638',
+  outlineWidth: 0,
+  outlineGlow: 0,
+  outlineOpacity: 1,
 };
 
 /**
@@ -302,14 +306,30 @@ export const DEFAULT_IMAGE_EFFECTS: ImageEffects = {
  *
  * The numbers are "enough to be useful, small enough that a typo cannot freeze
  * the preview": every blur is a per-pixel pass over the picture's bounding box,
- * so a 5000px blur would hang the tab on an 800px canvas.
+ * so a 5000px blur would hang the tab on an 800px canvas. The outline bounds are
+ * tighter because each step of the rim is a dilation pass over the working
+ * bitmap (`alpha-outline.ts`), and the padding grows with the sum of both.
  */
 export const IMAGE_EFFECT_LIMITS = {
   shadowBlur: 60,
   shadowOffset: 40,
   glowRadius: 40,
   glowBlur: 80,
+  outlineWidth: 24,
+  outlineGlow: 48,
 } as const;
+
+/** Canvas background every document written before 10.23.0 implies. */
+export const DEFAULT_DOCUMENT_BACKGROUND = '#ffffff';
+
+/**
+ * Ready-made background swatches for the poster workflow.
+ *
+ * Not a restriction — the colour input accepts anything — but the poster
+ * template's own background is this shade of near-black, and picking it by hand
+ * from a colour wheel is a good way to end up with a slightly-wrong grey.
+ */
+export const DOCUMENT_BACKGROUND_PRESETS = ['#FFFFFF', '#171719', '#0E0E10', '#F5F5F7'] as const;
 
 /** Accepted watermark mime types. */
 export const WATERMARK_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;

@@ -117,6 +117,45 @@ button.primary:hover:not(:disabled) {
   font-size: 12px;
 }
 
+/* 画布背景：一个取色器 + 几个预设，宽度与下拉框对齐 */
+.compose-background {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.compose-background__swatch {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.compose-background__presets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compose-background__preset {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.compose-background__preset--on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 .compose-select {
   flex: 1;
   min-width: 0;

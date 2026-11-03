@@ -71,6 +71,10 @@ export function normalizeImageEffects(raw: unknown): ImageEffects {
     glowRadius: readNumber(value.glowRadius, 0, 0, IMAGE_EFFECT_LIMITS.glowRadius),
     glowBlur: readNumber(value.glowBlur, 0, 0, IMAGE_EFFECT_LIMITS.glowBlur),
     glowOpacity: readNumber(value.glowOpacity, 0, 0, 1),
+    outlineColor: normalizeColor(value.outlineColor, EMPTY_IMAGE_EFFECTS.outlineColor),
+    outlineWidth: readNumber(value.outlineWidth, 0, 0, IMAGE_EFFECT_LIMITS.outlineWidth),
+    outlineGlow: readNumber(value.outlineGlow, 0, 0, IMAGE_EFFECT_LIMITS.outlineGlow),
+    outlineOpacity: readNumber(value.outlineOpacity, EMPTY_IMAGE_EFFECTS.outlineOpacity, 0, 1),
   };
 }
 
@@ -82,7 +86,8 @@ export function hasVisibleEffects(raw: unknown): boolean {
     effects.brightness !== 0 ||
     effects.grayscale ||
     (effects.shadowOpacity > 0 && (effects.shadowBlur > 0 || effects.shadowOffsetX !== 0 || effects.shadowOffsetY !== 0)) ||
-    (effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0))
+    (effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0)) ||
+    (effects.outlineWidth > 0 && effects.outlineOpacity > 0)
   );
 }
 
@@ -227,6 +232,13 @@ export function glowCacheSignature(effects: unknown): string {
  */
 export function imageRenderSignature(effects: unknown): string {
   const e = normalizeImageEffects(effects);
-  return [pictureCacheSignature(e), `op:${e.opacity.toFixed(3)}`, `glow:${glowCacheSignature(e)}`].join('|');
+  return [
+    pictureCacheSignature(e),
+    `op:${e.opacity.toFixed(3)}`,
+    `glow:${glowCacheSignature(e)}`,
+    // 轮廓是一条独立位图（`alpha-outline.ts`），所以它的参数必须进来：换颜色或改粗细
+    // 不会动 Konva 的 cache，却会让成品完全不同。
+    `outline:${e.outlineColor.toLowerCase()}|${e.outlineWidth.toFixed(2)}|${e.outlineGlow.toFixed(2)}|${e.outlineOpacity.toFixed(3)}`,
+  ].join('|');
 }
 

@@ -2270,3 +2270,69 @@ blob 存在并不代表它属于这张图。所以补摘要时若状态是 `succ
 身份改成 `brand:<materialId>:<remoteRev>:<blobId>`（`brandPaintIdentity()`）。远端品牌有
 `remoteRev`，手工上传的品牌没有 —— 后者重新上传会换 blobId，本身就有区分度。反向要求也
 成立：同一个版本重复同步（内容没变）键必须不变，否则每同步一次就白丢一份缓存。
+
+## 21. 海报 M1：画布背景与真实 Alpha 描边（10.23.0）
+
+这一节的由来：`AliExpressImageEditorExtension-poster-plan.md` 要求「背景大图 + 放大主体 + 红色描边
++ 左下细节」的可编辑海报。M1 只做其中两件**地基**——底色与描边——因为它们必须先进文档与渲染，
+之后的模板才有地方落。
+
+### 21.1 底色是文档属性，不是图层也不是编辑器设置
+
+三个候选位置，只有一个是干净的：
+
+| 位置 | 为什么不 |
+| --- | --- |
+| `EditorState.showWhiteBackground` | 它只切换**预览**的棋盘格，导出永远是白底；把它当底色会让预览与导出一致性当场破裂 |
+| 一个"背景图层" | 会出现在图层面板里、可被删除、可被 `measure-layout` 当成一张图统计并集 |
+| `EditorDocument.background` | 跟着文档走：撤销、`APPLY_PLAN`、导出、成品键各读一次，没有第二个真相 |
+
+归一化在 `document-background.ts` 里做一次，`#abc` 展开成 `#aabbcc`、大写转小写、读不出来回落
+`#ffffff`（旧文档没有这个字段，语义上就是白底）。**默认值必须是同一种大小写**：第一版把常量写成
+`#FFFFFF` 而归一化输出 `#ffffff`，于是"白色"被判成自定义底色、`hasCustomBackground` 恒真 ——
+测试当场抓到。
+
+三处读者：`EditorStage` 最下层那个 `listening={false}` 的 `Rect`、导出用的 `export-background`、
+`paint-fingerprint` 里的 `background:<color>`。最后一条是这轮最容易被忽略的：底色变了而指纹没变，
+「下载缓存成品」会把白底那版当成本次的。
+
+### 21.2 描边不是发光：Konva 的阴影硬边就是剪影本身
+
+现有的「发光」是"同一张图再画一遍、着色、加个大阴影"。对光晕够用，但对**海报描边**不行：
+阴影的硬边落在剪影**里面**，0 透明度地叠上去等于什么都没加，而海报要的是 4px 红色站在剪影外面。
+Konva 没有形态学膨胀，只能自己算：
+
+```
+A      = alpha ≥ 128 的剪影
+D      = 每个外部像素到最近剪影像素的距离（chamfer 3-4，两遍扫描）
+d ≤ w            → 实心环，指定颜色
+w < d ≤ w + glow → smoothstep 衰减的外晕
+```
+
+两个实现细节值得留在这里：**工作位图封在 512px**（预览够用；262k 像素的两遍扫描还便宜），
+**四周加 padding**（`ceil(w + glow) + 2`）—— 否则色环会被图片自己的矩形裁掉一圈，看起来像描边缺角。
+输出 `{canvas, pad, scale}`，`EditorStage` 把它铺在主体下面、`listening={false}`，缩放/旋转/拖动
+沿用主体节点的手势同步（`syncGlowWith` 那套）。
+
+它**不参与排版**：描边不进碰撞盒、不算商品面积，`measure-layout` 的六个数字仍按剪影量 —— 红光
+把商品面积算大两圈，`hero_dominance` 与 `canvas_fill` 会同时被带偏。
+
+### 21.3 测试边界：像素断言，不是参数断言
+
+描边唯一值得测的问题是"红圈到底落在哪"。所以 `alpha-outline.ts` 把光栅化拆成无 DOM 的
+`computeOutlinePixels()`，测试直接读返回值里的 RGBA：
+
+- 紧贴方块外侧一格是 `#ff2638`、alpha 255；方块内部 alpha 为 0（主体不被染红）；
+- 外晕随距离单调衰减，到 `w + glow` 恰好为 0；
+- 细长主体（一列像素）不会退化成矩形；
+- 全透明图返回 `null`（没有剪影就没有环，画出来像 bug）；缓冲区长度不足时也返回 `null`。
+
+`buildOutlineBitmap()` 是 DOM 包装（画到位图 → 读 alpha → 复用同一函数），不在单测覆盖内 ——
+这条边界与"滤镜要 `cache()`"同源：真机观感只能靠 manual-test 5.139。
+
+### 21.4 这一版**没做**（M2 / M3）
+
+槽位级 `effects` / `fit: cover|contain` / `purpose: decorative_background` / `allow_source_reuse`
+这几个模板字段仍未解析，`dramatic_glow_character_poster` 模板本身也还没写；人工替换背景/主体/细节、
+整体撤销、以及 Chrome 里的六类输入视觉验收都在 M2/M3。换句话说：**底色与描边已经能用、能存、
+能导出、能进缓存键；"一键出海报"还没有**。

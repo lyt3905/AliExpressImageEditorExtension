@@ -110,6 +110,11 @@ export function ImagePropertiesEditor({ layer, onCommit }: ImagePropertiesEditor
     effects.shadowOpacity > 0 &&
     (effects.shadowBlur > 0 || effects.shadowOffsetX !== 0 || effects.shadowOffsetY !== 0);
   const glowOn = effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
+  /*
+    描边与发光是两件事：发光画的是"剪影本身加一圈光晕"（硬边就是剪影），海报要的
+    是**剪影外面的色环**（`alpha-outline.ts` 用距离场算）。所以它必须单独开关。
+  */
+  const outlineOn = effects.outlineWidth > 0 && effects.outlineOpacity > 0;
 
   return (
     <section className="text-properties">
@@ -202,6 +207,60 @@ export function ImagePropertiesEditor({ layer, onCommit }: ImagePropertiesEditor
               max={IMAGE_EFFECT_LIMITS.shadowOffset}
               title="正值向下"
               onCommit={(next) => apply({ shadowOffsetY: next })}
+            />
+          </div>
+        </>
+      ) : null}
+
+      <h4 className="text-properties__subtitle">描边</h4>
+      <div className="text-properties__row text-properties__row--buttons">
+        <button
+          type="button"
+          className={outlineOn ? 'is-active' : ''}
+          title={outlineOn ? '关掉这一张图的描边' : '沿剪影外侧加一圈实心色环（海报风格的红色描边）'}
+          onClick={() =>
+            apply(
+              outlineOn
+                ? { outlineWidth: 0, outlineGlow: 0, outlineOpacity: 1 }
+                : { outlineWidth: 4, outlineGlow: 14, outlineOpacity: 0.75, outlineColor: '#ff2638' },
+            )
+          }
+        >
+          {outlineOn ? '描边：开' : '描边：关'}
+        </button>
+      </div>
+      {outlineOn ? (
+        <>
+          <div className="text-properties__row">
+            <EffectColor
+              label="颜色"
+              value={effects.outlineColor}
+              onCommit={(next) => apply({ outlineColor: next })}
+            />
+            <EffectNumber
+              label="粗细"
+              value={effects.outlineWidth}
+              min={0}
+              max={IMAGE_EFFECT_LIMITS.outlineWidth}
+              title="剪影外侧实心环的厚度（逻辑 px）"
+              onCommit={(next) => apply({ outlineWidth: next })}
+            />
+          </div>
+          <div className="text-properties__row">
+            <EffectNumber
+              label="外晕"
+              value={effects.outlineGlow}
+              min={0}
+              max={IMAGE_EFFECT_LIMITS.outlineGlow}
+              title="色环之外的柔和扩散（逻辑 px）"
+              onCommit={(next) => apply({ outlineGlow: next })}
+            />
+            <EffectNumber
+              label="不透明 %"
+              value={Math.round(effects.outlineOpacity * 100)}
+              min={0}
+              max={100}
+              onCommit={(next) => apply({ outlineOpacity: next / 100 })}
             />
           </div>
         </>
