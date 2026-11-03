@@ -772,7 +772,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 60 文件 / 976 个单元测试（不联网）
+│  ├─ unit/                      # 60 文件 / 977 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -1062,7 +1062,9 @@ AliExpressImageEditorExtension/
     结果是多做一次成品图，不会拿错图。这条属于**宁可重算也不出错**的取舍。
 36. 包装盒的可见率只算"**主体**压住它多少"：衬板、品牌 Logo、水印叠在上面造成的遮挡不计入，
     `box_visibility_below_min` 因此可能偏乐观。10.22.4 起遮挡面积按两个掩码网格的**细化**做面积积分，
-    细条纹与单格掩码都不会再被采样跨过，但"全上层遮挡"的完整公式仍未实现（要等逐层可见率那一块）。
+    细条纹与单格掩码都不会再被采样跨过；10.22.5 起细化**不再为了省算力删边**（`maskSize ≤ 128`
+    本来就有界），所以两张 128 格梳状掩码交叠也能算到 0.5094 而不是 0.7355。但"全上层遮挡"的
+    完整公式仍未实现（要等逐层可见率那一块）。
 37. 升级到 10.22.4 时，"上一个版本补过摘要、但抠图可能来自别的商品"的旧会话会**重抠一次**：
     判据是 `cutoutDigest`（这份抠图出自哪张原图），老记录没有它就不算数。代价只落在升级后第一次打开。
 
@@ -1073,7 +1075,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（62 文件 / 981 测试，其中 976 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（62 文件 / 982 测试，其中 977 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1112,6 +1114,7 @@ AliExpressImageEditorExtension/
 | 审查报告 11.md 的七条修复（10.22.1） | **仅自动化验证**（新增 `image-filters.test.ts` 12 例 + `compose-cache` 6 例 + `composition-alpha-scan` 2 例 + `composition-solvers` 1 例 + `composition-planner` 2 例 + `upload-images` 1 例）：Konva 真实滤镜函数跑像素（`Brighten` 作偏移量、0 中性、1 全白、`Grayscale` 无条件转灰、`RGB` 着色、滤镜名单只按开关）、`local:#<sha256>` 身份与同字节不同内容不撞、`occlusionRatio` 把完全被挡的盒子算成不可见、Alpha 网格不比主体更细、`pictureCacheSignature`/`glowCacheSignature` 对阴影与发光每个字段敏感、成品键随 support 图/水印/品牌/效果变化且与顺序无关、运行期 `reserved_zone_overlap`。**浏览器像素与拖动同步仍未自动化**，步骤见 manual-test 5.124–5.126 |
 | 二次复核第三轮（10.22.3） | **仅自动化验证**（`compose-cache` 41 例 + `composition-occlusion` 9 例 + `paint-fingerprint` 7 例 + `composition-planner` 23 例）：v1 索引整份丢弃、两个不同 Logo / 两张不同原图在身份表里查不到时仍算出不同键、128 列条纹掩码被全遮时遮挡率 > 98%（旧实现 3%）、10px 宽主体压进 800×88 底栏深度 88px 且面积 < 2% 仍报警、正常素材下包装盒可见率 100% 且不误报 `box_visibility_below_min`、`box_visibility_below_min` 不再重复两次。**浏览器端到端与"衬板/水印压包装盒"仍未自动化**，步骤见 manual-test 5.131–5.134 |
 | 三次复核第四轮（10.22.4） | **仅自动化验证**（`composition-occlusion` 11 例 + `cutout-migration` 6 例 + `paint-fingerprint` 8 例 + `composition-planner` 23 例）：前景 128 列细条纹压粗掩码（2×2）后景的真实遮挡率 50.8% 被算对（旧实现 0%）、单格掩码盖住左边 49/51px 分别算出 49%/51%（旧实现 0%/100%）、`cutoutDigest` 缺失或与当前原图不符一律退回重抠（含 10.22.2 补过摘要的会话）、同品牌 Logo 内容更新（`remoteRev` v1→v2、blobId 不变）会换成品键、重复同步同一版本不换键。**浏览器端到端与"衬板/水印压包装盒"仍未自动化**，步骤见 manual-test 5.135–5.137 |
+| 四次复核第五轮（10.22.5） | **仅自动化验证**（`composition-occlusion` 12 例）：两张 128×128、`maskSize` 都是 128 的梳状掩码（前景「第 0 列 + 奇数列」、后景「偶数列 + 最后一列」、水平错开 0.49px）遮挡率算到 **0.4906**（精确值），旧版把合并边界从 256 条削到 200 条后报 0.2645（误差 22.6 个百分点，55%/65% 两档门槛都被错误放行）；同时用 49/51px 与"细前景压粗后景"两个既有反例守住面积积分。细化预算已被删除（`maskSize ≤ 128` ⇒ 每轴 ≤ 257 条边，本来有界），整套单测耗时不变（约 24 秒）。**浏览器端到端仍未自动化**，步骤见 manual-test 5.138 |
 | 复核报告第二轮（10.22.2） | **仅自动化验证**（`composition-occlusion.test.ts` 7 例 + `paint-fingerprint.test.ts` 6 例）：不相交的 2×2 掩码遮挡率 < 2%、全不透明 > 98%、只算重叠的不透明格、错位的图算 0；细长主体（20×2000）压进底栏 88px 时**面积只占 1.45% 却仍报警**（深度判据），擦边 1px 不报；成品指纹对不透明度/发光/位移/缩放/旋转/翻转/换序/身份/水印/文字全部敏感，只有文字与衬板时返回 `null`。**浏览器里的拖动同步与像素观感仍未自动化**，步骤见 manual-test 5.127–5.130 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

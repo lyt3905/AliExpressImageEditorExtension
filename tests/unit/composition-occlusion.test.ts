@@ -148,6 +148,39 @@ describe('occlusionRatio', () => {
     expect(left51).toBeGreaterThan(0.49);
     expect(left51).toBeLessThan(0.53);
   });
+
+  it('keeps every mask boundary when two 128-cell combs overlap by half a pixel', () => {
+    /*
+      四次复核 R3 的反例，也是 10.22.4 唯一仍失败的一处：两张 128×128、maskSize 都是 128，
+      前景不透明列为「第 0 列 + 奇数列」，后景为「偶数列 + 最后一列」，水平错开 0.49px。
+      精确结果是可见率 0.5094、遮挡率 0.4906；10.22.4 把合并后的 256 条边砍到 200 条，
+      被合并的矩形里 alpha 不再恒定、却仍取中心值 → 遮挡率报 0.2645（可见率 0.7355），
+      22.6 个百分点。细化**不许丢边**，这条锁住它。
+    */
+    const columns = 128;
+    const comb = (opaque: (column: number) => boolean) => {
+      const mask: number[] = [];
+      for (let row = 0; row < columns; row += 1) {
+        for (let column = 0; column < columns; column += 1) mask.push(opaque(column) ? 1 : 0);
+      }
+      return createAlphaProfile({
+        sourceWidth: columns,
+        sourceHeight: columns,
+        maskSize: columns,
+        mask,
+      });
+    };
+    const front = comb((column) => column === 0 || column % 2 === 1);
+    const back = comb((column) => column % 2 === 0 || column === columns - 1);
+    const ratio = occlusionRatio(
+      { profile: front, placement: { ...AT, centerX: 400.49 } },
+      { profile: back, placement: AT },
+      CANVAS,
+    );
+    // 精确值 0.4906（可见率 0.5094）—— 给 2 个百分点的容差，但绝不允许回到 0.26。
+    expect(ratio).toBeGreaterThan(0.47);
+    expect(ratio).toBeLessThan(0.51);
+  });
 });
 
 describe('zoneIntrusion', () => {
