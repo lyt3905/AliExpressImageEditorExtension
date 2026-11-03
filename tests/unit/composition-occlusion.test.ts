@@ -32,6 +32,31 @@ describe('occlusionRatio', () => {
     expect(ratio).toBeLessThan(0.02);
   });
 
+  it('does not miss stripe-shaped masks when the back mask is fine-grained', () => {
+    // 复核 R3 的第二个反例：128×128、偶数列不透明（density 0.5078），前面压一张完全
+    // 不透明的同尺寸图 —— 真实可见率是 0，而 64 格采样会跳过绝大多数列，报 ~97%。
+    const columns = 128;
+    const stripes: number[] = [];
+    for (let row = 0; row < columns; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        stripes.push(column % 2 === 0 ? 1 : 0);
+      }
+    }
+    const back = createAlphaProfile({
+      sourceWidth: 128,
+      sourceHeight: 128,
+      maskSize: columns,
+      mask: stripes,
+    });
+    const front = createAlphaProfile({ sourceWidth: 128, sourceHeight: 128, maskSize: 1, mask: [1] });
+    const ratio = occlusionRatio(
+      { profile: front, placement: AT },
+      { profile: back, placement: AT },
+      CANVAS,
+    );
+    expect(ratio).toBeGreaterThan(0.98);
+  });
+
   it('still reports a fully covered layer as hidden', () => {
     const back = mask([1, 1, 1, 1]);
     const front = mask([1, 1, 1, 1]);
@@ -87,6 +112,25 @@ describe('zoneIntrusion', () => {
     );
     expect(depth).toBeGreaterThan(6);
     // 面积份额小到 2% 阈值根本抓不住 —— 这正是要改用深度的原因。
+    expect(covered).toBeLessThan(0.02);
+  });
+
+  it('reports the depth a 10px-wide hero cuts into the footer, not its own width', () => {
+    // 复核 R7 第二个反例：主体变窄到 10px，交集短边是 5.8px（宽度），而它其实把
+    // 88px 高的底栏整条切断了。深度必须按"进入保留区的方向"量。
+    const slim = createAlphaProfile({
+      sourceWidth: 10,
+      sourceHeight: 2000,
+      maskSize: 1,
+      mask: [1],
+    });
+    const { depth, covered } = zoneIntrusion(
+      slim,
+      { centerX: 400, centerY: 520, scale: 0.58 },
+      ZONE,
+      CANVAS,
+    );
+    expect(depth).toBeGreaterThan(80);
     expect(covered).toBeLessThan(0.02);
   });
 

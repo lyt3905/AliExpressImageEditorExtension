@@ -65,21 +65,15 @@ describe('buildCompositionPlan — both materials present', () => {
 });
 
 describe('buildCompositionPlan — the box makes the hero give ground', () => {
-  it('steps the zoom down until the box clears the visibility threshold', () => {
-    // Raise the bar to 75% so the dominance solution (which leaves the box ~72%
-    // visible) no longer passes and the second pass has to do something.
-    const strict = structuredClone(SOURCE) as Record<string, any>;
-    strict.rules.package_readability.min_visible_ratio = 0.75;
-    const template = parseLayoutTemplateOrThrow(strict);
-
-    const plan = buildCompositionPlan({ template, hero: HERO, box: BOX, seed: 'MTS-0001' });
+  it('leaves the box alone when the hero never reaches it', () => {
+    /*
+      10.22.2 起遮挡率按"两块 alpha 真的相交"算（复核 R3）：这张模板把包装盒放在主体
+      够不到的右下区，正常素材下包装盒可见率就是 100%。旧实现按槽位矩形算会误报遮挡，
+      于是白白把主体缩小一档 —— 这条断言锁住"没事别让位"。
+    */
     const relaxed = buildCompositionPlan({ template: TEMPLATE, hero: HERO, box: BOX, seed: 'MTS-0001' });
-
-    expect(plan.diagnostics.heroZoom).toBeLessThan(relaxed.diagnostics.heroZoom);
-    expect(plan.diagnostics.boxVisibleRatio).toBeGreaterThanOrEqual(0.75);
-    expect(plan.warnings.map((entry) => entry.code)).toContain('hero_zoom_reduced');
-    // Giving ground always costs dominance; the plan must say so, not hide it.
-    expect(plan.diagnostics.heroOccupancy).toBeLessThan(relaxed.diagnostics.heroOccupancy);
+    expect(relaxed.diagnostics.boxVisibleRatio).toBe(1);
+    expect(relaxed.warnings.map((entry) => entry.code)).not.toContain('box_visibility_below_min');
   });
 
   it('admits when the box cannot be rescued', () => {

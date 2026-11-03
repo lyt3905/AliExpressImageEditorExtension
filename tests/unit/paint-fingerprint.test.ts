@@ -117,6 +117,38 @@ describe('paintFingerprintOf', () => {
     expect(paintParts([picture('pic')], other, null)).not.toEqual(before);
   });
 
+  it('still tells two materials apart when the identity map knows neither', () => {
+    /*
+      复核 R6 的第二个反例：品牌 Logo 与原图都不在 `identityByMaterialId` 里，
+      旧实现把它们都归成空字符串 —— 两个不同 Logo、尺寸位置一样，键就撞了，
+      "下载缓存成品"会把上一个 Logo 的成品给出来。
+    */
+    const logoA: ImageLayer = picture('logo', {
+      kind: 'brand',
+      materialId: 'material-brand-a',
+      blobId: 'brand-logo-a',
+    });
+    const logoB: ImageLayer = picture('logo', {
+      kind: 'brand',
+      materialId: 'material-brand-b',
+      blobId: 'brand-logo-b',
+    });
+    const empty = new Map<string, string>();
+    expect(paintParts([logoB], empty, null)).not.toEqual(paintParts([logoA], empty, null));
+
+    const originalA: ImageLayer = picture('original', {
+      kind: 'original',
+      materialId: 'material-original-1',
+      blobId: 'session-1-image',
+    });
+    const originalB: ImageLayer = picture('original', {
+      kind: 'original',
+      materialId: 'material-original-2',
+      blobId: 'session-2-image',
+    });
+    expect(paintParts([originalB], empty, null)).not.toEqual(paintParts([originalA], empty, null));
+  });
+
   it('tracks the watermark and the code text', () => {
     const watermark = {
       id: 'watermark',

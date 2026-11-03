@@ -14,6 +14,7 @@ import {
 } from '../../src/services/compose-cache';
 import {
   COMPOSE_CACHE_MAX_CUTOUTS,
+  COMPOSE_CACHE_VERSION,
   COMPOSE_RESULT_PREFIX,
   CUTOUT_CACHE_PREFIX,
   STORAGE_KEYS,
@@ -281,8 +282,24 @@ describe('state parsing', () => {
     }
   });
 
+  it('throws away a state written by an older identity rule', () => {
+    /*
+      10.22.2 把 `COMPOSE_CACHE_VERSION` 升到 2，理由是本地图片身份规则变了（旧 key 可能
+      指向另一张图）。只改常量不算"丢弃旧索引" —— 解析时也必须认这个版本号，否则 v1 的
+      cutout 条目会被原样读进来继续用。
+    */
+    const stored = {
+      version: COMPOSE_CACHE_VERSION - 1,
+      cutouts: { 'local:image.png|4320|800x800': { blobId: 'stale', at: 1 } },
+      bindings: { k: { hero: 'url:a', box: null, at: 1 } },
+      results: { r: { blobId: 'stale-result', at: 1 } },
+    };
+    expect(parseComposeCacheState(stored)).toEqual(EMPTY_COMPOSE_CACHE);
+  });
+
   it('keeps only entries that still point at a blob', () => {
     const state = parseComposeCacheState({
+      version: COMPOSE_CACHE_VERSION,
       cutouts: { 'url:a': { blobId: 'b1', width: 10, height: 20, at: 5 }, 'url:b': { width: 1 } },
       results: { k1: { blobId: 'b2', at: 7 }, k2: {} },
       bindings: { k3: { hero: 'url:a', box: null, confidence: 0.5, reason: 'r', at: 9 }, k4: {} },
@@ -296,6 +313,7 @@ describe('state parsing', () => {
 
   it('keeps a binding that named a box but no hero', () => {
     const state = parseComposeCacheState({
+      version: COMPOSE_CACHE_VERSION,
       bindings: { k: { box: 'url:b', confidence: 1, reason: '', at: 1 } },
     });
     expect(state.bindings.k).toMatchObject({ hero: '', box: 'url:b' });
@@ -303,6 +321,7 @@ describe('state parsing', () => {
 
   it('names missing numbers 0 rather than NaN', () => {
     const state = parseComposeCacheState({
+      version: COMPOSE_CACHE_VERSION,
       cutouts: { k: { blobId: 'b', width: 'wide', at: null } },
       bindings: { b: { hero: 'url:a', confidence: 'high' } },
     });
@@ -313,6 +332,7 @@ describe('state parsing', () => {
 
   it('remembers which photos were ruled out for carrying the shop frame', () => {
     const state = parseComposeCacheState({
+      version: COMPOSE_CACHE_VERSION,
       bindings: {
         k: {
           hero: 'url:a',
@@ -330,6 +350,7 @@ describe('state parsing', () => {
 
   it('leaves `skipped` absent when the stored answer had none', () => {
     const state = parseComposeCacheState({
+      version: COMPOSE_CACHE_VERSION,
       bindings: { k: { hero: 'url:a', box: null, skipped: 'nope', at: 3 } },
     });
     expect(state.bindings.k.skipped).toBeUndefined();
@@ -340,7 +361,7 @@ describe('state parsing', () => {
     for (let index = 0; index < COMPOSE_CACHE_MAX_CUTOUTS + 5; index += 1) {
       raw[`url:${index}`] = { blobId: `b${index}`, at: index };
     }
-    const state = parseComposeCacheState({ cutouts: raw });
+    const state = parseComposeCacheState({ version: COMPOSE_CACHE_VERSION, cutouts: raw });
     expect(Object.keys(state.cutouts)).toHaveLength(COMPOSE_CACHE_MAX_CUTOUTS);
     // Newest kept, oldest dropped.
     expect(state.cutouts[`url:${COMPOSE_CACHE_MAX_CUTOUTS + 4}`]).toBeDefined();

@@ -37,7 +37,18 @@ function picturePart(
   layer: EditorLayer,
   identityByMaterialId: ReadonlyMap<string, string>,
 ): string {
-  const identity = identityByMaterialId.get((layer as { materialId?: string }).materialId ?? '') ?? '';
+  /*
+    Never let a missing identity collapse to "": that made two different logos (or two
+    different original photos) with the same geometry share one key — the cache then
+    hands back a PNG painted with the OLD material (2026-11-03 复核 R6 第二个反例).
+    `blobId` is per-material content, so it separates them even when the identity map
+    has nothing to say about this layer.
+  */
+  const materialId = (layer as { materialId?: string }).materialId ?? '';
+  const blobId = (layer as { blobId?: string }).blobId ?? '';
+  const identity =
+    identityByMaterialId.get(materialId) ??
+    (blobId ? `blob:${blobId}` : `material:${materialId || layer.id}`);
   const kind = layer.kind;
   const effects =
     layer.kind === 'text' || layer.kind === 'plate' ? '' : imageRenderSignature(layer.effects);

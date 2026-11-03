@@ -324,7 +324,29 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
             if (digest) {
               next = { ...next, digest };
               changed = true;
-              await persist(next.id, { digest });
+              /*
+                迁移缺口（2026-11-03 复核 R2 历史边界）：旧记录里的 `cutoutBlobId` 可能是
+                "串图"那一份 —— 它写下的年代还分不清两张同名同尺寸的图片，blob 存在并不
+                代表它属于这张图。补摘要的同时把这个状态退回待处理，让它用正确身份重抠一次。
+                代价只有"旧会话第一次打开"，换来的是不再把别的商品的抠图端上台面。
+              */
+              if (next.cutoutStatus === 'success') {
+                next = {
+                  ...next,
+                  cutoutStatus: 'idle',
+                  cutoutBlobId: undefined,
+                  cutoutWidth: undefined,
+                  cutoutHeight: undefined,
+                  cutoutError: undefined,
+                };
+              }
+              await persist(next.id, {
+                digest,
+                cutoutStatus: next.cutoutStatus,
+                cutoutBlobId: next.cutoutBlobId,
+                cutoutWidth: next.cutoutWidth,
+                cutoutHeight: next.cutoutHeight,
+              });
             }
           }
 

@@ -22,6 +22,7 @@ import type { AlphaProfile } from './alpha';
 import {
   canvasOccupancy,
   coveredFraction,
+  occlusionRatio,
   toLayerPlacement,
   zoneIntrusion,
   type CanvasSize,
@@ -535,9 +536,13 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
 
     if (boxSolution) {
       warnings.push(...boxSolution.warnings);
-      if (boxSolution.visibleRatio < minVisibleRatio) {
-        // Already reported by solveBox; this line exists so the plan itself states
-        // that the layout is knowingly off-spec rather than looking clean.
+      const alreadySaid = boxSolution.warnings.some(
+        (entry) => entry.code === 'box_visibility_below_min',
+      );
+      // Already reported by solveBox; this line exists so the plan itself states
+      // that the layout is knowingly off-spec rather than looking clean. Skipped when
+      // the solver already said it — two identical red lines read like two problems.
+      if (boxSolution.visibleRatio < minVisibleRatio && !alreadySaid) {
         warnings.push(
           warning('box_visibility_below_min', `包装盒最终可见 ${round(boxSolution.visibleRatio * 100, 1)}%，低于模板要求`, {
             visibleRatio: round(boxSolution.visibleRatio),
@@ -836,6 +841,38 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
           { slotId: slot.id, zoneId: zone.id, covered: round(covered, 4), depth: round(depth, 2) },
         ),
       );
+    }
+  }
+
+  // ---- pass 4.5: 叠图之后重新算包装盒可见率 --------------------------------
+  /*
+    包装盒的可见率是 pass 2 在"还没平移"的几何上算的，而 `cascade` 会把图层整体挪几十 px。
+    沿用旧值会让 diagnostics 与画布不符（2026-11-03 复核 R3 的补充意见），所以这里用最终
+    placement 与真实 alpha 再算一次。只有数字真的变了（>2%）才覆盖，否则同一次输入会因为
+    亚像素差异给出不同的 diagnostics。
+  */
+  const boxPicture = boxSlot
+    ? pictures.find((picture) => picture.slotId === boxSlot.id)
+    : undefined;
+  const heroPicture = pictures.find((picture) => picture.slotId === heroSlot.id);
+  if (boxPicture && heroPicture && boxSolution) {
+    const hidden = occlusionRatio(
+      { profile: heroPicture.material.profile, placement: heroPicture.placement },
+      { profile: boxPicture.material.profile, placement: boxPicture.placement },
+      canvas,
+    );
+    const visibleAfterCascade = round(1 - Math.min(1, Math.max(0, hidden)), 4);
+    if (Math.abs(visibleAfterCascade - boxSolution.visibleRatio) > 0.02) {
+      boxSolution = { ...boxSolution, visibleRatio: visibleAfterCascade };
+      if (visibleAfterCascade < minVisibleRatio) {
+        warnings.push(
+          warning(
+            'box_visibility_below_min',
+            `叠图之后包装盒只剩 ${round(visibleAfterCascade * 100, 1)}% 可见，低于模板要求`,
+            { visibleRatio: visibleAfterCascade, threshold: minVisibleRatio },
+          ),
+        );
+      }
     }
   }
 

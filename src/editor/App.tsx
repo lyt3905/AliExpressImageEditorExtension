@@ -966,6 +966,27 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
   }, [cutouts, identityByImageId]);
 
   /**
+   * 任何可能进画面的图片材质 -> 它的身份。**只给成品图缓存键用**。
+   *
+   * 与上面的 `identityByMaterialId` 分开是有原因的：那个是视觉绑定的键，只该包含抠图
+   * （AI 只看到抠图候选）；而这个要覆盖原图与品牌 Logo —— 2026-11-03 复核的第二个反例
+   * 就是"两个同尺寸 Logo / 两张同尺寸原图只换素材不动几何"命中了同一份缓存成品。
+   */
+  const paintIdentityByMaterialId = useMemo(() => {
+    const map = new Map<string, string>(identityByMaterialId);
+    for (const material of materials) {
+      const identity = identityByImageId.get(material.imageId);
+      if (identity) map.set(material.id, identity);
+    }
+    for (const material of brandMaterials) {
+      // 品牌 Logo 不在会话图片里，没有 url 也没有摘要：用"品牌 + Logo blob"当身份，
+      // 换一张 Logo 就换身份，同一个品牌反复同步则保持稳定。
+      map.set(material.id, `brand:${material.id}:${material.blobId}`);
+    }
+    return map;
+  }, [identityByMaterialId, materials, brandMaterials, identityByImageId]);
+
+  /**
    * 成品 PNG 的缓存键：直接由**当前画布**算，见 `state/paint-fingerprint.ts`。
    *
    * 10.22.1 拿"排版计划"当键，看着合理，实际只描述生成那一刻的意图：之后改不透明度、
@@ -975,9 +996,9 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    * 旧条目自然命不中 —— 不需要维护"哪些操作要清缓存"这张表。
    */
   const resultKey = useMemo(() => {
-    const parts = paintFingerprintOf(document.layers, identityByMaterialId, watermark.layer);
+    const parts = paintFingerprintOf(document.layers, paintIdentityByMaterialId, watermark.layer);
     return parts ? hashKey(['result', ...parts]) : null;
-  }, [document.layers, identityByMaterialId, watermark.layer]);
+  }, [document.layers, paintIdentityByMaterialId, watermark.layer]);
 
   /**
    * Guess hero/box once, and re-guess only when the current choice disappeared.

@@ -195,11 +195,13 @@ export function occlusionRatio(
 }
 
 /**
- * Alpha ∩ alpha inside `region`, sampled on a fixed grid.
+ * Alpha ∩ alpha inside `region`, accumulated over the **back** layer's own mask cells.
  *
- * The analytic version would need the product of two piecewise-constant masks;
- * sampling is exact enough for a gate that compares against 0.65 and costs a
- * fraction of the arithmetic.
+ * Sampling on a fixed grid (the 10.22.2 version capped at 64×64) silently skipped
+ * thin opaque columns: a 128-cell mask whose contents are single-column stripes lost
+ * almost all of them, so a fully covered box was reported as 97% visible (2026-11-03
+ * 复核 R3). Walking the back mask's own cells costs at most `maskSize²` lookups and
+ * cannot miss a stripe narrower than the sampling step, because the step IS the mask.
  */
 function alphaIntersectionWithin(
   front: { profile: AlphaProfile; placement: ContentPlacement },
@@ -210,21 +212,25 @@ function alphaIntersectionWithin(
   const height = region[3] - region[1];
   if (!(width > 0) || !(height > 0)) return 0;
 
-  const cells = Math.max(8, Math.min(64, Math.max(front.profile.maskSize, back.profile.maskSize) * 2));
-  const stepX = width / cells;
-  const stepY = height / cells;
-  const sampleArea = stepX * stepY;
+  const maskSize = back.profile.maskSize;
+  const backRect = contentRect(back.profile, back.placement);
+  const cellWidth = (backRect[2] - backRect[0]) / maskSize;
+  const cellHeight = (backRect[3] - backRect[1]) / maskSize;
+  const cellArea = cellWidth * cellHeight;
+  if (!(cellArea > 0)) return 0;
 
   let total = 0;
-  for (let row = 0; row < cells; row += 1) {
-    const y = region[1] + (row + 0.5) * stepY;
-    for (let column = 0; column < cells; column += 1) {
-      const x = region[0] + (column + 0.5) * stepX;
+  for (let row = 0; row < maskSize; row += 1) {
+    const y = backRect[1] + (row + 0.5) * cellHeight;
+    if (y < region[1] || y > region[3]) continue;
+    for (let column = 0; column < maskSize; column += 1) {
+      const x = backRect[0] + (column + 0.5) * cellWidth;
+      if (x < region[0] || x > region[2]) continue;
+      const backCoverage = maskCoverage(back.profile, column, row);
+      if (backCoverage <= 0) continue;
       const frontCoverage = coverageAt(front.profile, front.placement, x, y);
       if (frontCoverage <= 0) continue;
-      const backCoverage = coverageAt(back.profile, back.placement, x, y);
-      if (backCoverage <= 0) continue;
-      total += Math.min(frontCoverage, backCoverage) * sampleArea;
+      total += Math.min(frontCoverage, backCoverage) * cellArea;
     }
   }
   return total;
@@ -274,7 +280,19 @@ export function zoneIntrusion(
     Math.min(rect[3], zone[3]),
   ];
   if (overlap[2] <= overlap[0] || overlap[3] <= overlap[1]) return { depth: 0, covered };
-  return { depth: Math.min(overlap[2] - overlap[0], overlap[3] - overlap[1]), covered };
+  /*
+    Depth must be measured ALONG the direction the zone blocks, not as the短边 of the
+    overlap. Taking the short side meant a 10×2000 hero through an 800×88 footer
+    reported `5.8px` (its own width) instead of the 88px it actually cuts through, and
+    the 6px gate let it pass (2026-11-03 复核 R7). A zone is a band: its long edge says
+    which axis is "into the zone", so the overlap's extent on the OTHER axis is the depth.
+  */
+  const overlapWidth = overlap[2] - overlap[0];
+  const overlapHeight = overlap[3] - overlap[1];
+  const zoneWidth = zone[2] - zone[0];
+  const zoneHeight = zone[3] - zone[1];
+  const depth = zoneWidth >= zoneHeight ? overlapHeight : overlapWidth;
+  return { depth, covered };
 }
 
 /** `region` clipped to the canvas; empty when nothing of it is on screen. */

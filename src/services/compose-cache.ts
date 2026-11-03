@@ -331,6 +331,16 @@ export function pruneComposeCache(state: ComposeCacheState): ComposeCacheState {
  */
 export function parseComposeCacheState(raw: unknown): ComposeCacheState {
   if (!isRecord(raw)) return EMPTY_COMPOSE_CACHE;
+  /*
+    A state written by an older build is not "a bit stale" — the keys inside it were
+    computed with a different identity rule, so a cutout stored under them may belong
+    to a COMPLETELY DIFFERENT photo (10.22.2: two `image.png` of the same size used to
+    share one key). Reading it as if it were current is exactly the bug the version
+    bump was supposed to close, so an old version is thrown away whole.
+  */
+  const version = num(raw.version);
+  if (version !== COMPOSE_CACHE_VERSION) return EMPTY_COMPOSE_CACHE;
+
 
   const cutouts: Record<string, CachedCutout> = {};
   if (isRecord(raw.cutouts)) {
