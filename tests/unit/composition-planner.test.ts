@@ -67,13 +67,21 @@ describe('buildCompositionPlan — both materials present', () => {
 describe('buildCompositionPlan — the box makes the hero give ground', () => {
   it('leaves the box alone when the hero never reaches it', () => {
     /*
-      10.22.2 起遮挡率按"两块 alpha 真的相交"算（复核 R3）：这张模板把包装盒放在主体
-      够不到的右下区，正常素材下包装盒可见率就是 100%。旧实现按槽位矩形算会误报遮挡，
-      于是白白把主体缩小一档 —— 这条断言锁住"没事别让位"。
+      遮挡率按"两块 alpha 真的相交"算（复核 R3）。这张模板把包装盒放在主体够不到的右下区，
+      但 hero 在 zoom≈1.816 下仍会压到盒子的一角 —— 真实相交约 27%，可见率 ≈0.73，高于
+      可读性地板 0.65，所以主体不该白白让位。
+      10.22.4 之前这条能用 `toBe(1)` 通过，是因为采样只查了盒子中心一格：那是同一个 bug
+      的另一面（粗网格漏算），不是"没压到"。
     */
     const relaxed = buildCompositionPlan({ template: TEMPLATE, hero: HERO, box: BOX, seed: 'MTS-0001' });
-    expect(relaxed.diagnostics.boxVisibleRatio).toBe(1);
+    expect(relaxed.diagnostics.boxVisibleRatio).toBeGreaterThan(
+      TEMPLATE.rules.packageReadability.minVisibleRatio,
+    );
     expect(relaxed.warnings.map((entry) => entry.code)).not.toContain('box_visibility_below_min');
+    // 主体缩放被包装盒逼着退让，才是判据偏了：和不带盒子的计划比，heroZoom 必须一样。
+    // （1.816 而不是模板名义值 2.2，是因为 hero_dominance 的占用率上限先把它压下来了。）
+    const alone = buildCompositionPlan({ template: TEMPLATE, hero: HERO, seed: 'MTS-0001' });
+    expect(relaxed.diagnostics.heroZoom).toBeCloseTo(alone.diagnostics.heroZoom, 6);
   });
 
   it('admits when the box cannot be rescued', () => {

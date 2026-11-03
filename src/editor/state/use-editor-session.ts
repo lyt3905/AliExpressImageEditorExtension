@@ -28,6 +28,7 @@ import { readBlobSize } from '../../services/image-size';
 import { loadSettings } from '../../services/settings';
 import { appendUploadedImages, type UploadOutcome } from '../../services/upload-images';
 import { emptyDocument, keepLayerWithMaterials, restoreStoredLayer } from './editor-reducer';
+import { cutoutNeedsRework } from './cutout-migration';
 
 const IN_FLIGHT: ReadonlySet<CutoutStatus> = new Set<CutoutStatus>(['queued', 'uploading', 'processing']);
 
@@ -248,6 +249,9 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
           cutoutWidth: size.width,
           cutoutHeight: size.height,
           cutoutError: undefined,
+          // 记下这份抠图是哪张原图做的（见 SessionImage.cutoutDigest）：恢复时只有它对得上
+          // 才敢用，否则宁可重抠 —— 旧版本留下的"别人的抠图"就是这样被排除的。
+          ...(image.digest ? { cutoutDigest: image.digest } : {}),
         };
 
         updateImage(imageId, patch);
@@ -324,30 +328,32 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
             if (digest) {
               next = { ...next, digest };
               changed = true;
-              /*
-                迁移缺口（2026-11-03 复核 R2 历史边界）：旧记录里的 `cutoutBlobId` 可能是
-                "串图"那一份 —— 它写下的年代还分不清两张同名同尺寸的图片，blob 存在并不
-                代表它属于这张图。补摘要的同时把这个状态退回待处理，让它用正确身份重抠一次。
-                代价只有"旧会话第一次打开"，换来的是不再把别的商品的抠图端上台面。
-              */
-              if (next.cutoutStatus === 'success') {
-                next = {
-                  ...next,
-                  cutoutStatus: 'idle',
-                  cutoutBlobId: undefined,
-                  cutoutWidth: undefined,
-                  cutoutHeight: undefined,
-                  cutoutError: undefined,
-                };
-              }
-              await persist(next.id, {
-                digest,
-                cutoutStatus: next.cutoutStatus,
-                cutoutBlobId: next.cutoutBlobId,
-                cutoutWidth: next.cutoutWidth,
-                cutoutHeight: next.cutoutHeight,
-              });
+              await persist(next.id, { digest });
             }
+          }
+
+          /*
+            抠图归属核对（2026-11-03 三次复核 R2）—— 规则见 `cutoutNeedsRework()`。
+            新抠图会在成功时写下 `cutoutDigest`（见 runCutout），所以正常商品只会重抠这一次。
+          */
+          if (cutoutNeedsRework(next)) {
+            next = {
+              ...next,
+              cutoutStatus: 'idle',
+              cutoutBlobId: undefined,
+              cutoutWidth: undefined,
+              cutoutHeight: undefined,
+              cutoutError: undefined,
+              cutoutDigest: undefined,
+            };
+            changed = true;
+            await persist(next.id, {
+              cutoutStatus: 'idle',
+              cutoutBlobId: undefined,
+              cutoutWidth: undefined,
+              cutoutHeight: undefined,
+              cutoutDigest: undefined,
+            });
           }
 
           /*
@@ -370,6 +376,8 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
                 cutoutWidth: cachedCutout.width || width,
                 cutoutHeight: cachedCutout.height || height,
                 cutoutError: undefined,
+                // 缓存命中是按内容身份查的，所以这份抠图确定来自这张原图。
+                ...(next.digest ? { cutoutDigest: next.digest } : {}),
               };
               changed = true;
               adoptedFromCache += 1;

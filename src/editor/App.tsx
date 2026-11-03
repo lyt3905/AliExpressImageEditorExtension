@@ -63,7 +63,7 @@ import {
   imageIdentity,
   type CachedBinding,
 } from '../services/compose-cache';
-import { paintFingerprintOf } from './state/paint-fingerprint';
+import { brandPaintIdentity, paintFingerprintOf } from './state/paint-fingerprint';
 import { loadSettings } from '../services/settings';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
 import {
@@ -978,13 +978,18 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       const identity = identityByImageId.get(material.imageId);
       if (identity) map.set(material.id, identity);
     }
+    const revisionById = new Map(brands.map((brand) => [brand.id, brand.remoteRev ?? '']));
     for (const material of brandMaterials) {
-      // 品牌 Logo 不在会话图片里，没有 url 也没有摘要：用"品牌 + Logo blob"当身份，
-      // 换一张 Logo 就换身份，同一个品牌反复同步则保持稳定。
-      map.set(material.id, `brand:${material.id}:${material.blobId}`);
+      /*
+        品牌 Logo 不在会话图片里，没有 url 也没有摘要；而且目录同步会**用同一个 blob id
+        覆盖内容**，只看 blob id 的话"Logo 换了内容"与"没换"是同一个键 —— 2026-11-03 三次
+        复核的 R6 反例（v1 → v2 都是 `fae2680b`）。规则见 `brandPaintIdentity()`。
+      */
+      const brandId = material.id.slice('material-brand-'.length);
+      map.set(material.id, brandPaintIdentity(material.id, revisionById.get(brandId), material.blobId));
     }
     return map;
-  }, [identityByMaterialId, materials, brandMaterials, identityByImageId]);
+  }, [identityByMaterialId, materials, brandMaterials, identityByImageId, brands]);
 
   /**
    * 成品 PNG 的缓存键：直接由**当前画布**算，见 `state/paint-fingerprint.ts`。

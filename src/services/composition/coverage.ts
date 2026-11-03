@@ -195,46 +195,102 @@ export function occlusionRatio(
 }
 
 /**
- * Alpha ∩ alpha inside `region`, accumulated over the **back** layer's own mask cells.
+ * Alpha ∩ alpha inside `region`, integrated over the refinement of BOTH masks' grids.
  *
- * Sampling on a fixed grid (the 10.22.2 version capped at 64×64) silently skipped
- * thin opaque columns: a 128-cell mask whose contents are single-column stripes lost
- * almost all of them, so a fully covered box was reported as 97% visible (2026-11-03
- * 复核 R3). Walking the back mask's own cells costs at most `maskSize²` lookups and
- * cannot miss a stripe narrower than the sampling step, because the step IS the mask.
+ * Two earlier versions sampled on a fixed grid (64×64 in 10.22.2) and then on the back
+ * mask's own cells (10.22.3). Both still lost content:
+ *
+ * - a 128-column stripe mask in front of a 2×2 back mask was missed, because the back's
+ *   cell centres landed in the transparent columns (occlusion 0 for a true 50.8%);
+ * - a single-cell mask (`maskSize = 1`) turned a 49% overlap into 0% or 100%, because
+ *   one sample stood for the whole intersection.
+ *
+ * Both masks are piecewise constant on their own cell grid, so on the REFINEMENT of the
+ * two grids (all cell edges of both, clipped to the intersection) `min(front, back)` is
+ * exactly constant per rectangle. Summing `min(f,b) × area` over those rectangles is an
+ * area integral, not a sample — no thin feature can fall between two probes.
+ *
+ * The refinement is bounded: past `MAX_REFINED_CELLS` the edge list is thinned uniformly
+ * (keeping both ends), which degrades gracefully instead of stalling a solver.
  */
+const MAX_REFINED_CELLS = 40_000;
+
 function alphaIntersectionWithin(
   front: { profile: AlphaProfile; placement: ContentPlacement },
   back: { profile: AlphaProfile; placement: ContentPlacement },
   region: Rect,
 ): number {
-  const width = region[2] - region[0];
-  const height = region[3] - region[1];
-  if (!(width > 0) || !(height > 0)) return 0;
-
-  const maskSize = back.profile.maskSize;
-  const backRect = contentRect(back.profile, back.placement);
-  const cellWidth = (backRect[2] - backRect[0]) / maskSize;
-  const cellHeight = (backRect[3] - backRect[1]) / maskSize;
-  const cellArea = cellWidth * cellHeight;
-  if (!(cellArea > 0)) return 0;
+  const xs = refinedEdges(front, back, region, 'x');
+  const ys = refinedEdges(front, back, region, 'y');
+  if (xs.length < 2 || ys.length < 2) return 0;
 
   let total = 0;
-  for (let row = 0; row < maskSize; row += 1) {
-    const y = backRect[1] + (row + 0.5) * cellHeight;
-    if (y < region[1] || y > region[3]) continue;
-    for (let column = 0; column < maskSize; column += 1) {
-      const x = backRect[0] + (column + 0.5) * cellWidth;
-      if (x < region[0] || x > region[2]) continue;
-      const backCoverage = maskCoverage(back.profile, column, row);
-      if (backCoverage <= 0) continue;
+  for (let row = 0; row < ys.length - 1; row += 1) {
+    const y0 = ys[row];
+    const y1 = ys[row + 1];
+    const height = y1 - y0;
+    if (!(height > 0)) continue;
+    const y = (y0 + y1) / 2;
+    for (let column = 0; column < xs.length - 1; column += 1) {
+      const x0 = xs[column];
+      const x1 = xs[column + 1];
+      const width = x1 - x0;
+      if (!(width > 0)) continue;
+      const x = (x0 + x1) / 2;
       const frontCoverage = coverageAt(front.profile, front.placement, x, y);
       if (frontCoverage <= 0) continue;
-      total += Math.min(frontCoverage, backCoverage) * cellArea;
+      const backCoverage = coverageAt(back.profile, back.placement, x, y);
+      if (backCoverage <= 0) continue;
+      total += Math.min(frontCoverage, backCoverage) * width * height;
     }
   }
   return total;
 }
+
+/** Sorted, de-duplicated cell edges of both masks, clipped to `region`. */
+function refinedEdges(
+  front: { profile: AlphaProfile; placement: ContentPlacement },
+  back: { profile: AlphaProfile; placement: ContentPlacement },
+  region: Rect,
+  axis: 'x' | 'y',
+): number[] {
+  const from = axis === 'x' ? region[0] : region[1];
+  const to = axis === 'x' ? region[2] : region[3];
+  const edges = [from, to];
+  for (const side of [back, front]) {
+    const rect = contentRect(side.profile, side.placement);
+    const start = axis === 'x' ? rect[0] : rect[1];
+    const end = axis === 'x' ? rect[2] : rect[3];
+    const size = side.profile.maskSize;
+    const step = (end - start) / size;
+    if (!(step > 0)) continue;
+    for (let index = 1; index < size; index += 1) {
+      const edge = start + index * step;
+      if (edge > from && edge < to) edges.push(edge);
+    }
+  }
+  edges.sort((left, right) => left - right);
+  const unique: number[] = [];
+  for (const edge of edges) {
+    if (unique.length === 0 || edge - unique[unique.length - 1] > 1e-6) unique.push(edge);
+  }
+  if (unique.length < 2) return unique;
+  return thinEdges(unique);
+}
+
+/** Keep the list under the refinement budget without moving its two ends. */
+function thinEdges(edges: number[]): number[] {
+  // 200 edges per axis ⇒ at most 200×200 = 40 000 refined rectangles.
+  const budget = Math.max(8, Math.floor(Math.sqrt(MAX_REFINED_CELLS)));
+  if (edges.length <= budget) return edges;
+  const step = (edges.length - 1) / (budget - 1);
+  const kept: number[] = [];
+  for (let index = 0; index < budget; index += 1) {
+    kept.push(edges[Math.round(index * step)]);
+  }
+  return kept;
+}
+
 
 /** Mask coverage of a placed profile at one canvas-space point. */
 function coverageAt(

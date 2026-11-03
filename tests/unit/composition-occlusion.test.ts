@@ -91,6 +91,63 @@ describe('occlusionRatio', () => {
     );
     expect(ratio).toBe(0);
   });
+
+  it('does not skip a fine front mask simply because the back mask is coarse', () => {
+    /*
+      三次复核 R3 的反例：前景 128×128（第 0 列与奇数列不透明，density 65/128），后景
+      128×2 全不透明、maskSize 只有 2。10.22.3 的算法只在后景 2×2 单元的中心查询前景，
+      查询点正好落在透明的偶数列上 → 报 0 遮挡，而真实遮挡率是 50.78%。
+      现在按两个掩码网格的**细化**做面积积分，细的那一层不会被粗的采样步长跨过去。
+    */
+    const columns = 128;
+    const stripes: number[] = [];
+    for (let row = 0; row < columns; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        stripes.push(column === 0 || column % 2 === 1 ? 1 : 0);
+      }
+    }
+    const front = createAlphaProfile({
+      sourceWidth: 128,
+      sourceHeight: 128,
+      maskSize: columns,
+      mask: stripes,
+    });
+    const back = createAlphaProfile({
+      sourceWidth: 128,
+      sourceHeight: 2,
+      maskSize: 2,
+      mask: [1, 1, 1, 1],
+    });
+    const ratio = occlusionRatio(
+      { profile: front, placement: AT },
+      { profile: back, placement: AT },
+      CANVAS,
+    );
+    expect(ratio).toBeGreaterThan(0.48);
+    expect(ratio).toBeLessThan(0.53);
+  });
+
+  it('integrates the real overlap area when both masks are single cells', () => {
+    // 三次复核 R3 的第二个反例：maskSize=1 的两张 100×100，盖住左边 49px 时旧实现报 0%、
+    // 盖 51px 时报 100%。一个采样点代表整个交集，注定只能二选一。
+    const solid = (width: number, height: number) =>
+      createAlphaProfile({ sourceWidth: width, sourceHeight: height, maskSize: 1, mask: [1] });
+    const back = solid(100, 100);
+    const left49 = occlusionRatio(
+      { profile: solid(100, 100), placement: { ...AT, centerX: 349 } },
+      { profile: back, placement: AT },
+      CANVAS,
+    );
+    const left51 = occlusionRatio(
+      { profile: solid(100, 100), placement: { ...AT, centerX: 351 } },
+      { profile: back, placement: AT },
+      CANVAS,
+    );
+    expect(left49).toBeGreaterThan(0.47);
+    expect(left49).toBeLessThan(0.51);
+    expect(left51).toBeGreaterThan(0.49);
+    expect(left51).toBeLessThan(0.53);
+  });
 });
 
 describe('zoneIntrusion', () => {

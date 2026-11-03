@@ -69,6 +69,15 @@ export interface SessionImage {
   cutoutBlobId?: string;
   cutoutWidth?: number;
   cutoutHeight?: number;
+  /**
+   * Digest of the ORIGINAL image this cut-out was made from (10.22.3+).
+   *
+   * A blob id proves the blob exists, not who it belongs to: sessions written before
+   * the identity rules were fixed can point at another product's cut-out. Restoring a
+   * `success` cut-out therefore requires this to match `digest`; records without it
+   * (everything before 10.22.3) are re-cut once instead of reusing a stranger's image.
+   */
+  cutoutDigest?: string;
   cutoutError?: string;
 }
 

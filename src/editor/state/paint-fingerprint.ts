@@ -86,6 +86,23 @@ function platePart(layer: Extract<EditorLayer, { kind: 'plate' }>): string {
 }
 
 /**
+ * 品牌 Logo 的画布身份。
+ *
+ * 目录同步会**用同一个 blob id 覆盖内容**（`applyBrandSync()` 就是这么做的）：同一个品牌
+ * 发了 v2 的 Logo，blobId 不变，只看 blobId 的话"换了内容"和"没换"是同一个键 ——
+ * 2026-11-03 三次复核 R6 的反例（v1 → v2 都是 `fae2680b`）。所以身份必须带上内容版本：
+ * 远端品牌用 `remoteRev`，手工上传的品牌没有 rev（重新上传会换 blobId，本身就有区分度）。
+ */
+export function brandPaintIdentity(
+  materialId: string,
+  revision: string | undefined,
+  blobId: string,
+): string {
+  const version = (revision ?? '').trim();
+  return `brand:${materialId}:${version}:${blobId}`;
+}
+
+/**
  * 逐层的指纹片段，顺序即绘制顺序。
  *
  * 返回数组而不是拼好的字符串：调用方把它交给 `hashKey()`，两者都用 `\u0000` 分隔，
