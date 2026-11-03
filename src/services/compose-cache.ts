@@ -121,6 +121,15 @@ export function imageIdentity(image: CacheableImage): string {
   const digest = (image.digest ?? '').trim().toLowerCase();
   if (/^[0-9a-f]{32,64}$/.test(digest)) return `local:#${digest}`;
 
+  /*
+    没有摘要（10.22.1 之前上传的、恢复时也算不出来的）绝不退回 "名称|字节数|宽x高"：
+    2026-11-03 的复核用一个更狠的反例说明这条路有多危险 —— 两张同名同尺寸同字节的不同图片
+    身份相同，B 商品会读到 A 的抠图。改成 `blob:<blobId>`：它只在**本次会话**内成立
+    （同一个会话记录里同一张图永远是同一个 blobId），跨会话则各自为政，代价是少复用一次。
+    真正的跨会话复用靠摘要，摘要补上之后就走上面那条。
+  */
+  if (image.blobId) return `blob:${image.blobId}`;
+
   const bytes = Number.isFinite(image.bytes) ? Math.round(image.bytes as number) : 0;
   if (bytes > 0) {
     const label = (image.label ?? '').trim();
@@ -129,7 +138,7 @@ export function imageIdentity(image: CacheableImage): string {
     return `local:${label}|${bytes}|${width}x${height}`;
   }
 
-  return `blob:${image.blobId ?? ''}`;
+  return 'blob:';
 }
 
 /** FNV-1a, 32 bit, hex. Short keys because they end up in blob ids and log lines. */

@@ -772,7 +772,7 @@ AliExpressImageEditorExtension/
 │  │  └─ brand-catalog/          # 品牌目录同步：schema / catalog-client / sync-plan / sync / state / silent-sync / export-bundle
 │  └─ shared/                    # messages / types / errors / constants / text-style / image-mime / page-gate
 ├─ tests/
-│  ├─ unit/                      # 57 文件 / 950 个单元测试（不联网）
+│  ├─ unit/                      # 59 文件 / 963 个单元测试（不联网）
 │  ├─ live/                      # 线上契约测试（服务端 + 视觉网关），默认 skipped
 │  └─ fixtures/aliexpress-page.html
 └─ docs/
@@ -1050,6 +1050,13 @@ AliExpressImageEditorExtension/
     （`store_footer.avoid_for: ["box"]`），因为那条是卖家横幅盖住的地方。10.22.1 起运行期会按真实
     alpha 复查保留区，图位真的压进去会报 `reserved_zone_overlap` —— 想让它消失，改的是模板的
     `viewport` / `zoom`，不是关掉这条检查。
+33. 图片身份在**没有内容摘要**时会退到 `blob:<blobId>`（会话内唯一）：这意味着旧会话（10.22.1 之前上传的）
+    第一次打开仍可能重抠一次，等 `use-editor-session` 把摘要补算回会话记录之后就正常了。
+    升级到 10.22.2 时本地缓存索引会整份丢弃（`COMPOSE_CACHE_VERSION` 2），所以每个商品第一次打开
+    「已复用上次的抠图」会显示 0 —— 这不是坏了，是旧 key 已经不能信。
+34. 「发光」的两个节点只在**手势期间**同步（拖拽、变换、旋转各一处）：这是为了避免每帧写 ref 拖慢画布，
+    代价是任何绕过这三处的移动（例如将来加了"对齐吸附"或"键盘微调"）都必须记得补一次同步。
+    另外成品图缓存键包含**水印与品牌 Logo 的位置/缩放/效果**，但**不含**它们是否被锁定 —— 锁只是编辑期状态。
 
 ---
 
@@ -1058,7 +1065,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（59 文件 / 955 测试，其中 950 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（61 文件 / 968 测试，其中 963 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1095,5 +1102,6 @@ AliExpressImageEditorExtension/
 | 回填记录（10.20.0） | **仅自动化验证**（17 个单测：`fillLogKey` 编号优先 / 退回 URL、`parseFillLog` 的排序与去重与垃圾降级与 200 条封顶、`mergeFillEntry` 新商品插最前 / 同一商品 `count + 1` 且 `firstAt` 不动 / 标题后补、`recordFill` 往返与存储全坏时不抛、`clearFillLog`）。**真机必须走一遍**：回填成功一个商品 → 设置页「回填记录」多一行、再回填同一个商品只累加次数、失败不出现、清空要确认，步骤见 manual-test 5.119） |
 | 图片效果（10.22.0） | **仅自动化验证**（`image-effects.test.ts` 15 例 + `editor-reducer` 4 例）：垃圾输入回默认、逐字段夹紧、`NaN`/`Infinity` 不落文档、半写入块按字段兜底、`grayscale` 只认真布尔、颜色短写展开、零模糊阴影不算效果、`COMMIT_LAYER {effects}` 被夹紧且可撤销、文字层不留 `effects`、`LOAD_DOCUMENT` 修好坏值（含 `isNormalizedEffects()` 那个"两边都归一化所以比不出差别"的坑）。**滤镜 / 阴影 / 发光的实际观感未在真实 Chrome 里看过**：本仓库 devDeps 没有 puppeteer / playwright，步骤见 manual-test 5.123 |
 | 审查报告 11.md 的七条修复（10.22.1） | **仅自动化验证**（新增 `image-filters.test.ts` 12 例 + `compose-cache` 6 例 + `composition-alpha-scan` 2 例 + `composition-solvers` 1 例 + `composition-planner` 2 例 + `upload-images` 1 例）：Konva 真实滤镜函数跑像素（`Brighten` 作偏移量、0 中性、1 全白、`Grayscale` 无条件转灰、`RGB` 着色、滤镜名单只按开关）、`local:#<sha256>` 身份与同字节不同内容不撞、`occlusionRatio` 把完全被挡的盒子算成不可见、Alpha 网格不比主体更细、`pictureCacheSignature`/`glowCacheSignature` 对阴影与发光每个字段敏感、成品键随 support 图/水印/品牌/效果变化且与顺序无关、运行期 `reserved_zone_overlap`。**浏览器像素与拖动同步仍未自动化**，步骤见 manual-test 5.124–5.126 |
+| 复核报告第二轮（10.22.2） | **仅自动化验证**（`composition-occlusion.test.ts` 7 例 + `paint-fingerprint.test.ts` 6 例）：不相交的 2×2 掩码遮挡率 < 2%、全不透明 > 98%、只算重叠的不透明格、错位的图算 0；细长主体（20×2000）压进底栏 88px 时**面积只占 1.45% 却仍报警**（深度判据），擦边 1px 不报；成品指纹对不透明度/发光/位移/缩放/旋转/翻转/换序/身份/水印/文字全部敏感，只有文字与衬板时返回 `null`。**浏览器里的拖动同步与像素观感仍未自动化**，步骤见 manual-test 5.127–5.130 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

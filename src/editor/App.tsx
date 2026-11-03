@@ -12,7 +12,6 @@ import {
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type {
-  EditorLayer,
   EditorMaterial,
   EditorSessionMeta,
   ExportInput,
@@ -21,10 +20,8 @@ import type {
   LayerPatch,
   PageFillResult,
   TextLayer,
-  WatermarkLayer,
 } from '../shared/types';
 import { DEFAULT_TEXT_STYLE, pickTextStyle, type TextStyleDefaults } from '../shared/text-style';
-import { pictureCacheSignature } from '../services/image-effects';
 import { downloadBlobInPage } from '../services/downloader';
 import { blobToDataUrl, buildExportFileName, exportStageToPng } from '../services/exporter';
 import { readBlobSize } from '../services/image-size';
@@ -62,10 +59,11 @@ import { blobToThumbnailDataUrl } from '../services/image-thumbnail';
 import {
   bindingKeyFor,
   createComposeCache,
+  hashKey,
   imageIdentity,
-  resultKeyFor,
   type CachedBinding,
 } from '../services/compose-cache';
+import { paintFingerprintOf } from './state/paint-fingerprint';
 import { loadSettings } from '../services/settings';
 import { resolveVisionConfigs } from '../services/vision-endpoints';
 import {
@@ -186,36 +184,6 @@ function supportSlotsOf(template: LayoutTemplate): SupportSlotRequest[] {
       ...(slot.sourceSelection?.prefer.length ? { prefer: slot.sourceSelection.prefer } : {}),
       ...(slot.sourceSelection?.exclude.length ? { exclude: slot.sourceSelection.exclude } : {}),
     }));
-}
-
-/**
- * Everything painted into the finished PNG that does not come from the template.
- *
- * The result cache key has to include these: a watermark that was repositioned,
- * or a brand logo swapped for another one, changes the picture while hero, box
- * and template all stay identical (10.22.1, review P2-6).
- */
-function paintedExtrasForCache(
-  layers: readonly EditorLayer[],
-  watermark: WatermarkLayer | null,
-): string[] {
-  const extras: string[] = [];
-  if (watermark) {
-    extras.push(
-      `watermark:${watermark.blobId}:${Math.round(watermark.x)},${Math.round(watermark.y)}@${Math.round(
-        watermark.scale * 1000,
-      )}`,
-    );
-  }
-  for (const layer of layers) {
-    if (layer.kind !== 'brand') continue;
-    extras.push(
-      `brand:${layer.materialId}:${Math.round(layer.x)},${Math.round(layer.y)}@${Math.round(
-        layer.scale * 1000,
-      )}`,
-    );
-  }
-  return extras;
 }
 
 export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
@@ -401,20 +369,12 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    */
   const visionSkippedRef = useRef<string[]>([]);
   /**
-   * Cache key of the composition that is on screen, waiting to be photographed.
+   * 「这一版排版还没拍成 PNG」的请求标记。
    *
-   * Set right after a successful compose and consumed by an effect that waits for
-   * the pictures to decode — exporting before that yields a PNG with blanks in it.
+   * 只记"要不要拍"，键由 `resultKey`（当前画布指纹）在拍摄时取 —— 计划一变就换键，
+   * 不会再出现"改了不透明度、下载的却是上一版"这种事。
    */
-  const [pendingResultKey, setPendingResultKey] = useState<string | null>(null);
-  /**
-   * Fingerprint of the last applied layout — the key its PNG is cached under.
-   *
-   * Computed from the finished plan (pictures, effects, watermark, brand logos,
-   * code text), so two layouts that differ in a support picture or a watermark
-   * can never share one cache entry.
-   */
-  const [lastResultKey, setLastResultKey] = useState<string | null>(null);
+  const [pendingResultCache, setPendingResultCache] = useState(false);
   /** When the composed PNG was last written to the local cache (for the panel). */
   const [resultCachedAt, setResultCachedAt] = useState<number | null>(null);
   /**
@@ -1006,45 +966,18 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
   }, [cutouts, identityByImageId]);
 
   /**
-   * Fingerprint of a finished plan — the key its PNG is cached under.
+   * 成品 PNG 的缓存键：直接由**当前画布**算，见 `state/paint-fingerprint.ts`。
    *
-   * It hashes what actually gets painted, not what was selected:
-   * - every picture in the plan (slot + photo identity + its effects), which
-   *   covers the support pictures of the collage template (10.22.1, review P2-6 —
-   *   hero/box alone let a swapped action pose keep the old cache entry);
-   * - the watermark and the brand logos, which are painted into the same PNG but
-   *   do not come from the template at all;
-   * - the code text lines.
-   * Returns null when the hero cannot be identified: no identity, no honest key.
+   * 10.22.1 拿"排版计划"当键，看着合理，实际只描述生成那一刻的意图：之后改不透明度、
+   * 加发光、拖图层、换水印、挪品牌 Logo 全都不在计划里（2026-11-03 复核实测：不透明度
+   * 1→0、加一圈红色发光、hero 从 x=400/scale=1 改到 x=600/scale=2，键一个字都没变），
+   * 于是"下载缓存成品"给出的是上一版。改成从文档算之后，任何一笔改动都会换键，
+   * 旧条目自然命不中 —— 不需要维护"哪些操作要清缓存"这张表。
    */
-  const resultKeyForPlan = useCallback(
-    (plan: CompositionPlan): string | null => {
-      const hero = plan.images.find((image) => image.role === 'hero');
-      const heroIdentity = hero ? identityByMaterialId.get(hero.materialId) ?? null : null;
-      if (!heroIdentity) return null;
-      const layerEffects = new Map<string, string>();
-      for (const layer of document.layers) {
-        if (layer.kind === 'text' || layer.kind === 'plate') continue;
-        layerEffects.set(`${layer.materialId}:${Math.round(layer.x)},${Math.round(layer.y)}`, pictureCacheSignature(layer.effects));
-      }
-      const pictures = plan.images.map((image) => ({
-        slotId: image.slotId,
-        identity: identityByMaterialId.get(image.materialId) ?? '',
-        effects:
-          layerEffects.get(`${image.materialId}:${Math.round(image.x)},${Math.round(image.y)}`) ?? '',
-      }));
-      const extras: string[] = paintedExtrasForCache(document.layers, watermark.layer);
-      for (const text of plan.texts) extras.push(`text:${text.text}`);
-      return resultKeyFor({
-        productCode: session?.productCode ?? null,
-        templateKey,
-        heroIdentity,
-        pictures,
-        extras,
-      });
-    },
-    [document.layers, identityByMaterialId, session, templateKey, watermark.layer],
-  );
+  const resultKey = useMemo(() => {
+    const parts = paintFingerprintOf(document.layers, identityByMaterialId, watermark.layer);
+    return parts ? hashKey(['result', ...parts]) : null;
+  }, [document.layers, identityByMaterialId, watermark.layer]);
 
   /**
    * Guess hero/box once, and re-guess only when the current choice disappeared.
@@ -1423,9 +1356,7 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
         const plan = await composeFor(hero, box);
         if (!plan) return;
         applyComposedPlan(plan);
-        const resultKey = resultKeyForPlan(plan);
-        setPendingResultKey(resultKey);
-        setLastResultKey(resultKey);
+        setPendingResultCache(true);
 
         const firstWarning = plan.warnings[0];
         showNotice(
@@ -1448,7 +1379,6 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       composeFor,
       cutouts.length,
       heroId,
-      resultKeyForPlan,
       showNotice,
     ],
   );
@@ -1532,9 +1462,7 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
 
       setAutoPhase('composing');
       applyComposedPlan(plan);
-      const resultKey = resultKeyForPlan(plan);
-      setPendingResultKey(resultKey);
-      setLastResultKey(resultKey);
+      setPendingResultCache(true);
       const firstWarning = plan.warnings[0];
       showNotice(
         firstWarning
@@ -1557,7 +1485,6 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
     boxId,
     composeFor,
     heroId,
-    resultKeyForPlan,
     showNotice,
   ]);
 
@@ -1925,19 +1852,22 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    * that cannot be written must never look like a broken 生成主图.
    */
   useEffect(() => {
-    if (!pendingResultKey || state.exporting) return;
+    if (!pendingResultCache || state.exporting) return;
     const pictures = document.layers.filter(
       (layer): layer is ImageLayer => layer.kind !== 'text' && layer.kind !== 'plate',
     );
-    if (pictures.length === 0) return;
+    if (pictures.length === 0) {
+      setPendingResultCache(false);
+      return;
+    }
     /*
       还没解码完就先等（下一次渲染会重进这里）。但"等着"必须留痕：这条路径以前是完全
       静默的，于是"某个商品怎么都不进缓存"在界面上和"缓存成功"长得一模一样。
     */
     const undecoded = pictures.filter((layer) => imageForLayer(layer) === undefined);
     if (undecoded.length > 0) {
-      if (decodeWarnedRef.current !== pendingResultKey) {
-        decodeWarnedRef.current = pendingResultKey;
+      if (decodeWarnedRef.current !== resultKey) {
+        decodeWarnedRef.current = resultKey;
         console.warn(
           '[AIEE] 这次还没有写成品图缓存：有图层没解码完',
           undecoded.map((layer) => ({ id: layer.id, kind: layer.kind, materialId: layer.materialId })),
@@ -1945,9 +1875,17 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       }
       return;
     }
+    if (!resultKey) {
+      setPendingResultCache(false);
+      return;
+    }
 
-    const key = pendingResultKey;
-    setPendingResultKey(null);
+    /*
+      键与画面必须一起定格：`resultKey` 是这一帧画布的指纹，`composePng()` 导的也是这一帧。
+      先清标记再拍，避免同一次排版被拍两遍。
+    */
+    const key = resultKey;
+    setPendingResultCache(false);
     void (async () => {
       try {
         const composed = await composePng();
@@ -1963,17 +1901,14 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
         console.warn('[AIEE] 成品图没写进本地缓存：', error);
       }
     })();
-  }, [composeCache, composePng, document.layers, imageForLayer, pendingResultKey, state.exporting]);
+  }, [composeCache, composePng, document.layers, imageForLayer, pendingResultCache, resultKey, state.exporting]);
 
   /**
-   * Cache key of the last layout that was actually applied, or null.
+   * 当前画布的成品缓存键（没有图片图层时为 null）。
    *
-   * It comes from the finished plan, not from the hero/box selection: the
-   * collage template paints support pictures too, and "which support picture"
-   * is decided inside `composeFor()`. Deriving the key from the plan is the only
-   * way the key matches the PNG.
+   * 它随时跟着文档走，所以"改了画布还下载到旧成品"在结构上不可能发生：键变了就查不到。
    */
-  const currentResultKey = lastResultKey;
+  const currentResultKey = resultKey;
 
   /**
    * Whether the current selection already has a finished PNG on disk.

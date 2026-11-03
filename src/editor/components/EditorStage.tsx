@@ -132,6 +132,29 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
     else pictureNodesRef.current.delete(key);
   }, []);
 
+  /*
+    Keep the glow copy glued to its picture **during** a gesture.
+
+    React re-renders on dragend / transformend, and until then the two nodes are
+    just two independent Konva nodes: the main picture moves with the pointer and
+    the glow stays behind (review 2026-11-03: after `dragmove` the picture sat at
+    [400,300] while its glow was still at [300,300]; a live 45° rotation left the
+    glow at 0°). Whatever the committed document says afterwards, seeing the halo
+    slide off the product mid-drag is a bug.
+  */
+  const syncGlowWith = useCallback((layerId: string, node: Konva.Image) => {
+    const glow = pictureNodesRef.current.get(`glow:${layerId}`);
+    if (!glow) return;
+    glow.x(node.x());
+    glow.y(node.y());
+    glow.rotation(node.rotation());
+    glow.scaleX(node.scaleX());
+    glow.scaleY(node.scaleY());
+    glow.offsetX(node.offsetX());
+    glow.offsetY(node.offsetY());
+    glow.getLayer()?.batchDraw();
+  }, []);
+
   useEffect(() => {
     const nodes = pictureNodesRef.current;
     const caches = pictureCacheRef.current;
@@ -274,13 +297,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
         const node = stageRef.current?.findOne<Konva.Node>(`#${layerId}`);
         if (!node) return;
         node.rotation(rotation);
+        /* 旋钮拖动是实时的，发光副本不能等松手才跟（2026-11-03 复核 R5）。 */
+        if (node instanceof Konva.Image) syncGlowWith(layerId, node);
         node.getLayer()?.batchDraw();
       },
     };
     return () => {
       handleRef.current = null;
     };
-  }, [handleRef]);
+  }, [handleRef, syncGlowWith]);
 
   const handleStageMouseDown = useCallback(
     (event: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
@@ -719,6 +744,7 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                     "the selection, not what I hit".
                   */
                   onDragStart={(event) => beginLayerDrag(layer.id, event)}
+                  onDragMove={(event) => syncGlowWith(layer.id, event.target as Konva.Image)}
                   onDragEnd={(event) => {
                     // A drag this layer merely grabbed on behalf of the selection
                     // must not move it or commit a history step.
@@ -728,6 +754,8 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                     }
                     onDragEnd(layer.id, event.target.x(), event.target.y());
                   }}
+                  /* Live rotate/scale from the transformer: same reason as drag. */
+                  onTransform={(event) => syncGlowWith(layer.id, event.target as Konva.Image)}
                   onTransformEnd={(event) => {
                     const node = event.target as Konva.Image;
                     const signedX = node.scaleX();

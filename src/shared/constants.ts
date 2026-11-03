@@ -349,8 +349,13 @@ export const COMPOSE_CACHE_MAX_RESULTS = 12;
 /** How many AI material bindings (hero / box decisions) are remembered. */
 export const COMPOSE_CACHE_MAX_BINDINGS = 16;
 
-/** Schema version of the cache index itself, not of the products in it. */
-export const COMPOSE_CACHE_VERSION = 1;
+/**
+ * Schema version of the cache index itself, not of the products in it.
+ *
+ * 2 (10.22.2)：本地图身份从「名称|字节数|宽x高」换成内容摘要 / 会话内 blobId，
+ * 旧索引里用旧规则算出来的键永远不该再被命中 —— 版本一变整份索引就被丢弃重建。
+ */
+export const COMPOSE_CACHE_VERSION = 2;
 
 // ------------------------------------------------------------- brand catalog
 

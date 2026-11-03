@@ -150,18 +150,26 @@ export function coveredFraction(
 }
 
 /**
- * Fraction of `back`'s OWN visible alpha that `front` covers.
+ * Fraction of `back`'s OWN visible alpha that `front` actually covers.
  *
- * Two things this does that `coveredFraction()` cannot: the denominator is the
- * back layer's clipped alpha area (not a slot rectangle, which is bigger whenever
- * the picture is letterboxed inside it — that made a fully hidden box report 75%
- * visible), and off-canvas parts of the back layer are excluded, because nothing
- * can be hidden where nothing can be seen.
+ * Three things this does that `coveredFraction()` cannot:
  *
- * The numerator is "front's alpha measured over the back layer's content
- * rectangle", i.e. an upper bound on the true alpha∩alpha intersection: it can
- * over-count where the back layer is transparent. That direction is safe — we
- * would rather report a box as slightly more hidden than it is.
+ * 1. the denominator is the back layer's clipped **alpha** area (not a slot
+ *    rectangle, which is bigger whenever the picture is letterboxed inside it —
+ *    that made a fully hidden box report 75% visible);
+ * 2. off-canvas parts are excluded, because nothing can be hidden where nothing
+ *    can be seen;
+ * 3. the numerator is a real alpha ∩ alpha intersection (10.22.2). Up to 10.22.1
+ *    it was "front's alpha inside the back layer's bounding rectangle", which
+ *    counts every front pixel over a *transparent* part of the box. The 2026-11-03
+ *    re-check built the minimal counter-example: two 100×100 pictures on the same
+ *    spot with disjoint 2×2 masks (`[1,0,0,1]` vs `[0,1,1,0]`) reported 100%
+ *    occluded, because the rectangle test never looked at the box's own alpha.
+ *
+ * Both masks are sampled on a shared grid over the overlap rectangle; a sample
+ * counts `min(frontCoverage, backCoverage)`, which is the area fraction where both
+ * layers are opaque. Grid resolution is capped so a solver can still call this
+ * hundreds of times per material.
  */
 export function occlusionRatio(
   front: { profile: AlphaProfile; placement: ContentPlacement },
@@ -170,15 +178,107 @@ export function occlusionRatio(
 ): number {
   const backArea = visibleAlphaArea(back.profile, back.placement, canvas);
   if (backArea <= 0) return 0;
-  const clipped = clipToCanvas(contentRect(back.profile, back.placement), canvas);
-  if (rectArea(clipped) <= 0) return 0;
-  const covered = alphaAreaWithin(front.profile, front.placement, clipped);
+  const backRect = contentRect(back.profile, back.placement);
+  const frontRect = contentRect(front.profile, front.placement);
+  const overlap: Rect = [
+    Math.max(backRect[0], frontRect[0]),
+    Math.max(backRect[1], frontRect[1]),
+    Math.min(backRect[2], frontRect[2]),
+    Math.min(backRect[3], frontRect[3]),
+  ];
+  const clipped = clipToCanvas(overlap, canvas);
+  const area = rectArea(clipped);
+  if (area <= 0) return 0;
+
+  const covered = alphaIntersectionWithin(front, back, clipped);
   return Math.min(1, Math.max(0, covered / backArea));
 }
 
+/**
+ * Alpha ∩ alpha inside `region`, sampled on a fixed grid.
+ *
+ * The analytic version would need the product of two piecewise-constant masks;
+ * sampling is exact enough for a gate that compares against 0.65 and costs a
+ * fraction of the arithmetic.
+ */
+function alphaIntersectionWithin(
+  front: { profile: AlphaProfile; placement: ContentPlacement },
+  back: { profile: AlphaProfile; placement: ContentPlacement },
+  region: Rect,
+): number {
+  const width = region[2] - region[0];
+  const height = region[3] - region[1];
+  if (!(width > 0) || !(height > 0)) return 0;
+
+  const cells = Math.max(8, Math.min(64, Math.max(front.profile.maskSize, back.profile.maskSize) * 2));
+  const stepX = width / cells;
+  const stepY = height / cells;
+  const sampleArea = stepX * stepY;
+
+  let total = 0;
+  for (let row = 0; row < cells; row += 1) {
+    const y = region[1] + (row + 0.5) * stepY;
+    for (let column = 0; column < cells; column += 1) {
+      const x = region[0] + (column + 0.5) * stepX;
+      const frontCoverage = coverageAt(front.profile, front.placement, x, y);
+      if (frontCoverage <= 0) continue;
+      const backCoverage = coverageAt(back.profile, back.placement, x, y);
+      if (backCoverage <= 0) continue;
+      total += Math.min(frontCoverage, backCoverage) * sampleArea;
+    }
+  }
+  return total;
+}
+
+/** Mask coverage of a placed profile at one canvas-space point. */
+function coverageAt(
+  profile: AlphaProfile,
+  placement: ContentPlacement,
+  x: number,
+  y: number,
+): number {
+  const { width, height } = contentExtent(profile, placement.scale);
+  if (!(width > 0) || !(height > 0)) return 0;
+  const left = placement.centerX - width / 2;
+  const top = placement.centerY - height / 2;
+  const column = Math.floor(((x - left) / width) * profile.maskSize);
+  const row = Math.floor(((y - top) / height) * profile.maskSize);
+  if (column < 0 || row < 0 || column >= profile.maskSize || row >= profile.maskSize) return 0;
+  return maskCoverage(profile, column, row);
+}
+
+
+/**
+ * How deep a placed picture reaches into `zone`, in logical px, plus the alpha
+ * fraction of the zone it covers.
+ *
+ * Why depth and not just the covered fraction (10.22.2): a 20×2000 hero dropped
+ * onto an 800×88 footer strip covers 1.45% of the zone's area, yet it cuts the
+ * strip in half top-to-bottom. Judging by area alone silently accepted that. The
+ * depth of the overlap says "how far in", which is what "别压到底栏" actually
+ * means; the area fraction is kept for the message.
+ */
+export function zoneIntrusion(
+  profile: AlphaProfile,
+  placement: ContentPlacement,
+  zone: Rect,
+  canvas: CanvasSize,
+): { depth: number; covered: number } {
+  const covered = coveredFraction(profile, placement, zone, canvas);
+  if (covered <= 0) return { depth: 0, covered: 0 };
+  const rect = clipToCanvas(contentRect(profile, placement), canvas);
+  const overlap: Rect = [
+    Math.max(rect[0], zone[0]),
+    Math.max(rect[1], zone[1]),
+    Math.min(rect[2], zone[2]),
+    Math.min(rect[3], zone[3]),
+  ];
+  if (overlap[2] <= overlap[0] || overlap[3] <= overlap[1]) return { depth: 0, covered };
+  return { depth: Math.min(overlap[2] - overlap[0], overlap[3] - overlap[1]), covered };
+}
+
 /** `region` clipped to the canvas; empty when nothing of it is on screen. */
-export function clipToCanvas(region: Rect, canvas: CanvasSize): Rect {
-  return [
+export function clipToCanvas(region: Rect, canvas: CanvasSize): Rect {  return [
     Math.max(region[0], 0),
     Math.max(region[1], 0),
     Math.min(region[2], canvas.width),

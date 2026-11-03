@@ -23,6 +23,7 @@ import {
   canvasOccupancy,
   coveredFraction,
   toLayerPlacement,
+  zoneIntrusion,
   type CanvasSize,
   type ContentPlacement,
 } from './coverage';
@@ -193,6 +194,14 @@ const FILL_REPORT_TOLERANCE = 0.04;
  * layout stops being read.
  */
 const RESERVED_ZONE_TOLERANCE = 0.02;
+
+/**
+ * 只有真"切进去"这么深才算压进保留区（逻辑 px，画布 800 的坐标系）。
+ *
+ * 6px 的依据：抗锯齿边缘与取整误差在 1–2px 量级，而"主体压到底栏"通常是几十 px。
+ * 用深度当第二道判据，是因为面积分数会被细长主体骗过去（20px 宽穿过 88px 高只占 1.45%）。
+ */
+const RESERVED_ZONE_MIN_INTRUSION_PX = 6;
 
 /** Padding inside a plate before its caption is fitted. */
 const PLATE_TEXT_PADDING_RATIO = 0.08;
@@ -802,23 +811,29 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     而 hero 真正占的宽度/高度由 zoom 决定 —— 放大后的 alpha 完全可能越过画布底边那条
     store footer（10.22.1，审查 P2-7：1000×2000 的主体在 zoom 1.816 时底边到 1142）。
     这里拿最终 placement 与实际 alpha 复查一次，越界就报出来，而不是让字段名不副实。
+
+    判据是"进去了多深"，不是"占了保留区多少面积"（10.22.2）：一根 20px 宽的主体垂直
+    穿过 88px 高的底栏只占 1.45% 面积，按面积算会静默放过，而它已经把底栏切断了。
   */
   for (const zone of template.canvas.reservedZones ?? []) {
     for (const picture of pictures) {
       const slot = template.slots.find((candidate) => candidate.id === picture.slotId);
       if (!slot || !zone.avoidFor.includes(slot.role)) continue;
-      const covered = coveredFraction(
+      const { depth, covered } = zoneIntrusion(
         picture.material.profile,
         picture.placement,
         zone.box,
         canvas,
       );
-      if (covered <= RESERVED_ZONE_TOLERANCE) continue;
+      if (covered <= RESERVED_ZONE_TOLERANCE && depth < RESERVED_ZONE_MIN_INTRUSION_PX) continue;
       warnings.push(
         warning(
           'reserved_zone_overlap',
-          `图位 ${slot.id} 压进了保留区「${zone.id}」${round(covered * 100, 1)}%（模板要求它避开这里）`,
-          { slotId: slot.id, zoneId: zone.id, covered: round(covered, 4) },
+          `图位 ${slot.id} 压进了保留区「${zone.id}」${round(depth, 1)}px（占该区 ${round(
+            covered * 100,
+            1,
+          )}%），模板要求它避开这里`,
+          { slotId: slot.id, zoneId: zone.id, covered: round(covered, 4), depth: round(depth, 2) },
         ),
       );
     }

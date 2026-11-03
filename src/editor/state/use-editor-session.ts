@@ -22,6 +22,7 @@ import type {
 import { CutoutQueue } from '../../services/cutout-queue';
 import { HttpCutoutClient } from '../../services/cutout-client';
 import { createComposeCache, imageIdentity } from '../../services/compose-cache';
+import { blobDigest } from '../../services/content-digest';
 import { getBlob, getSession, patchSessionImage, putBlob, putSession } from '../../services/indexed-db';
 import { readBlobSize } from '../../services/image-size';
 import { loadSettings } from '../../services/settings';
@@ -307,6 +308,24 @@ export function useEditorSession(sessionId: string | null): EditorSessionState {
           if (IN_FLIGHT.has(next.cutoutStatus)) {
             next = { ...next, cutoutStatus: 'idle', cutoutError: undefined };
             changed = true;
+          }
+
+          /*
+            旧会话补算内容摘要（10.22.2）。
+
+            10.22.1 起上传时就写 `digest`，但更早的会话记录里没有这个字段，而它正是
+            "两张同名同尺寸同字节的不同图片" 无法区分的来源：B 商品会读到 A 的抠图。
+            原图 blob 就在手上，这里补算一次并落库 —— 下一轮就不用再算。
+            摘要算不出来（没有 crypto.subtle）时不补，身份会退回 `blob:<blobId>`
+            （只在本次会话内成立），宁可少复用一次也不串图。
+          */
+          if (!next.digest) {
+            const digest = await blobDigest(originalBlob);
+            if (digest) {
+              next = { ...next, digest };
+              changed = true;
+              await persist(next.id, { digest });
+            }
           }
 
           /*

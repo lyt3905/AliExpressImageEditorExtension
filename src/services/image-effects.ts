@@ -216,3 +216,17 @@ export function glowCacheSignature(effects: unknown): string {
     e.glowBlur.toFixed(2),
   ].join('|');
 }
+
+/**
+ * 效果对**成品像素**的全部影响，用于成品图缓存指纹。
+ *
+ * 与 `pictureCacheSignature` 的区别：那边只管"Konva 烘进离屏画布的东西"，这里是
+ * "这张图画到成品里长什么样" —— 所以还要带上不透明度与发光（它们不改变离屏画布的
+ * 像素，却改变成品）。2026-11-03 的复核用一个反例说明漏了会怎样：把不透明度从 1 改到 0、
+ * 或加一圈红色发光，成品指纹一个字都不变，于是"下载缓存成品"给出的还是上一版。
+ */
+export function imageRenderSignature(effects: unknown): string {
+  const e = normalizeImageEffects(effects);
+  return [pictureCacheSignature(e), `op:${e.opacity.toFixed(3)}`, `glow:${glowCacheSignature(e)}`].join('|');
+}
+
