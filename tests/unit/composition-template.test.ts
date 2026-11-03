@@ -35,9 +35,11 @@ describe('parseLayoutTemplate — the shipped v1.4 template', () => {
     const template = parseLayoutTemplateOrThrow(SOURCE);
     expect(template.canvas.width).toBe(800);
     expect(template.canvas.safeMargin).toBe(16);
-    // The footer strip must start exactly where the hero viewport ends.
+    // The footer strip must start exactly where the hero viewport ends. Only the box is
+    // kept out of it: `hero_dominance` deliberately zooms the hero past its viewport and
+    // the seller's banner is painted there anyway (10.22.1, review P2-7).
     expect(template.canvas.reservedZones[0].box).toEqual([0, 712, 800, 800]);
-    expect(template.canvas.reservedZones[0].avoidFor).toEqual(['hero', 'box']);
+    expect(template.canvas.reservedZones[0].avoidFor).toEqual(['box']);
   });
 
   it('reads the hero close-up rule as [l,t,r,b] and keeps zoom/centre overrides', () => {
@@ -141,8 +143,11 @@ describe('parseLayoutTemplate — rejecting malformed templates', () => {
     expect(viewport[3]).not.toBe(result.template!.canvas.reservedZones[0].box[1]);
   });
 
-  it('rejects a hero viewport that eats into the footer reserved zone', () => {
+  it('rejects a hero viewport that eats into a zone that lists the hero', () => {
     const broken = raw();
+    // The shipped template only keeps the box out of the strip, so the zone has to name
+    // the hero explicitly for this rule to apply.
+    broken.canvas.reserved_zones[0].avoid_for = ['hero', 'box'];
     broken.slots[0].closeup.viewport = [16, 185, 784, 760];
     const result = parseLayoutTemplate(broken);
     expect(result.template).toBeNull();

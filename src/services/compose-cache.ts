@@ -67,6 +67,13 @@ export interface CacheableImage {
   height?: number;
   /** Byte size of the original blob — what identifies an uploaded file. */
   bytes?: number;
+  /**
+   * SHA-256 of the original bytes (local uploads only, see `content-digest.ts`).
+   * This is the ONLY content-derived identity: name + size + pixel size can
+   * collide for two different pictures, and then one product's cut-out would be
+   * served for another one's picture.
+   */
+  digest?: string;
   /** Last resort: the session-scoped blob id (never matches across sessions). */
   blobId?: string;
 }
@@ -101,6 +108,18 @@ export function imageIdentity(image: CacheableImage): string {
     */
     return `url:${canonicalImageUrl(url) || url}`;
   }
+
+  /*
+    Uploaded files (file picker / clipboard) have no url, so identity has to come
+    from the bytes. `digest` is the content hash written at upload time — the only
+    form that cannot collide: two different pictures can share a file name, a byte
+    size and a pixel size (a 10.22.0 review reproduced exactly that with two
+    800×800 PNGs of 4320 bytes each), and then product B would be served product
+    A's cut-out. Older sessions (and images restored from before 10.22.1) have no
+    digest; they fall back to the name/size form and simply re-cut once.
+  */
+  const digest = (image.digest ?? '').trim().toLowerCase();
+  if (/^[0-9a-f]{32,64}$/.test(digest)) return `local:#${digest}`;
 
   const bytes = Number.isFinite(image.bytes) ? Math.round(image.bytes as number) : 0;
   if (bytes > 0) {
@@ -174,13 +193,31 @@ export function resultKeyFor(input: {
   templateKey: string;
   heroIdentity?: string | null;
   boxIdentity?: string | null;
+  /**
+   * Every picture that actually lands in the PNG, by slot.
+   *
+   * hero + box was not enough (10.22.1, review P2-6): the collage template paints
+   * up to three support pictures, so swapping the left action pose kept the key
+   * and "download cached result" handed back the previous arrangement. Sorted by
+   * slot id so the order the planner happens to emit does not matter.
+   */
+  pictures?: ReadonlyArray<{ slotId: string; identity: string; effects?: string }>;
+  /** Anything else painted into the PNG: watermark, brand logo, code text… */
+  extras?: readonly string[];
 }): string {
+  const pictures = (input.pictures ?? [])
+    .map((entry) => `${entry.slotId}=${entry.identity}${entry.effects ? `#${entry.effects}` : ''}`)
+    .sort()
+    .join(',');
+  const extras = [...(input.extras ?? [])].sort().join(',');
   return hashKey([
     'result',
     (input.productCode ?? '').trim(),
     input.templateKey,
     input.heroIdentity ?? '',
     input.boxIdentity ?? '',
+    pictures,
+    extras,
   ]);
 }
 

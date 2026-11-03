@@ -10,8 +10,12 @@ import {
 import type { EditorLayer, ImageLayer, LayerPatch, WatermarkLayer } from '../../shared/types';
 import {
   colorChannels,
+  glowCacheSignature,
+  imageFilterNames,
+  konvaBrightness,
   needsFilterPass,
   normalizeImageEffects,
+  pictureCacheSignature,
   shadowColorWithOpacity,
 } from '../../services/image-effects';
 import { decideDragOwner, pointInsideBox } from '../state/drag-owner';
@@ -159,10 +163,10 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
         nodes.get(layer.id),
         image,
         needsFilterPass(effects),
-        `${effects.grayscale}|${effects.brightness}`,
+        pictureCacheSignature(effects),
       );
       const glowOn = effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
-      sync(`glow:${layer.id}`, nodes.get(`glow:${layer.id}`), image, glowOn, effects.glowColor);
+      sync(`glow:${layer.id}`, nodes.get(`glow:${layer.id}`), image, glowOn, glowCacheSignature(effects));
     }
     // A deleted layer (or a glow that was switched off) must not keep a cache
     // alive: the node is gone, so the entry would only leak pixel buffers.
@@ -612,7 +616,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
               (effects.shadowBlur > 0 || effects.shadowOffsetX !== 0 || effects.shadowOffsetY !== 0);
             const glowOn =
               effects.glowOpacity > 0 && (effects.glowRadius > 0 || effects.glowBlur > 0);
-            const filterOn = effects.grayscale || effects.brightness !== 0;
+            /*
+              The filter list is built from what the user actually asked for:
+              both Konva filters are unconditional functions, so adding
+              Grayscale "just in case" greys out a picture that only wanted to be
+              brighter. `imageFilterNames()` is the single place that decides.
+            */
+            const filterList = imageFilterNames(effects).map((name) =>
+              name === 'grayscale' ? Konva.Filters.Grayscale : Konva.Filters.Brighten,
+            );
             const tint = colorChannels(effects.glowColor);
             return (
               <Fragment key={layer.id}>
@@ -669,14 +681,15 @@ export function EditorStage(props: EditorStageProps): JSX.Element {
                     instead of on every render (a 640px preview re-filtering six
                     pictures per frame is what makes a slider feel broken).
                   */
-                  filters={filterOn ? [Konva.Filters.Grayscale, Konva.Filters.Brighten] : undefined}
+                  filters={filterList.length > 0 ? filterList : undefined}
                   grayscale={effects.grayscale}
                   /*
-                    Konva's filter is `Brighten` with a MULTIPLIER (1 = untouched),
-                    not a −1…1 offset, so the document's field is mapped here:
-                    −1 → 0 (black), 0 → 1 (untouched), +1 → 2 (blown out).
+                    Konva 9's `Brighten` is an OFFSET: `rgb += brightness * 255`,
+                    with 0 as neutral — the same units as our document field, so
+                    the value passes straight through. Treating it as a multiplier
+                    (0 → 1) blew every picture out to white.
                   */
-                  brightness={Math.max(0, 1 + effects.brightness)}
+                  brightness={konvaBrightness(effects)}
                   shadowColor={
                     shadowOn ? shadowColorWithOpacity(effects.shadowColor, effects.shadowOpacity) : undefined
                   }

@@ -47,7 +47,16 @@ export type CompositionWarningCode =
   /** The page is still too empty after growing to the template's upper bound. */
   | 'canvas_fill_short'
   /** Fewer usable pictures than the template's `min_pictures` — nothing was composed. */
-  | 'not_enough_pictures';
+  | 'not_enough_pictures'
+  /**
+   * A placed picture's actual alpha reaches into a zone the template told it to
+   * avoid (the store footer strip, for instance).
+   *
+   * The schema validator can only check the declared `closeup.viewport`; whether a
+   * zoomed-in hero really stays out of the zone is a property of the finished
+   * layout, so it is checked after every pass has moved things around.
+   */
+  | 'reserved_zone_overlap';
 
 export interface CompositionWarning {
   code: CompositionWarningCode;

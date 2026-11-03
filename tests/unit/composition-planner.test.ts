@@ -8,6 +8,7 @@ import {
 } from '../../src/services/composition/coverage';
 import { parseLayoutTemplateOrThrow } from '../../src/services/composition/template-schema';
 import { buildCompositionPlan, type PlannerMaterial } from '../../src/services/composition/planner';
+import type { Rect } from '../../src/services/composition/types';
 import type { MeasureText } from '../../src/services/composition/text-fit';
 import { planToLayers } from '../../src/editor/state/compose-emit';
 import type { ImageLayer, TextLayer } from '../../src/shared/types';
@@ -274,5 +275,38 @@ describe('planToLayers — plate fallback', () => {
     expect(plate.height).toBeCloseTo(plan.plates[0].height, 6);
     expect(plate.x).toBeCloseTo(plan.plates[0].x, 6);
     expect(plate.scale).toBe(1);
+  });
+});
+
+/*
+  10.22.1（审查 P2-7）：`reserved_zones` 里写着「hero 不许进底栏」，可校验期只能看
+  `closeup.viewport`；放大之后的 alpha 完全可能越过那条底边（审查复现：1000×2000 的
+  主体在 zoom 1.816 下底边到 1142）。所以运行期还要按最终 alpha 复查一次。
+*/
+describe('reserved zones are checked after the layout settles', () => {
+  const footer: Rect = [0, 712, 800, 800];
+
+  it('reports a picture whose alpha reaches into a zone it was told to avoid', () => {
+    // The shipped template lets the hero overflow its viewport (hero_dominance zooms it
+    // 1.82×) and only keeps the *box* out of the store strip — but if a template does
+    // list a role here, the finished layout has to be checked against its real alpha,
+    // not just against `closeup.viewport` (10.22.1, review P2-7).
+    const template = {
+      ...TEMPLATE,
+      canvas: {
+        ...TEMPLATE.canvas,
+        reservedZones: [{ id: 'store_footer', box: footer, avoidFor: ['hero' as const] }],
+      },
+    };
+    const plan = buildCompositionPlan({ template, hero: HERO, seed: 'MTS-0001' });
+    const overlap = plan.warnings.find((entry) => entry.code === 'reserved_zone_overlap');
+    expect(overlap).toBeDefined();
+    expect(overlap!.detail).toMatchObject({ zoneId: 'store_footer', slotId: 'hero_closeup' });
+    expect(Number(overlap!.detail!.covered)).toBeGreaterThan(0.02);
+  });
+
+  it('stays quiet when the shipped template only keeps the box out of the strip', () => {
+    const plan = buildCompositionPlan({ template: TEMPLATE, hero: HERO, seed: 'MTS-0001' });
+    expect(plan.warnings.map((entry) => entry.code)).not.toContain('reserved_zone_overlap');
   });
 });

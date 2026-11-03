@@ -46,6 +46,7 @@ function identityOf(image: SessionImage, bytes?: number): string {
     // The stored size wins: it is what the editor computes the same identity
     // from later, when it no longer has the blob at hand.
     bytes: image.bytes ?? bytes,
+    digest: image.digest,
     blobId: image.blobId,
   });
 }

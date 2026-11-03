@@ -12,6 +12,7 @@ import {
 import { AppError, ErrorCode, messageOf } from '../shared/errors';
 import { createRequestId, sendToBackground } from '../shared/messages';
 import type {
+  EditorLayer,
   EditorMaterial,
   EditorSessionMeta,
   ExportInput,
@@ -20,8 +21,10 @@ import type {
   LayerPatch,
   PageFillResult,
   TextLayer,
+  WatermarkLayer,
 } from '../shared/types';
 import { DEFAULT_TEXT_STYLE, pickTextStyle, type TextStyleDefaults } from '../shared/text-style';
+import { pictureCacheSignature } from '../services/image-effects';
 import { downloadBlobInPage } from '../services/downloader';
 import { blobToDataUrl, buildExportFileName, exportStageToPng } from '../services/exporter';
 import { readBlobSize } from '../services/image-size';
@@ -185,8 +188,37 @@ function supportSlotsOf(template: LayoutTemplate): SupportSlotRequest[] {
     }));
 }
 
-export function App(): JSX.Element {
-  const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
+/**
+ * Everything painted into the finished PNG that does not come from the template.
+ *
+ * The result cache key has to include these: a watermark that was repositioned,
+ * or a brand logo swapped for another one, changes the picture while hero, box
+ * and template all stay identical (10.22.1, review P2-6).
+ */
+function paintedExtrasForCache(
+  layers: readonly EditorLayer[],
+  watermark: WatermarkLayer | null,
+): string[] {
+  const extras: string[] = [];
+  if (watermark) {
+    extras.push(
+      `watermark:${watermark.blobId}:${Math.round(watermark.x)},${Math.round(watermark.y)}@${Math.round(
+        watermark.scale * 1000,
+      )}`,
+    );
+  }
+  for (const layer of layers) {
+    if (layer.kind !== 'brand') continue;
+    extras.push(
+      `brand:${layer.materialId}:${Math.round(layer.x)},${Math.round(layer.y)}@${Math.round(
+        layer.scale * 1000,
+      )}`,
+    );
+  }
+  return extras;
+}
+
+export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSearchParams(window.location.search).get('session'), []);
   const {
     loading,
     fatalError,
@@ -375,6 +407,14 @@ export function App(): JSX.Element {
    * the pictures to decode — exporting before that yields a PNG with blanks in it.
    */
   const [pendingResultKey, setPendingResultKey] = useState<string | null>(null);
+  /**
+   * Fingerprint of the last applied layout — the key its PNG is cached under.
+   *
+   * Computed from the finished plan (pictures, effects, watermark, brand logos,
+   * code text), so two layouts that differ in a support picture or a watermark
+   * can never share one cache entry.
+   */
+  const [lastResultKey, setLastResultKey] = useState<string | null>(null);
   /** When the composed PNG was last written to the local cache (for the panel). */
   const [resultCachedAt, setResultCachedAt] = useState<number | null>(null);
   /**
@@ -947,6 +987,7 @@ export function App(): JSX.Element {
           width: image.width,
           height: image.height,
           bytes: image.bytes,
+          digest: image.digest,
           blobId: image.blobId,
         }),
       );
@@ -965,27 +1006,44 @@ export function App(): JSX.Element {
   }, [cutouts, identityByImageId]);
 
   /**
-   * Cache key for the composed PNG of one (hero, box) pair, or null when the
-   * materials cannot be identified — then there is nothing to key a cache on.
+   * Fingerprint of a finished plan — the key its PNG is cached under.
    *
-   * The key covers what ends up in the picture: the hero photo, the packaging
-   * photo, the template and the listing. It deliberately does NOT cover the whole
-   * cut-out set — the other photos are not in the PNG, and including them meant a
-   * single failed cut-out (or one extra photo) threw away yesterday's result.
+   * It hashes what actually gets painted, not what was selected:
+   * - every picture in the plan (slot + photo identity + its effects), which
+   *   covers the support pictures of the collage template (10.22.1, review P2-6 —
+   *   hero/box alone let a swapped action pose keep the old cache entry);
+   * - the watermark and the brand logos, which are painted into the same PNG but
+   *   do not come from the template at all;
+   * - the code text lines.
+   * Returns null when the hero cannot be identified: no identity, no honest key.
    */
-  const resultKeyForCompose = useCallback(
-    (heroMaterialId: string | null, boxMaterialId: string | null): string | null => {
-      const heroIdentity = heroMaterialId ? identityByMaterialId.get(heroMaterialId) ?? null : null;
+  const resultKeyForPlan = useCallback(
+    (plan: CompositionPlan): string | null => {
+      const hero = plan.images.find((image) => image.role === 'hero');
+      const heroIdentity = hero ? identityByMaterialId.get(hero.materialId) ?? null : null;
       if (!heroIdentity) return null;
-      const boxIdentity = boxMaterialId ? identityByMaterialId.get(boxMaterialId) ?? null : null;
+      const layerEffects = new Map<string, string>();
+      for (const layer of document.layers) {
+        if (layer.kind === 'text' || layer.kind === 'plate') continue;
+        layerEffects.set(`${layer.materialId}:${Math.round(layer.x)},${Math.round(layer.y)}`, pictureCacheSignature(layer.effects));
+      }
+      const pictures = plan.images.map((image) => ({
+        slotId: image.slotId,
+        identity: identityByMaterialId.get(image.materialId) ?? '',
+        effects:
+          layerEffects.get(`${image.materialId}:${Math.round(image.x)},${Math.round(image.y)}`) ?? '',
+      }));
+      const extras: string[] = paintedExtrasForCache(document.layers, watermark.layer);
+      for (const text of plan.texts) extras.push(`text:${text.text}`);
       return resultKeyFor({
         productCode: session?.productCode ?? null,
         templateKey,
         heroIdentity,
-        boxIdentity,
+        pictures,
+        extras,
       });
     },
-    [identityByMaterialId, session, templateKey],
+    [document.layers, identityByMaterialId, session, templateKey, watermark.layer],
   );
 
   /**
@@ -1365,7 +1423,9 @@ export function App(): JSX.Element {
         const plan = await composeFor(hero, box);
         if (!plan) return;
         applyComposedPlan(plan);
-        setPendingResultKey(resultKeyForCompose(hero, box));
+        const resultKey = resultKeyForPlan(plan);
+        setPendingResultKey(resultKey);
+        setLastResultKey(resultKey);
 
         const firstWarning = plan.warnings[0];
         showNotice(
@@ -1388,7 +1448,7 @@ export function App(): JSX.Element {
       composeFor,
       cutouts.length,
       heroId,
-      resultKeyForCompose,
+      resultKeyForPlan,
       showNotice,
     ],
   );
@@ -1472,7 +1532,9 @@ export function App(): JSX.Element {
 
       setAutoPhase('composing');
       applyComposedPlan(plan);
-      setPendingResultKey(resultKeyForCompose(hero, box));
+      const resultKey = resultKeyForPlan(plan);
+      setPendingResultKey(resultKey);
+      setLastResultKey(resultKey);
       const firstWarning = plan.warnings[0];
       showNotice(
         firstWarning
@@ -1495,7 +1557,7 @@ export function App(): JSX.Element {
     boxId,
     composeFor,
     heroId,
-    resultKeyForCompose,
+    resultKeyForPlan,
     showNotice,
   ]);
 
@@ -1903,11 +1965,15 @@ export function App(): JSX.Element {
     })();
   }, [composeCache, composePng, document.layers, imageForLayer, pendingResultKey, state.exporting]);
 
-  /** Cache key of whatever the panel currently has selected, or null. */
-  const currentResultKey = useMemo(
-    () => resultKeyForCompose(heroId, boxId),
-    [boxId, heroId, resultKeyForCompose],
-  );
+  /**
+   * Cache key of the last layout that was actually applied, or null.
+   *
+   * It comes from the finished plan, not from the hero/box selection: the
+   * collage template paints support pictures too, and "which support picture"
+   * is decided inside `composeFor()`. Deriving the key from the plan is the only
+   * way the key matches the PNG.
+   */
+  const currentResultKey = lastResultKey;
 
   /**
    * Whether the current selection already has a finished PNG on disk.

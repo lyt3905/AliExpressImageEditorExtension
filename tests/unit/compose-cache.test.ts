@@ -105,6 +105,28 @@ describe('imageIdentity', () => {
     ).toBe('local:正面.png|2048|800x600');
   });
 
+  /*
+    10.22.1（审查 P1-2）：两张内容不同、但同名同字节数同尺寸的图片，用
+    「名字 + 字节数 + 宽高」会算出同一个身份 —— 商品 B 会读到商品 A 的抠图。
+    上传时算的内容摘要才是唯一能分清它们的身份。
+  */
+  it('keys an uploaded file by its content digest when there is one', () => {
+    const digest = 'a'.repeat(64);
+    expect(imageIdentity({ url: '', label: 'image.png', bytes: 4320, width: 800, height: 800, digest }))
+      .toBe(`local:#${digest}`);
+    // Same name/size/pixels, different bytes → different identity.
+    const other = 'b'.repeat(64);
+    expect(
+      imageIdentity({ url: '', label: 'image.png', bytes: 4320, width: 800, height: 800, digest: other }),
+    ).not.toBe(imageIdentity({ url: '', label: 'image.png', bytes: 4320, width: 800, height: 800, digest }));
+  });
+
+  it('ignores a digest-shaped string that is not a real digest', () => {
+    expect(
+      imageIdentity({ url: '', label: 'a.png', bytes: 10, width: 1, height: 1, digest: 'nope' }),
+    ).toBe('local:a.png|10|1x1');
+  });
+
   it('treats a whitespace url as absent', () => {
     expect(imageIdentity({ url: '   ', bytes: 1, width: 2, height: 3 })).toBe('local:|1|2x3');
   });
@@ -193,6 +215,62 @@ describe('cache keys', () => {
     expect(resultKeyFor({ ...base, heroIdentity: 'url:b' })).not.toBe(resultKeyFor(base));
     expect(resultKeyFor({ ...base, boxIdentity: null })).not.toBe(resultKeyFor(base));
     expect(resultKeyFor({ ...base, productCode: 'P2' })).not.toBe(resultKeyFor(base));
+  });
+
+  /*
+    10.22.1（审查 P2-6）：拼贴模板会画出两三张 support 图，hero/box 不足以描述成品。
+    换掉动作姿态、挪动水印、换一个品牌 Logo，都会让"下载缓存成品图"拿到上一版。
+  */
+  it('changes the result key when a support picture changes', () => {
+    const base = { productCode: 'P1', templateKey: 't@1', heroIdentity: 'url:a' };
+    const one = {
+      ...base,
+      pictures: [
+        { slotId: 'action_pose_left_hero', identity: 'url:a' },
+        { slotId: 'rear_view_background', identity: 'url:b' },
+      ],
+    };
+    const other = {
+      ...base,
+      pictures: [
+        { slotId: 'action_pose_left_hero', identity: 'url:a' },
+        { slotId: 'rear_view_background', identity: 'url:c' },
+      ],
+    };
+    expect(resultKeyFor(one)).not.toBe(resultKeyFor(other));
+  });
+
+  it('ignores the order pictures are listed in', () => {
+    const base = { productCode: 'P1', templateKey: 't@1', heroIdentity: 'url:a' };
+    const forward = [
+      { slotId: 'rear_view_background', identity: 'url:b' },
+      { slotId: 'front_view_right', identity: 'url:c' },
+    ];
+    expect(resultKeyFor({ ...base, pictures: forward })).toBe(
+      resultKeyFor({ ...base, pictures: [...forward].reverse() }),
+    );
+  });
+
+  it('changes the result key when the watermark, a brand logo or an effect changes', () => {
+    const base = {
+      productCode: 'P1',
+      templateKey: 't@1',
+      heroIdentity: 'url:a',
+      pictures: [{ slotId: 'action_pose_left_hero', identity: 'url:a' }],
+      extras: ['watermark:blob-1:620,640@260'],
+    };
+    expect(resultKeyFor({ ...base, extras: ['watermark:blob-1:620,300@260'] })).not.toBe(
+      resultKeyFor(base),
+    );
+    expect(resultKeyFor({ ...base, extras: [...base.extras, 'brand:material-brand-newage:640,660@260'] })).not.toBe(
+      resultKeyFor(base),
+    );
+    expect(
+      resultKeyFor({
+        ...base,
+        pictures: [{ slotId: 'action_pose_left_hero', identity: 'url:a', effects: 'grayscale|0' }],
+      }),
+    ).not.toBe(resultKeyFor(base));
   });
 });
 

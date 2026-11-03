@@ -102,6 +102,34 @@ describe('upload-images', () => {
     expect(persisted?.images.map((image) => image.id)).toEqual([added?.id]);
   });
 
+  /*
+    10.22.1（审查 P1-2）：抠图缓存拿「文件名 + 字节数 + 宽高」当上传图的身份，
+    两张内容不同但同名同尺寸同字节数的图片会撞成一张。上传时就把内容摘要存进去。
+  */
+  it('stores a content digest so two same-size files stay distinguishable', async () => {
+    const a = new Uint8Array([...PNG, 0x01]);
+    const b = new Uint8Array([...PNG, 0x02]); // same length, different bytes
+    const outcome = await appendUploadedImages(makeRecord(), [
+      { name: 'image.png', blob: imageBlob(a) },
+      { name: 'image.png', blob: imageBlob(b) },
+    ]);
+
+    expect(outcome.added).toHaveLength(2);
+    const [first, second] = outcome.added;
+    expect(first?.bytes).toBe(a.length);
+    expect(second?.bytes).toBe(b.length);
+    expect(first?.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(second?.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(first?.digest).not.toBe(second?.digest);
+
+    // And the digest survives the round-trip through IndexedDB.
+    const persisted = await getSession('sess-test');
+    expect(persisted?.images.map((image) => image.digest)).toEqual([
+      first?.digest,
+      second?.digest,
+    ]);
+  });
+
   it('continues the page numbering and leaves existing images alone', async () => {
     const existing = makeImage({ id: 'hash-a', index: 0, cutoutStatus: 'success', cutoutBlobId: 'hash-a-cutout' });
     const outcome = await appendUploadedImages(makeRecord([existing]), [

@@ -14,7 +14,7 @@
  */
 
 import type { AlphaProfile } from './alpha';
-import { coveredFraction, type CanvasSize, type ContentPlacement } from './coverage';
+import { occlusionRatio, type CanvasSize, type ContentPlacement } from './coverage';
 import { rectFromCenter, rectArea } from './rect';
 import { round, warning, type CompositionWarning } from './warnings';
 import type { BoxVariant, Rect } from './types';
@@ -88,7 +88,20 @@ export function solveBox(request: BoxSolveRequest): BoxSolution | null {
         centerY: variant.center[1],
         scale,
       };
-      const hidden = hero ? coveredFraction(hero.profile, hero.placement, rect, canvas) : 0;
+      /*
+        Measure visibility against the box's OWN alpha, not against the slot
+        rectangle it sits in (10.22.1, review P2-3). `contain` letterboxes the
+        picture, so a slot rect is often much bigger than the visible package —
+        dividing by it let a completely covered box report 75% visible and skip
+        the "hero hides the box" repair.
+      */
+      const hidden = hero
+        ? occlusionRatio(
+            { profile: hero.profile, placement: hero.placement },
+            { profile, placement },
+            canvas,
+          )
+        : 0;
       return {
         variantIndex: index,
         rect,

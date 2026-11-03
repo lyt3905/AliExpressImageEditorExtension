@@ -50,6 +50,16 @@ export interface SessionImage {
    * "the same file picked again" from a different photo of the same dimensions.
    */
   bytes?: number;
+  /**
+   * SHA-256 (hex) of the original bytes — local uploads only.
+   *
+   * `bytes` alone cannot identify a file: two different pictures can carry the
+   * same name, the same byte count and the same pixel size, and then the compose
+   * cache would hand one product the other's cut-out. Absent for page-scanned
+   * images (their url is already a content address) and for sessions created
+   * before 10.22.1.
+   */
+  digest?: string;
   /** Page-provided slot label, e.g. 商品正面图 / 商品背面图. */
   label?: string;
   /** Seller-console slot number this image was scanned from (see ScannedImage). */

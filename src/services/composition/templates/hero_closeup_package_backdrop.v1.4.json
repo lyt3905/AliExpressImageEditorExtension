@@ -11,7 +11,7 @@
       {
         "id": "store_footer",
         "box": [0, 712, 800, 800],
-        "avoid_for": ["hero", "box"]
+        "avoid_for": ["box"]
       }
     ]
   },

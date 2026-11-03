@@ -150,6 +150,31 @@ describe('solveHero — hitting the occupancy band', () => {
 describe('solveBox — variant selection', () => {
   const boxProfile = opaqueProfile(800, 1000);
 
+  /*
+    10.22.1（审查 P2-3）：可见率的旧算法拿「槽位矩形」当分母，而 `contain` 会把
+    盒子缩在槽位里 —— 槽位比盒子大得多，于是一个 100% 被盖住的盒子仍报 60%~75% 可见，
+    「盒子被挡太多 → 换 variant / 挪 hero」这条修复永远不会触发。
+  */
+  it('reports a fully covered box as invisible even when the slot is much larger', () => {
+    const narrowBox = opaqueProfile(100, 500);
+    // Slot 400×500 around (400, 300): `contain` keeps the box at scale 1 (100×500).
+    const variants = [{ center: [400, 300] as [number, number], maxSize: [400, 500] as [number, number] }];
+    // The hero is the same 100×500 shape, sitting exactly on top of it.
+    const hero = { profile: opaqueProfile(100, 500), placement: { centerX: 400, centerY: 300, scale: 1 } };
+
+    const solution = solveBox({
+      profile: narrowBox,
+      variants,
+      canvas: CANVAS,
+      minVisibleRatio: 0.65,
+      hero,
+      seed: 'MTS-0001',
+    })!;
+
+    expect(solution.visibleRatio).toBeLessThan(0.05);
+    expect(solution.warnings.map((entry) => entry.code)).toContain('box_visibility_below_min');
+  });
+
   it('picks the variant the hero hides least', () => {
     // Hero occupying x 0..600: every variant loses its left part, but not equally.
     const heroProfile = opaqueProfile(600, 800);

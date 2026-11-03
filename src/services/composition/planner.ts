@@ -185,6 +185,15 @@ const Z_INDEX_STEP = 10;
 /** Gap between what the model asked for and what was delivered that earns a warning. */
 const FILL_REPORT_TOLERANCE = 0.04;
 
+/**
+ * How much of a reserved zone a picture may touch before it is called out.
+ *
+ * Not zero: anti-aliased edges and a one-pixel rounding at the zone border are not
+ * "the hero is standing in the footer strip", and a warning that fires on every
+ * layout stops being read.
+ */
+const RESERVED_ZONE_TOLERANCE = 0.02;
+
 /** Padding inside a plate before its caption is fitted. */
 const PLATE_TEXT_PADDING_RATIO = 0.08;
 const PLATE_TEXT_PADDING_MAX = 28;
@@ -784,6 +793,34 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     for (const picture of pictures) {
       const moved = arranged.placements.get(picture.slotId);
       if (moved) picture.placement = moved;
+    }
+  }
+
+  // ---- pass 5: 保留区复查 --------------------------------------------------
+  /*
+    `reserved_zones` 里写了「hero 不许进底栏」，但校验期只看 `closeup.viewport`，
+    而 hero 真正占的宽度/高度由 zoom 决定 —— 放大后的 alpha 完全可能越过画布底边那条
+    store footer（10.22.1，审查 P2-7：1000×2000 的主体在 zoom 1.816 时底边到 1142）。
+    这里拿最终 placement 与实际 alpha 复查一次，越界就报出来，而不是让字段名不副实。
+  */
+  for (const zone of template.canvas.reservedZones ?? []) {
+    for (const picture of pictures) {
+      const slot = template.slots.find((candidate) => candidate.id === picture.slotId);
+      if (!slot || !zone.avoidFor.includes(slot.role)) continue;
+      const covered = coveredFraction(
+        picture.material.profile,
+        picture.placement,
+        zone.box,
+        canvas,
+      );
+      if (covered <= RESERVED_ZONE_TOLERANCE) continue;
+      warnings.push(
+        warning(
+          'reserved_zone_overlap',
+          `图位 ${slot.id} 压进了保留区「${zone.id}」${round(covered * 100, 1)}%（模板要求它避开这里）`,
+          { slotId: slot.id, zoneId: zone.id, covered: round(covered, 4) },
+        ),
+      );
     }
   }
 

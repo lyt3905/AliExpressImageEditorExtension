@@ -150,6 +150,43 @@ export function coveredFraction(
 }
 
 /**
+ * Fraction of `back`'s OWN visible alpha that `front` covers.
+ *
+ * Two things this does that `coveredFraction()` cannot: the denominator is the
+ * back layer's clipped alpha area (not a slot rectangle, which is bigger whenever
+ * the picture is letterboxed inside it — that made a fully hidden box report 75%
+ * visible), and off-canvas parts of the back layer are excluded, because nothing
+ * can be hidden where nothing can be seen.
+ *
+ * The numerator is "front's alpha measured over the back layer's content
+ * rectangle", i.e. an upper bound on the true alpha∩alpha intersection: it can
+ * over-count where the back layer is transparent. That direction is safe — we
+ * would rather report a box as slightly more hidden than it is.
+ */
+export function occlusionRatio(
+  front: { profile: AlphaProfile; placement: ContentPlacement },
+  back: { profile: AlphaProfile; placement: ContentPlacement },
+  canvas: CanvasSize,
+): number {
+  const backArea = visibleAlphaArea(back.profile, back.placement, canvas);
+  if (backArea <= 0) return 0;
+  const clipped = clipToCanvas(contentRect(back.profile, back.placement), canvas);
+  if (rectArea(clipped) <= 0) return 0;
+  const covered = alphaAreaWithin(front.profile, front.placement, clipped);
+  return Math.min(1, Math.max(0, covered / backArea));
+}
+
+/** `region` clipped to the canvas; empty when nothing of it is on screen. */
+export function clipToCanvas(region: Rect, canvas: CanvasSize): Rect {
+  return [
+    Math.max(region[0], 0),
+    Math.max(region[1], 0),
+    Math.min(region[2], canvas.width),
+    Math.min(region[3], canvas.height),
+  ];
+}
+
+/**
  * Convert a content placement into a Konva node placement.
  *
  * The layer model is centre-anchored over the FULL source image, so the trimmed

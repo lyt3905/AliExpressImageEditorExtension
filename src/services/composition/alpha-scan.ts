@@ -72,20 +72,30 @@ export function scanAlpha(
   const trim: TrimBox = { left, top, width: right - left + 1, height: bottom - top + 1 };
 
   // ---- pass 2: coverage inside the box -----------------------------------
-  const sums = new Float64Array(maskSize * maskSize);
-  const counts = new Uint32Array(maskSize * maskSize);
+  /*
+    The grid may never be finer than the trim box itself (10.22.1, review P2-4).
+    With a fixed 128×128 grid, a 64×64 subject only fills every second row and
+    column; the untouchable cells stayed at coverage 0 and were still counted in
+    the density denominator — a fully opaque 64×64 subject measured as 0.25
+    "opaque", so the planner underestimated it, over-enlarged it and missed
+    occlusions. Clamping the grid to the trim's shorter side keeps every cell
+    covered by at least one source pixel.
+  */
+  const gridSize = Math.max(1, Math.min(maskSize, trim.width, trim.height));
+  const sums = new Float64Array(gridSize * gridSize);
+  const counts = new Uint32Array(gridSize * gridSize);
 
   for (let y = top; y <= bottom; y += 1) {
-    const row = Math.min(maskSize - 1, Math.floor(((y - top) / trim.height) * maskSize));
+    const row = Math.min(gridSize - 1, Math.floor(((y - top) / trim.height) * gridSize));
     for (let x = left; x <= right; x += 1) {
-      const column = Math.min(maskSize - 1, Math.floor(((x - left) / trim.width) * maskSize));
-      const cell = row * maskSize + column;
+      const column = Math.min(gridSize - 1, Math.floor(((x - left) / trim.width) * gridSize));
+      const cell = row * gridSize + column;
       sums[cell] += (pixels[(y * width + x) * 4 + 3] ?? 0) / 255;
       counts[cell] += 1;
     }
   }
 
-  const mask = new Array<number>(maskSize * maskSize);
+  const mask = new Array<number>(gridSize * gridSize);
   let total = 0;
   for (let cell = 0; cell < mask.length; cell += 1) {
     const count = counts[cell] ?? 0;
@@ -94,7 +104,7 @@ export function scanAlpha(
     total += coverage;
   }
 
-  return { trim, maskSize, mask, density: total / mask.length };
+  return { trim, maskSize: gridSize, mask, density: total / mask.length };
 }
 
 /** Convenience: scan and wrap into the profile the solver consumes. */

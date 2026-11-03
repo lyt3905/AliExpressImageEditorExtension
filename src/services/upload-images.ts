@@ -17,6 +17,7 @@ import { messageOf } from '../shared/errors';
 import { SUPPORTED_IMAGE_MIME_HINT, resolveImageMime } from '../shared/image-mime';
 import type { EditorSessionRecord, SessionImage } from '../shared/types';
 import { putBlob, putSession } from './indexed-db';
+import { blobDigest } from './content-digest';
 import { readBlobSize } from './image-size';
 
 /**
@@ -111,6 +112,12 @@ export async function appendUploadedImages(
     const id = createUploadImageId(taken);
     taken.add(id);
 
+    // Content hash first: it is what the compose cache keys an upload on, and it
+    // is the only identity that survives "same name, same size, different
+    // picture". An empty string (no crypto.subtle / unreadable blob) just falls
+    // back to the name-based identity.
+    const digest = await blobDigest(blob);
+
     try {
       // Re-wrap only when sniffing disagreed with the declared type, so the
       // stored blob carries a real image mime onward to the cutout request.
@@ -133,6 +140,7 @@ export async function appendUploadedImages(
       // Identifies "the same file picked again" for the compose cache — an upload
       // has no url, so this is what keeps yesterday's cut-out reusable.
       bytes: blob.size,
+      ...(digest ? { digest } : {}),
       label: name.trim() || UPLOAD_DEFAULT_LABEL,
       // Selected on purpose: the automatic pipeline only ever queues
       // `selected && idle`, so an unselected upload would sit there forever.

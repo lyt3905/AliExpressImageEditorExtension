@@ -30,6 +30,34 @@ describe('scanAlpha', () => {
     expect(scan.mask).toEqual([1, 1, 1, 1]);
   });
 
+  /*
+    10.22.1（审查 P2-4）：固定 128×128 网格时，细长/小尺寸主体只能占满部分格子，
+    空格子被当成"透明"计进分母 —— 一个完全不透明的 64×64 主体只量出 0.25。
+    网格不允许比 trim 自身更细。
+  */
+  it('never reports a small opaque subject as mostly transparent', () => {
+    for (const [width, height] of [
+      [64, 64],
+      [64, 512],
+      [128, 128],
+    ] as const) {
+      const image = canvas(width, height);
+      image.fill(0, 0, width, height, 255);
+      const scan = scanAlpha(image.pixels, width, height)!;
+      expect(scan.density).toBeCloseTo(1, 6);
+      expect(scan.maskSize).toBe(Math.min(128, width, height));
+    }
+  });
+
+  it('keeps a thin subject at full density', () => {
+    // 8 px wide strip inside a 800 px wide scan: the grid must shrink to 8.
+    const image = canvas(800, 40);
+    image.fill(300, 0, 308, 40, 255);
+    const scan = scanAlpha(image.pixels, 800, 40)!;
+    expect(scan.maskSize).toBe(8);
+    expect(scan.density).toBeCloseTo(1, 6);
+  });
+
   it('averages partial alpha into coverage', () => {
     const image = canvas(4, 4);
     image.fill(0, 0, 2, 4, 255);

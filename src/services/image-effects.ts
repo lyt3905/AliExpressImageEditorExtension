@@ -109,7 +109,8 @@ export function isNormalizedEffects(raw: unknown): boolean {
   return keys.every((key) => value[key] === normalized[key]);
 }
 
-export function imageEffectsEqual(left: unknown, right: unknown): boolean {  const a = normalizeImageEffects(left);
+export function imageEffectsEqual(left: unknown, right: unknown): boolean {
+  const a = normalizeImageEffects(left);
   const b = normalizeImageEffects(right);
   return (
     a.opacity === b.opacity &&
@@ -127,8 +128,7 @@ export function imageEffectsEqual(left: unknown, right: unknown): boolean {  con
   );
 }
 
-/** `#rrggbb` → 0–255 triple, for Konva's `Filters.RGB` channel multipliers. */
-export function colorChannels(color: string): { red: number; green: number; blue: number } {
+/** `#rrggbb` → 0–255 triple, for Konva's `Filters.RGB` channel multipliers. */export function colorChannels(color: string): { red: number; green: number; blue: number } {
   const hex = normalizeColor(color, '#000000');
   return {
     red: parseInt(hex.slice(1, 3), 16),
@@ -152,4 +152,67 @@ export function shadowColorWithOpacity(color: string, opacity: number): string {
   const green = parseInt(hex.slice(3, 5), 16);
   const blue = parseInt(hex.slice(5, 7), 16);
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+/**
+ * Which Konva pixel filters a picture needs, in the order they must run.
+ *
+ * Both filters are **unconditional functions**, not attribute-driven switches:
+ * putting `Konva.Filters.Grayscale` in the `filters` array greys the pixels out
+ * whether or not `grayscale` is `false` on the node. An earlier build appended
+ * Grayscale whenever *any* filter was needed, so merely raising the brightness
+ * desaturated the photo — the bug this list exists to prevent.
+ */
+export type ImageFilterName = 'grayscale' | 'brighten';
+
+export function imageFilterNames(effects: unknown): ImageFilterName[] {
+  const e = normalizeImageEffects(effects);
+  const names: ImageFilterName[] = [];
+  if (e.grayscale) names.push('grayscale');
+  if (e.brightness !== 0) names.push('brighten');
+  return names;
+}
+
+/**
+ * The value to hand to Konva's `brightness` attribute.
+ *
+ * Konva 9's `Brighten` filter does `rgb += brightness * 255`, i.e. it is an
+ * **offset with 0 as neutral**, matching our document field 1:1. It is *not* a
+ * multiplier, so mapping `0 → 1` (as an earlier build did) turns every picture
+ * pure white the moment a filter is on.
+ */
+export function konvaBrightness(effects: unknown): number {
+  return normalizeImageEffects(effects).brightness;
+}
+
+/**
+ * Cache identity for the pixels Konva bakes into `cache()`.
+ *
+ * `cache()` rasterises a node **including its shadow**, so every attribute that
+ * changes those pixels has to appear here — not just the two filter settings.
+ * Missing shadow fields meant "turn a filter on, then change the shadow" kept
+ * painting the old shadow until something else forced a re-cache.
+ */
+export function pictureCacheSignature(effects: unknown): string {
+  const e = normalizeImageEffects(effects);
+  return [
+    imageFilterNames(e).join('+'),
+    e.brightness.toFixed(3),
+    e.shadowColor,
+    e.shadowBlur.toFixed(2),
+    e.shadowOpacity.toFixed(3),
+    e.shadowOffsetX.toFixed(2),
+    e.shadowOffsetY.toFixed(2),
+  ].join('|');
+}
+
+/** Same idea for the glow copy (its own tint + shadow form the halo). */
+export function glowCacheSignature(effects: unknown): string {
+  const e = normalizeImageEffects(effects);
+  return [
+    e.glowColor,
+    e.glowOpacity.toFixed(3),
+    e.glowRadius.toFixed(2),
+    e.glowBlur.toFixed(2),
+  ].join('|');
 }
