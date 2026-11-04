@@ -554,6 +554,24 @@ export const ONLY_KITS_TEXT = 'Only Kits';
  */
 export const ONLY_KITS_GAP = 16;
 
+/**
+ * 「Only Kits」的字号 = 编号字号 × 这个比例（再按"必须一行"继续收）。
+ *
+ * 不照搬编号字号的原因：编号是模板文字区算出来的。海报模板那一格是 380×100、
+ * 单行，为了让编号撑满，`fitTextToBox` 会给到 100px —— 同一个字号套到
+ * 「Only Kits」上，它在 380 宽里就要折成两行，还往主体身上压。标签是一个短语，
+ * 断行就不再是标签，所以先按比例收一档，再按宽度收到能一行放下为止。
+ */
+export const ONLY_KITS_FONT_RATIO = 0.62;
+
+/**
+ * 「Only Kits」字号的下限。
+ *
+ * 收到这个字号还放不下一行就不再收：再小就读不清了，宁可让排版那边去管
+ * （宽度来自编号图层，编号自己也得先放得下）。
+ */
+export const ONLY_KITS_MIN_FONT = 12;
+
 // ---------------------------------------------------------------- transform
 
 /** Degrees one press of「左转 / 右转」turns the selected layer. */

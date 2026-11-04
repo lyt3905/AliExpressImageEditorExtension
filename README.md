@@ -315,6 +315,22 @@ npm run check:dist
 因此旋转和缩放都围绕中心发生。文字高度取决于自动换行，首帧用 `estimateTextHeight`
 （Konva 默认 `lineHeight = 1`，即 `fontSize × 行数`）估算，节点上屏后由 `EditorStage` 实测校正。
 
+### 「Only Kits」标签的字号是算出来的（10.25.1）
+
+标题是套件商品时，编辑器会在编号正下方自动加一层「Only Kits」标签。它的**字号不再等于编号字号**：
+
+| 规则 | 值 |
+| --- | --- |
+| 起步 | 编号字号 × `ONLY_KITS_FONT_RATIO`（0.62） |
+| 再收 | 按宽度收到"能放下一行"为止（用 `estimateTextHeight` 判是否折行，与渲染同一套折行规则） |
+| 下限 | `ONLY_KITS_MIN_FONT`（12px），收到这里还不够宽就不再收 |
+
+为什么不能照搬编号字号：编号的字号是模板文字区算出来的。海报模板那一格是 380×100、单行，
+为了让编号撑满，`fitTextToBox` 会给到 100px —— 同一个字号套到「Only Kits」上在 380 宽里要折成
+`Only / Kits` 两行，还往主体上压。标签是一个短语，断行就不再是标签。宽度、缩放、水平中心线仍然继承编号，
+所以两行仍读作一个整块；`y` 用的是**新字号**算出的自身半高，因此 `ONLY_KITS_GAP` 这个间隙仍压在编号下方。
+编号与标签的其余样式（字体、颜色、粗体、对齐、描边、阴影、旋转、镜像）照旧全部继承。
+
 ---
 
 ## 镜像 / 旋转（只作用于选中的那一个图层）
@@ -1150,12 +1166,17 @@ AliExpressImageEditorExtension/
     （那才是文档）。另外它只换素材、不换几何：图位的 `viewport` / `zoom` / `anchor` 仍是模板的，
     想改大小位置请在下拉框改完之后到画布上调 —— 那是普通图层操作，可撤销。
 
+41. 「Only Kits」的字号是**按编号推算**的，只保证"一行 + 比编号小"，不保证和编号对齐成你想要的视觉比例：
+    0.62 这个系数是给海报模板那种 100px 编号定的，换成别的模板如果显得偏大/偏小，就调
+    `ONLY_KITS_FONT_RATIO` 一个常量。另外它是**创建那一刻**算出来的：之后你手动把编号字号改大改小、
+    或者把编号的换行框拖宽拖窄，标签不会跟着重算（它已经是独立图层，跟其它文字一样你自己调）。
+
 ## 验证状态
 
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（64 文件 / 1039 测试，其中 1034 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（66 文件 / 1042 测试，其中 1037 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1199,5 +1220,6 @@ AliExpressImageEditorExtension/
 | 复核报告第二轮（10.22.2） | **仅自动化验证**（`composition-occlusion.test.ts` 7 例 + `paint-fingerprint.test.ts` 6 例）：不相交的 2×2 掩码遮挡率 < 2%、全不透明 > 98%、只算重叠的不透明格、错位的图算 0；细长主体（20×2000）压进底栏 88px 时**面积只占 1.45% 却仍报警**（深度判据），擦边 1px 不报；成品指纹对不透明度/发光/位移/缩放/旋转/翻转/换序/身份/水印/文字全部敏感，只有文字与衬板时返回 `null`。**浏览器里的拖动同步与像素观感仍未自动化**，步骤见 manual-test 5.127–5.130 |
 | 深色海报模板 + 槽位四字段（10.24.0 / M2） | **仅自动化验证**（`composition-slot-fields.test.ts` 16 例）：海报模板本身 lint 0 issue；`purpose` / `fit` / `allow_source_reuse` / `effects` 的解析（snake_case 效果键归一、默认值补齐、老拼贴模板四字段全 `undefined`、未知 `purpose` / `fit` 与拼错的效果键分别报到 `slots[0].purpose` / `slots[0].fit` / `slots[2].effects.outline_widht`、"什么都没开"的 effects 被丢弃、`canvas.background` 缺省按白底）；planner 里装饰背景不凑 `min_pictures`、不进并集/层级/叠图/保留区，`cover` 铺满整张画布而 `contain` 仍收在 286×240 内；`planToLayers()` 不丢 `effects`（hero 图层带 `outlineWidth 4` 与 `#ff2638`）。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.140 |
 | 手工指定图位素材（10.25.0 / M3） | **仅自动化验证**（`composition-slot-picks.test.ts` 14 例）：`pickableSlots` 按 `render_order` 排序且覆盖解析器接受的全部槽位、`allow_source_reuse` 透传；`resolveSlotPicks` 把 hero / box / 支持槽分到三条通道、空串与空白与 `null` 一律当"自动"、不存在的 id 与文字区 id 进 `ignored` 而不抛错、同一张素材可以被点名两次、支持槽按绘制顺序排队、素材 id 前后空格被 trim；`prunePicks` 跨模板双向剔除并丢掉空值；`isPicked` 不把空白算成"已指定"。**面板交互（下拉框、立刻重排、一次撤销）没有断言** —— `src/editor/components/` 无单测，步骤见 manual-test 5.141 |
+| 「Only Kits」标签字号（10.25.1） | **仅自动化验证**（`text-layer.test.ts` 43 例中的 4 例 + `compose-emit` 1 例改判）：100px 编号 / 380 宽下标签落到 62px 且 `estimateTextHeight` 恰等于字号（= 单行）、窄宽度（120）继续收到 22 仍单行、极窄宽度（40）停在下限 12 不再收、`carriedLayers` 重排时按新规则重算而不是照搬编号字号，其余样式字段仍逐项继承。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.142 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

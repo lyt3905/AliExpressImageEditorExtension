@@ -14,7 +14,9 @@ import {
   MIN_SHADOW_BLUR,
   MIN_SHADOW_OFFSET,
   MIN_STROKE_WIDTH,
+  ONLY_KITS_FONT_RATIO,
   ONLY_KITS_GAP,
+  ONLY_KITS_MIN_FONT,
   ONLY_KITS_TEXT,
   TEXT_LAYER_DEFAULTS,
 } from '../../shared/constants';
@@ -478,12 +480,55 @@ export function createProductCodeTextLayer(
  * (`estimateTextHeight` × its own scale — the same approximation `EditorStage`
  * corrects once Konva has measured the real node) and then moves down by the
  * label's own half height. Everything horizontal is inherited instead: width,
- * scale and the centre line, so the two lines read as one block.
+ * scale and the centre line, so the two lines read as one block. The one thing
+ * that is NOT inherited is the font size — see `fitOnlyKitsFontSize`.
  *
  * With no code layer there is nothing to sit under, so the label takes the 编号
  * defaults — style and remembered placement both (spec: 「使用编号图层的默认样式和
  * 默认位置」).
  */
+/**
+ * Font size for the 「Only Kits」 label.
+ *
+ * Starts at `ONLY_KITS_FONT_RATIO` of the code's size and keeps stepping down
+ * until the label fits on ONE line inside the inherited width, stopping at
+ * `ONLY_KITS_MIN_FONT`. "One line" is decided by `estimateTextHeight` — the same
+ * greedy wrap the renderer uses — because a line's height equals its font size
+ * at Konva's default `lineHeight`, so `height > fontSize` means it wrapped.
+ *
+ * Why not just inherit the code's size: the code's size comes from the template
+ * text zone. The poster template's zone is 380×100 and single-line, so the code
+ * gets ~100px — and 「Only Kits」 at 100px is two lines inside 380px, spilling
+ * onto the figure. A label broken into 「Only / Kits」 reads as a mistake.
+ */
+export function fitOnlyKitsFontSize(
+  text: string,
+  source: Pick<TextLayer, 'width' | 'fontFamily' | 'fontStyle' | 'fontSize'>,
+  measure?: MeasureText,
+): number {
+  const ceiling = Math.max(
+    ONLY_KITS_MIN_FONT,
+    Math.round(source.fontSize * ONLY_KITS_FONT_RATIO),
+  );
+  let size = ceiling;
+  while (
+    size > ONLY_KITS_MIN_FONT &&
+    estimateTextHeight(
+      {
+        text,
+        width: source.width,
+        fontSize: size,
+        fontFamily: source.fontFamily,
+        fontStyle: source.fontStyle,
+      },
+      measure,
+    ) > size
+  ) {
+    size -= 1;
+  }
+  return size;
+}
+
 export function createOnlyKitsTextLayer(
   codeLayer?: TextLayer,
   defaults?: Partial<TextStyleDefaults>,
@@ -494,12 +539,13 @@ export function createOnlyKitsTextLayer(
   if (!codeLayer) return base;
 
   const scale = codeLayer.scale;
+  const fontSize = fitOnlyKitsFontSize(ONLY_KITS_TEXT, codeLayer, measure);
   const codeBottom = codeLayer.y + (estimateTextHeight(codeLayer, measure) * scale) / 2;
   const ownHeight = estimateTextHeight(
     {
       text: ONLY_KITS_TEXT,
       width: codeLayer.width,
-      fontSize: codeLayer.fontSize,
+      fontSize,
       fontFamily: codeLayer.fontFamily,
       fontStyle: codeLayer.fontStyle,
     },
@@ -511,7 +557,7 @@ export function createOnlyKitsTextLayer(
     x: codeLayer.x,
     y: codeBottom + ONLY_KITS_GAP + ownHeight / 2,
     width: codeLayer.width,
-    fontSize: codeLayer.fontSize,
+    fontSize,
     fontFamily: codeLayer.fontFamily,
     fill: codeLayer.fill,
     fontStyle: codeLayer.fontStyle,

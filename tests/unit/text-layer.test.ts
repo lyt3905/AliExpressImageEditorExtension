@@ -4,7 +4,9 @@ import {
   MAX_SHADOW_BLUR,
   MAX_SHADOW_OFFSET,
   MIN_SHADOW_OFFSET,
+  ONLY_KITS_FONT_RATIO,
   ONLY_KITS_GAP,
+  ONLY_KITS_MIN_FONT,
   ONLY_KITS_TEXT,
   TEXT_LAYER_DEFAULTS,
   TEXT_STYLE_KEYS,
@@ -609,7 +611,7 @@ describe('createOnlyKitsTextLayer', () => {
     expect(new Set([createOnlyKitsTextLayer(code).id, layer.id]).size).toBe(2);
   });
 
-  it('copies every text style field, the width, the scale and the horizontal centre', () => {
+  it('copies every text style field except the size, plus the width, the scale and the horizontal centre', () => {
     const code = sampleCodeLayer({
       align: 'left',
       fill: '#FF0033',
@@ -631,10 +633,41 @@ describe('createOnlyKitsTextLayer', () => {
     const layer = createOnlyKitsTextLayer(code);
 
     for (const key of TEXT_STYLE_KEYS) {
+      if (key === 'fontSize') continue;
       expect(layer[key], `style field ${key}`).toBe(code[key]);
     }
     expect(layer.x).toBe(code.x);
     expect(layer.scale).toBe(code.scale);
+    // The size is the one field that is derived instead of inherited.
+    expect(layer.fontSize).toBe(Math.round(60 * ONLY_KITS_FONT_RATIO));
+  });
+
+  it('shrinks the label below a 100px 编号 so it stays on one line', () => {
+    // The poster template's text zone is 380 wide and fits the code at ~100px.
+    const code = sampleCodeLayer({ fontSize: 100, scale: 1, text: 'DK-86', width: 380 });
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(layer.fontSize).toBeLessThan(code.fontSize);
+    expect(layer.fontSize).toBe(Math.round(100 * ONLY_KITS_FONT_RATIO));
+    // One line exactly: line height equals font size at Konva's lineHeight of 1.
+    expect(estimateTextHeight(layer)).toBe(layer.fontSize);
+    expect(layer.text).not.toContain('\n');
+  });
+
+  it('keeps shrinking while the inherited width is too narrow for one line', () => {
+    const code = sampleCodeLayer({ fontSize: 100, scale: 1, width: 120 });
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(layer.fontSize).toBeLessThan(Math.round(100 * ONLY_KITS_FONT_RATIO));
+    expect(layer.fontSize).toBeGreaterThanOrEqual(ONLY_KITS_MIN_FONT);
+    expect(estimateTextHeight(layer)).toBe(layer.fontSize);
+  });
+
+  it('stops at the minimum size instead of shrinking forever', () => {
+    const code = sampleCodeLayer({ fontSize: 100, scale: 1, width: 40 });
+    const layer = createOnlyKitsTextLayer(code);
+
+    expect(layer.fontSize).toBe(ONLY_KITS_MIN_FONT);
   });
 
   it('stacks below the 编号 with a visible gap instead of covering it', () => {

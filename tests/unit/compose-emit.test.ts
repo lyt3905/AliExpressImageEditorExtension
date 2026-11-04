@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CompositionPlan } from '../../src/services/composition/planner';
 import type { EditorLayer, ImageLayer } from '../../src/shared/types';
-import { ONLY_KITS_TEXT } from '../../src/shared/constants';
+import { ONLY_KITS_FONT_RATIO, ONLY_KITS_TEXT } from '../../src/shared/constants';
 import { carriedLayers } from '../../src/editor/state/compose-emit';
 
 /** Only `texts` matters here; the rest of the plan is irrelevant to this seam. */
@@ -151,7 +151,9 @@ describe('carriedLayers — the 「Only Kits」 label', () => {
     expect(kits.id).toBe('kits');
     expect(kits.x).toBe(520);
     expect(kits.width).toBe(360);
-    expect(kits.fontSize).toBe(40);
+    // The label is sized down from the code instead of inheriting it (see
+    // `fitOnlyKitsFontSize`): 40 -> 62% -> 25, one line inside 360px.
+    expect(kits.fontSize).toBe(Math.round(40 * ONLY_KITS_FONT_RATIO));
     expect(kits.fill).toBe('#123456');
     expect(kits.y).toBeGreaterThan(180 + 40 / 2);
   });
