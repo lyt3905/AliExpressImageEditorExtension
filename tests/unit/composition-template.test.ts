@@ -7,7 +7,11 @@ import {
   slotFootprints,
 } from '../../src/services/composition/template-schema';
 import { rectFromCenter, rectsIntersect } from '../../src/services/composition/rect';
-import { parseAllTemplates } from '../../src/services/composition/templates';
+import {
+  parseAllTemplates,
+  TEMPLATE_TITLES,
+  templateTitle,
+} from '../../src/services/composition/templates';
 
 /** Mutable deep copy of the shipped template — every case edits one field only. */
 type Raw = Record<string, any>;
@@ -249,6 +253,20 @@ describe('template registry', () => {
       expect(result.issues, `${result.key}:\n${issueText(result)}`).toEqual([]);
       expect(result.template, result.key).not.toBeNull();
     }
+  });
+
+  it('gives every registered template a Chinese name in the picker', () => {
+    // 界面只显示中文名，忘了登记一个模板的话下拉框里会出现英文 id。
+    for (const result of parseAllTemplates()) {
+      const id = result.template?.id;
+      expect(id, result.key).toBeTruthy();
+      expect(TEMPLATE_TITLES[id as string], `${result.key} 缺少中文名`).toBeTruthy();
+      expect(templateTitle(id as string)).not.toBe(id);
+    }
+  });
+
+  it('falls back to the id for an unregistered template', () => {
+    expect(templateTitle('some_future_template')).toBe('some_future_template');
   });
 });
 

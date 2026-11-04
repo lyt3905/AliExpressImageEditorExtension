@@ -27,6 +27,26 @@ export const TEMPLATE_SOURCES: Readonly<Record<string, unknown>> = {
 
 export const DEFAULT_TEMPLATE_KEY = 'hero_closeup_package_backdrop@1.4';
 
+/**
+ * 模板在界面上的中文名，按 **id** 记（不是 `id@version`）。
+ *
+ * 键用 id 而不是完整 key，是为了让版本升级（新增 `xxx.v1.5.json`）不用再补一次
+ * 名字——升级换的是文件，模板本身还是那一个。没登记过的 id 在界面上回落到 id 本身，
+ * 所以新增模板忘了起名只会看到英文 id，不会渲染成空白。
+ *
+ * 名字刻意写得短：它出现在一个 240px 宽的下拉框里，后面还跟着版本号与「（草稿）」。
+ */
+export const TEMPLATE_TITLES: Readonly<Record<string, string>> = {
+  hero_closeup_package_backdrop: '主体特写 + 包装盒背板',
+  three_pose_figure_collage_white: '三姿态拼贴（白底）',
+  dramatic_glow_character_poster: '深色发光海报',
+};
+
+/** 界面上显示的名字；未登记的模板回落成 id（不会显示空白）。 */
+export function templateTitle(id: string): string {
+  return TEMPLATE_TITLES[id] ?? id;
+}
+
 export function templateKey(template: Pick<LayoutTemplate, 'id' | 'version'>): string {
   return `${template.id}@${template.version}`;
 }

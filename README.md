@@ -614,13 +614,17 @@ Logo 可能已经被你解锁挪过位置），所以排版只替换商品图、
 
 ### 版式模板
 
-**三份模板，下拉里自己选：**
+**三份模板，下拉里自己选（下拉显示的是中文名，后面跟着版本号；把鼠标停在选项上能看到模板 id）：**
 
-| 模板 | 长相 | 素材 |
-| --- | --- | --- |
-| `hero_closeup_package_backdrop@1.4` | 左侧超大特写 + 右上包装盒 + 左上型号 + 底部留白 | 主体图 + 包装图（无包装图时走兜底链） |
-| `three_pose_figure_collage_white@1.0` | 白底三姿态拼贴：背面（底板）+ 正面（右侧）+ 动作姿态（左侧主位） | **三张不同视角**的图，由 AI 从素材里挑 |
-| `dramatic_glow_character_poster@1.0` | 深色海报：满屏背景大图 + 放大主体 + 红色描边光晕 + 左下细节图 + 左上型号 | 主体图要一张；背景用另一张（没有就复用主体源图）；细节图可选 |
+| 下拉里的名字 | 模板 id | 长相 | 素材 |
+| --- | --- | --- | --- |
+| 主体特写 + 包装盒背板 | `hero_closeup_package_backdrop@1.4` | 左侧超大特写 + 右上包装盒 + 左上型号 + 底部留白 | 主体图 + 包装图（无包装图时走兜底链） |
+| 三姿态拼贴（白底） | `three_pose_figure_collage_white@1.0` | 白底三姿态拼贴：背面（底板）+ 正面（右侧）+ 动作姿态（左侧主位） | **三张不同视角**的图，由 AI 从素材里挑 |
+| 深色发光海报 | `dramatic_glow_character_poster@1.0` | 深色海报：满屏背景大图 + 放大主体 + 红色描边光晕 + 左下细节图 + 左上型号 | 主体图要一张；背景用另一张（没有就复用主体源图）；细节图可选 |
+
+中文名在 `src/services/composition/templates/index.ts` 的 `TEMPLATE_TITLES` 里，**按 id 记**（不是 `id@version`），
+所以升版本新增 `.v1.5.json` 不用再补一次名字；没登记过的 id 在下拉里回落成 id 本身，不会显示空白，
+`composition-template.test.ts` 有一条断言盯着"每个注册过的模板都有中文名"。
 
 `three_pose_figure_collage_white@1.0`（`src/services/composition/templates/three_pose_figure_collage_white.v1.0.json`）：
 
@@ -1176,7 +1180,7 @@ AliExpressImageEditorExtension/
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（66 文件 / 1042 测试，其中 1037 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（66 文件 / 1044 测试，其中 1039 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1221,5 +1225,6 @@ AliExpressImageEditorExtension/
 | 深色海报模板 + 槽位四字段（10.24.0 / M2） | **仅自动化验证**（`composition-slot-fields.test.ts` 16 例）：海报模板本身 lint 0 issue；`purpose` / `fit` / `allow_source_reuse` / `effects` 的解析（snake_case 效果键归一、默认值补齐、老拼贴模板四字段全 `undefined`、未知 `purpose` / `fit` 与拼错的效果键分别报到 `slots[0].purpose` / `slots[0].fit` / `slots[2].effects.outline_widht`、"什么都没开"的 effects 被丢弃、`canvas.background` 缺省按白底）；planner 里装饰背景不凑 `min_pictures`、不进并集/层级/叠图/保留区，`cover` 铺满整张画布而 `contain` 仍收在 286×240 内；`planToLayers()` 不丢 `effects`（hero 图层带 `outlineWidth 4` 与 `#ff2638`）。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.140 |
 | 手工指定图位素材（10.25.0 / M3） | **仅自动化验证**（`composition-slot-picks.test.ts` 14 例）：`pickableSlots` 按 `render_order` 排序且覆盖解析器接受的全部槽位、`allow_source_reuse` 透传；`resolveSlotPicks` 把 hero / box / 支持槽分到三条通道、空串与空白与 `null` 一律当"自动"、不存在的 id 与文字区 id 进 `ignored` 而不抛错、同一张素材可以被点名两次、支持槽按绘制顺序排队、素材 id 前后空格被 trim；`prunePicks` 跨模板双向剔除并丢掉空值；`isPicked` 不把空白算成"已指定"。**面板交互（下拉框、立刻重排、一次撤销）没有断言** —— `src/editor/components/` 无单测，步骤见 manual-test 5.141 |
 | 「Only Kits」标签字号（10.25.1） | **仅自动化验证**（`text-layer.test.ts` 43 例中的 4 例 + `compose-emit` 1 例改判）：100px 编号 / 380 宽下标签落到 62px 且 `estimateTextHeight` 恰等于字号（= 单行）、窄宽度（120）继续收到 22 仍单行、极窄宽度（40）停在下限 12 不再收、`carriedLayers` 重排时按新规则重算而不是照搬编号字号，其余样式字段仍逐项继承。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.142 |
+| 模板下拉显示中文名（10.25.2） | **仅自动化验证**（`composition-template.test.ts` +2 例）：每个注册过的模板都在 `TEMPLATE_TITLES` 里且 `templateTitle()` 不会回落到 id、未登记的 id 才回落成 id 本身。**真机一眼即可**：下拉三项都是中文名、`title` 提示是 id、生成后的状态提示写模板中文名，步骤见 manual-test 5.143 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

@@ -5,6 +5,8 @@ import { DOCUMENT_BACKGROUND_PRESETS } from '../../shared/constants';
 export interface ComposeTemplateOption {
   key: string;
   id: string;
+  /** 中文名（`TEMPLATE_TITLES`，按 id 记）；下拉框里显示的就是它。 */
+  title: string;
   version: string;
   status: string;
 }
@@ -117,8 +119,8 @@ export function ComposePanel({
               disabled={busy}
             >
               {templates.map((template) => (
-                <option key={template.key} value={template.key}>
-                  {template.id} · v{template.version}
+                <option key={template.key} value={template.key} title={template.id}>
+                  {template.title} · v{template.version}
                   {template.status === 'draft' ? '（草稿）' : ''}
                 </option>
               ))}

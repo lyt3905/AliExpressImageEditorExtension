@@ -78,6 +78,7 @@ import {
   DEFAULT_TEMPLATE_KEY,
   listTemplateKeys,
   parseTemplateByKey,
+  templateTitle,
 } from '../services/composition/templates';
 import { measureTextWithCanvas } from '../services/text-measure';
 import { ComposePanel } from './components/ComposePanel';
@@ -452,14 +453,24 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
     () =>
       listTemplateKeys().map((key) => {
         const parsed = parseTemplateByKey(key);
+        const id = parsed.template?.id ?? key;
         return {
           key,
-          id: parsed.template?.id ?? key,
+          id,
+          // 界面显示中文名（`TEMPLATE_TITLES`，按 id 记）；id 仍留着做 `title` 提示，
+          // 排查"下拉里那个是哪个模板"时不用去读 JSON。
+          title: templateTitle(id),
           version: parsed.template?.version ?? '?',
           status: parsed.template?.status ?? 'draft',
         };
       }),
     [],
+  );
+
+  /** 当前模板的中文名（状态提示里用它，而不是 id）。 */
+  const currentTemplateTitle = useMemo(
+    () => templateTitle(parseTemplateByKey(templateKey).template?.id ?? templateKey),
+    [templateKey],
   );
 
   /**
@@ -1467,8 +1478,8 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
         const firstWarning = plan.warnings[0];
         showNotice(
           firstWarning
-            ? { kind: 'error', text: `已排版，但有让步：${firstWarning.message}` }
-            : { kind: 'ok', text: '已按模板排版（Ctrl+Z 可整体撤销）' },
+            ? { kind: 'error', text: `已按「${currentTemplateTitle}」排版，但有让步：${firstWarning.message}` }
+            : { kind: 'ok', text: `已按「${currentTemplateTitle}」排版（Ctrl+Z 可整体撤销）` },
         );
       } catch (error) {
         const message = messageOf(error);
@@ -1483,6 +1494,7 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       bindVisionRoles,
       boxId,
       composeFor,
+      currentTemplateTitle,
       cutouts.length,
       heroId,
       showNotice,
