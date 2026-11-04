@@ -24,6 +24,17 @@ export interface ComposePanelProps {
    * dropdowns has no better information than the model does.
    */
   cutouts: EditorMaterial[];
+  /**
+   * 能手工指定素材的图位（主体 / 包装盒 / 其余图片槽位），顺序即绘制顺序。
+   *
+   * 10.18.4 删掉的是"生成前先确认主体是谁"那道前置工序；这里是生成之后的修正入口
+   * （M3）：AI 认错、或者卖家就是想换张细节图，不该逼他清缓存重来一遍。
+   */
+  pickSlots: Array<{ slotId: string; label: string; role: string }>;
+  /** 当前的手工指定：`slotId -> materialId`，空表 = 全自动。 */
+  slotPicks: Record<string, string>;
+  /** `null` = 恢复自动（交给 AI / 面积兜底）。 */
+  onSlotPick: (slotId: string, materialId: string | null) => void;
   busy: boolean;
   plan: CompositionPlan | null;
   error: string | null;
@@ -53,6 +64,9 @@ export function ComposePanel({
   background,
   onBackgroundChange,
   cutouts,
+  pickSlots,
+  slotPicks,
+  onSlotPick,
   busy,
   plan,
   error,
@@ -73,6 +87,7 @@ export function ComposePanel({
   */
   const ready = cutouts.length > 0;
   const active = templates.find((template) => template.key === templateKey);
+  const pickedCount = pickSlots.filter((slot) => (slotPicks[slot.slotId] ?? '') !== '').length;
 
   return (
     <aside className="panel compose-panel">
@@ -150,7 +165,52 @@ export function ComposePanel({
             时标签启发式与面积兜底已经能出图，而卖家看着六个缩略图并没有比模型更多的
             信息。留着它们只会让人以为每次都得先确认一遍"主体是谁"。
             角色仍由 AI 决定，走不通就回落，结论写在下面那条可展开的「识别结论」里。
+
+            10.25.0 补回来的不是那道前置工序，而是**生成之后的修正口**：AI 认错了主体、
+            背景挑错了图、细节图该用俯拍那张 —— 这些不需要重新问模型，只需要"这一格
+            换成那张图"。所以它默认折叠、只列图位，改一格就按模板重排一次。
           */}
+          {pickSlots.length > 0 && cutouts.length > 0 ? (
+            <details className="compose-fold compose-fold--picks">
+              <summary>
+                素材分配（手工指定）
+                {pickedCount > 0 ? `：已指定 ${pickedCount} 个图位` : ''}
+              </summary>
+              <p className="compose-note">
+                默认「自动」= 由 AI 决定哪张图放哪个图位。改成具体素材会立刻按模板重排一次
+                （不重新问 AI，Ctrl+Z 可整体撤销）；点「自动」恢复交还给 AI。
+              </p>
+              {pickSlots.map((slot) => (
+                <label key={slot.slotId} className="compose-field compose-field--pick">
+                  <span>{slot.label}</span>
+                  <select
+                    className="compose-select"
+                    value={slotPicks[slot.slotId] ?? ''}
+                    onChange={(event) => onSlotPick(slot.slotId, event.target.value || null)}
+                    disabled={busy}
+                  >
+                    <option value="">自动（AI 决定）</option>
+                    {cutouts.map((material) => (
+                      <option key={material.id} value={material.id}>
+                        {material.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              {pickedCount > 0 ? (
+                <button
+                  type="button"
+                  className="compose-cache__clear"
+                  onClick={() => pickSlots.forEach((slot) => onSlotPick(slot.slotId, null))}
+                  disabled={busy}
+                  title="把所有图位交还给 AI 决定，并按模板重排一次"
+                >
+                  全部恢复自动
+                </button>
+              ) : null}
+            </details>
+          ) : null}
 
           {/*
             一个按钮做完整件事。识别素材角色是排版的入参，不是独立的步骤 ——

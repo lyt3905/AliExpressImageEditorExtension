@@ -347,6 +347,34 @@ button.primary:hover:not(:disabled) {
   margin: 6px 0 0;
 }
 
+/*
+  素材分配（M3）：图位名字比「主体」长得多（`图位 detail_inset`），所以这里不沿用
+  `.compose-field > span` 的 60px 固定宽度 —— 固定宽度会把名字截成"图位 detai…"，
+  而认出是哪一格正是这个下拉框存在的理由。改成"按名字宽、可省略、下拉框吃剩下的"。
+*/
+.compose-fold--picks .compose-note {
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.compose-field--pick {
+  margin-bottom: 4px;
+}
+
+.compose-field--pick > span {
+  flex: 0 0 auto;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「全部恢复自动」是这一块里的次要动作，跟缓存那行用同一个链接样式。 */
+.compose-fold--picks .compose-cache__clear {
+  display: block;
+  margin: 2px 0 0;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);

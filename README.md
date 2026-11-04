@@ -676,6 +676,23 @@ Logo 可能已经被你解锁挪过位置），所以排版只替换商品图、
 - **没做的**：AI 不选背景 / 细节（`selectSupportMaterials` 按面积和 AI 的 `preference` 分配），
   四方案并排与批量导出仍不在范围里
 
+### 手工指定图位素材（10.25.0 / M3）
+
+面板里多了一个默认折叠的「素材分配（手工指定）」，里面按绘制顺序列出这个模板能放图的每个图位
+（主体 / 包装盒 / 其余图片槽位），每格一个下拉框，默认都是「自动（AI 决定）」。
+
+- 改一格就**立刻按模板重排一次**，但**不重新问模型**：用户改的是"这个位置放哪张"，不是"重新认一遍角色"。
+  重排走同一条 `composeFor`，所以 `APPLY_PLAN` 仍然只产生**一次**历史步骤 —— 连点三个下拉框再 `Ctrl+Z`，
+  回到的是生成之前的画布，而不是逐格回退
+- 它盖住的只是**被点名的那几格**：自动分配先跑出来，用户点名的槽位替换它，其余一个都不变。所以手工换一张
+  不会连带把 AI 的其它结论丢掉
+- 「自动」恢复交还 AI；点过名的格子汇总在摘要里（`已指定 N 个图位`），底部有「全部恢复自动」
+- 换模板会清掉不属于新模板的槽位 id（`prunePicks`）—— 槽位 id 是模板的一部分，留着只会变成"改了没反应"的格子
+- 同一张素材可以被点名两次：去重是自动路径的规则（防"拼贴里同一张图出现两次像 bug"），手工点名是明确意图
+- **不改 AI 缓存键**：手工指定只是覆盖层，不进 `bindingKeyFor`/`resultKeyFor`；换一次指定会重排、也会换成品图，
+  但下次打开仍按自动结论起（要留住手工结果，请直接改画布上的图层，那是文档的一部分）
+- 实现见 [`src/services/composition/slot-picks.ts`](src/services/composition/slot-picks.ts)（纯函数、14 个单测）
+
 `src/services/composition/templates/hero_closeup_package_backdrop.v1.4.json`
 
 - `canvas`：800×800、白底、安全边距 16、底部 `store_footer` 保留区
@@ -1128,12 +1145,17 @@ AliExpressImageEditorExtension/
     占多大，**不选**哪张当背景、哪张当细节图（那两个位置由 `selectSupportMaterials` 按面积与 `preference` 分配），
     四方案并排与批量导出也还没做。
 
+40. 手工指定图位素材（10.25.0）是**会话内的覆盖层**，不写进文档、也不进 AI 缓存键：关掉编辑器再打开，
+    下拉框回到「自动」，AI 结论照旧从缓存读。要长期保留"这张图放这一格"，请直接在画布上摆图层
+    （那才是文档）。另外它只换素材、不换几何：图位的 `viewport` / `zoom` / `anchor` 仍是模板的，
+    想改大小位置请在下拉框改完之后到画布上调 —— 那是普通图层操作，可撤销。
+
 ## 验证状态
 
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（63 文件 / 1025 测试，其中 1020 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（64 文件 / 1039 测试，其中 1034 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1176,5 +1198,6 @@ AliExpressImageEditorExtension/
 | 四次复核第五轮（10.22.5） | **仅自动化验证**（`composition-occlusion` 12 例）：两张 128×128、`maskSize` 都是 128 的梳状掩码（前景「第 0 列 + 奇数列」、后景「偶数列 + 最后一列」、水平错开 0.49px）遮挡率算到 **0.4906**（精确值），旧版把合并边界从 256 条削到 200 条后报 0.2645（误差 22.6 个百分点，55%/65% 两档门槛都被错误放行）；同时用 49/51px 与"细前景压粗后景"两个既有反例守住面积积分。细化预算已被删除（`maskSize ≤ 128` ⇒ 每轴 ≤ 257 条边，本来有界），整套单测耗时不变（约 24 秒）。**浏览器端到端仍未自动化**，步骤见 manual-test 5.138 |
 | 复核报告第二轮（10.22.2） | **仅自动化验证**（`composition-occlusion.test.ts` 7 例 + `paint-fingerprint.test.ts` 6 例）：不相交的 2×2 掩码遮挡率 < 2%、全不透明 > 98%、只算重叠的不透明格、错位的图算 0；细长主体（20×2000）压进底栏 88px 时**面积只占 1.45% 却仍报警**（深度判据），擦边 1px 不报；成品指纹对不透明度/发光/位移/缩放/旋转/翻转/换序/身份/水印/文字全部敏感，只有文字与衬板时返回 `null`。**浏览器里的拖动同步与像素观感仍未自动化**，步骤见 manual-test 5.127–5.130 |
 | 深色海报模板 + 槽位四字段（10.24.0 / M2） | **仅自动化验证**（`composition-slot-fields.test.ts` 16 例）：海报模板本身 lint 0 issue；`purpose` / `fit` / `allow_source_reuse` / `effects` 的解析（snake_case 效果键归一、默认值补齐、老拼贴模板四字段全 `undefined`、未知 `purpose` / `fit` 与拼错的效果键分别报到 `slots[0].purpose` / `slots[0].fit` / `slots[2].effects.outline_widht`、"什么都没开"的 effects 被丢弃、`canvas.background` 缺省按白底）；planner 里装饰背景不凑 `min_pictures`、不进并集/层级/叠图/保留区，`cover` 铺满整张画布而 `contain` 仍收在 286×240 内；`planToLayers()` 不丢 `effects`（hero 图层带 `outlineWidth 4` 与 `#ff2638`）。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.140 |
+| 手工指定图位素材（10.25.0 / M3） | **仅自动化验证**（`composition-slot-picks.test.ts` 14 例）：`pickableSlots` 按 `render_order` 排序且覆盖解析器接受的全部槽位、`allow_source_reuse` 透传；`resolveSlotPicks` 把 hero / box / 支持槽分到三条通道、空串与空白与 `null` 一律当"自动"、不存在的 id 与文字区 id 进 `ignored` 而不抛错、同一张素材可以被点名两次、支持槽按绘制顺序排队、素材 id 前后空格被 trim；`prunePicks` 跨模板双向剔除并丢掉空值；`isPicked` 不把空白算成"已指定"。**面板交互（下拉框、立刻重排、一次撤销）没有断言** —— `src/editor/components/` 无单测，步骤见 manual-test 5.141 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

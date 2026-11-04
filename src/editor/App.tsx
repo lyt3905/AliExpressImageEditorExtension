@@ -50,6 +50,7 @@ import {
   selectSupportMaterials,
   type SupportSlotRequest,
 } from '../services/composition/bind-materials';
+import { pickableSlots, prunePicks, resolveSlotPicks } from '../services/composition/slot-picks';
 import {
   bindMaterialsWithVision,
   selectVisionCandidates,
@@ -369,6 +370,43 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
    * what makes "skip it" mean "this time", not "next time".
    */
   const visionSkippedRef = useRef<string[]>([]);
+  /**
+   * 手工指定的图位素材（M3）：`slotId -> materialId`，空表 = 全自动。
+   *
+   * 这是**覆盖层**，不是第二套分配逻辑：自动结论（AI + 面积）先跑出来，用户点名的
+   * 那几个槽位被替换，其余一个字都不动。所以"把背景换成那张俯拍图"不会连带重排
+   * 主体与细节图，也不会把 AI 的结论整份丢掉。
+   *
+   * 为什么又给回下拉框了（10.18.4 刚删掉主体/包装盒的两个）：那次删的是"生成前先
+   * 确认主体是谁"这道**前置**工序，模型在这件事上确实比人强；这里加的是生成之后的
+   * **修正**入口 —— 模型认错、或者卖家就是想换个细节图，不该逼他清缓存重来一遍。
+   */
+  const [slotPicks, setSlotPicks] = useState<Record<string, string>>({});
+  /**
+   * 同一份表的同步读法：`composeFor` 在一次 `await` 链里跑完，state 要等下一次渲染，
+   * 切换下拉框后立刻重排会读到旧表（和 `visionSkippedRef` 同一个理由）。
+   */
+  const slotPicksRef = useRef<Record<string, string>>({});
+  /**
+   * 面板上要列出哪些图位：模板里能放图的那几个（主体 / 包装盒 / 其余 `closeup` 槽位）。
+   * 文字区与衬板不在其中 —— 它们放不下一张照片，给个下拉框只会让人以为能换。
+   */
+  const pickSlots = useMemo(() => {
+    const template = parseTemplateByKey(templateKey).template;
+    if (!template) return [];
+    return pickableSlots(template).map((option) => ({
+      slotId: option.slotId,
+      role: option.role,
+      label:
+        option.role === 'hero'
+          ? '主体'
+          : option.role === 'box'
+            ? '包装盒'
+            : option.role === 'support'
+              ? `图位 ${option.slotId}`
+              : `图位 ${option.slotId}（${option.role}）`,
+    }));
+  }, [templateKey]);
   /**
    * 「这一版排版还没拍成 PNG」的请求标记。
    *
@@ -1064,15 +1102,23 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
         return null;
       }
 
-      const heroMaterial = cutouts.find((material) => material.id === heroMaterialId);
+      /*
+        手工指定优先（M3）：点过名的图位用用户给的素材，其余照旧走自动结论。
+        `resolveSlotPicks` 是纯函数（有单测），认不出的槽位 id 只忽略、不报错 ——
+        换过模板之后留下的过期 id 不该让整次排版失败。
+      */
+      const pickPlan = resolveSlotPicks({ template: parsed.template, picks: slotPicksRef.current });
+      const effectiveHeroId = pickPlan.heroMaterialId ?? heroMaterialId;
+      const effectiveBoxId = pickPlan.boxMaterialId ?? boxMaterialId;
+
+      const heroMaterial = cutouts.find((material) => material.id === effectiveHeroId);
       if (!heroMaterial) {
         setComposeError('找不到主体素材');
         return null;
       }
-      const boxMaterial = boxMaterialId
-        ? cutouts.find((material) => material.id === boxMaterialId) ?? null
+      const boxMaterial = effectiveBoxId
+        ? cutouts.find((material) => material.id === effectiveBoxId) ?? null
         : null;
-
       const heroProfile = await profileFor(heroMaterial);
       const boxProfile = boxMaterial ? await profileFor(boxMaterial) : null;
       /*
@@ -1091,7 +1137,7 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       // fallback ladder lives in the template, so the panel does not decide it.
       const secondaryCandidate = boxMaterial
         ? null
-        : pickSecondary(layoutCandidates, [heroMaterialId, boxMaterialId]);
+        : pickSecondary(layoutCandidates, [effectiveHeroId, effectiveBoxId]);
       const secondaryMaterial = secondaryCandidate
         ? cutouts.find((material) => material.id === secondaryCandidate.materialId) ?? null
         : null;
@@ -1107,14 +1153,17 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
       */
       const supportSlots = supportSlotsOf(parsed.template);
       const supports: Array<{ slotId: string; material: PlannerMaterial }> = [];
+      const pickedBySlot = new Map(pickPlan.supports.map((entry) => [entry.slotId, entry.materialId]));
       if (supportSlots.length > 0) {
         const assignments = selectSupportMaterials({
           slots: supportSlots,
           candidates: layoutCandidates,
-          usedIds: [heroMaterialId, boxMaterialId],
+          usedIds: [effectiveHeroId, effectiveBoxId],
           preference: visionSlots,
         });
         for (const assignment of assignments) {
+          // 用户点过名的槽位不吃自动结果（否则"换了又自己换回来"）。
+          if (pickedBySlot.has(assignment.slotId)) continue;
           const material = cutouts.find((entry) => entry.id === assignment.materialId);
           if (!material) continue;
           supports.push({
@@ -1128,6 +1177,25 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
             },
           });
         }
+      }
+      /*
+        点名过的其余图位（含装饰背景、细节图）：手工意图优先于去重 ——
+        用户说"这两格都用这张"就照办，`allow_source_reuse` 管的是自动路径。
+      */
+      for (const entry of pickPlan.supports) {
+        if (supports.some((placed) => placed.slotId === entry.slotId)) continue;
+        const material = cutouts.find((candidate) => candidate.id === entry.materialId);
+        if (!material) continue;
+        supports.push({
+          slotId: entry.slotId,
+          material: {
+            materialId: material.id,
+            blobId: material.blobId,
+            kind: 'cutout',
+            profile: await profileFor(material),
+            label: material.label,
+          },
+        });
       }
 
       const plan = buildCompositionPlan({
@@ -1425,6 +1493,49 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
   const handleRegenerate = useCallback(() => {
     void handleCompose({ forceVision: true });
   }, [handleCompose]);
+
+  /**
+   * 手工换掉某个图位的素材（M3）。
+   *
+   * 立刻按新表重排一次，**不重新问 AI** —— 用户改的是"这个位置放哪张"，不是"重新
+   * 认一遍角色"。重排走 `composeFor`，所以 `APPLY_PLAN` 仍然是一次历史步骤：
+   * 连点三个下拉框再 Ctrl+Z，回到的是生成之前的画布，而不是逐次回退。
+   *
+   * `null` = 恢复自动：从表里删掉这一格，下次重排由 AI / 面积兜底重新决定。
+   */
+  const handleSlotPick = useCallback(
+    (slotId: string, materialId: string | null): void => {
+      const next = { ...slotPicksRef.current };
+      if (materialId) next[slotId] = materialId;
+      else delete next[slotId];
+      slotPicksRef.current = next;
+      setSlotPicks(next);
+
+      const template = parseTemplateByKey(templateKey).template;
+      const plan = template ? resolveSlotPicks({ template, picks: next }) : null;
+      const hero = plan?.heroMaterialId ?? heroId;
+      if (!hero) {
+        setComposeError('还没有可用主体：先点「生成主图」，再手工换素材');
+        return;
+      }
+      void composeFor(hero, plan?.boxMaterialId ?? boxId);
+    },
+    [boxId, composeFor, heroId, templateKey],
+  );
+
+  /**
+   * 换模板：清掉跨模板的槽位指定。
+   *
+   * 槽位 id 是模板的一部分（`backdrop` / `hero_front` 只存在于海报模板），留着它们
+   * 只会变成"过期 id" —— 解析层会忽略，但面板上会显示成一个改了却没效果的格子。
+   */
+  const handleTemplateChange = useCallback((key: string): void => {
+    setTemplateKey(key);
+    const template = parseTemplateByKey(key).template;
+    const next = template ? prunePicks(slotPicksRef.current, template) : {};
+    slotPicksRef.current = next;
+    setSlotPicks(next);
+  }, []);
 
   // ---- 自动排版：打开编辑器就出图，不用点
   //
@@ -2240,10 +2351,13 @@ export function App(): JSX.Element {  const sessionId = useMemo(() => new URLSea
           <ComposePanel
             templates={templateOptions}
             templateKey={templateKey}
-            onTemplateChange={setTemplateKey}
+            onTemplateChange={handleTemplateChange}
             background={backgroundOf(document)}
             onBackgroundChange={handleBackgroundChange}
             cutouts={cutouts}
+            pickSlots={pickSlots}
+            slotPicks={slotPicks}
+            onSlotPick={handleSlotPick}
             busy={composeBusy}
             plan={composePlan}
             error={composeError}
