@@ -2333,6 +2333,75 @@ w < d ≤ w + glow → smoothstep 衰减的外晕
 ### 21.4 这一版**没做**（M2 / M3）
 
 槽位级 `effects` / `fit: cover|contain` / `purpose: decorative_background` / `allow_source_reuse`
-这几个模板字段仍未解析，`dramatic_glow_character_poster` 模板本身也还没写；人工替换背景/主体/细节、
+这几个模板字段当时仍未解析，`dramatic_glow_character_poster` 模板本身也还没写；人工替换背景/主体/细节、
 整体撤销、以及 Chrome 里的六类输入视觉验收都在 M2/M3。换句话说：**底色与描边已经能用、能存、
 能导出、能进缓存键；"一键出海报"还没有**。
+
+## 22. 海报 M2：让模板说清"这块是商品还是背景"（10.24.0）
+
+M1 只把"能力"补齐了（底色、描边），M2 才让模板能用它们。四个新字段，全部**可选、缺省即旧行为**
+——三份既有模板一个字没改，`parseSlots` 不写就不展开成 `{ purpose: undefined }`。
+
+### 22.1 `purpose` 不是第五种 `SlotRole`
+
+角色（`hero` / `box` / `support` / `text` / `plate`）说的是"这个位置干什么"，`purpose` 说的是
+"这张图**算不算商品**"。混在一起会逼着给背景加一个 `background` 角色，然后在 planner 里每一处
+`role === 'hero' || role === 'box' || role === 'support'` 后面补一句例外——那种写法迟早漏一处。
+
+所以 `decorative_background` 是一个开关，planner 里只有**一个**判定点：
+
+```
+const isDecorative = (slotId: string): boolean =>
+  slotById.get(slotId)?.purpose === 'decorative_background';
+```
+
+例外点因此是可以数清的六个：不再参与"同一张图不许占两个图位"的去重、不凑 `min_pictures`、
+不进 `canvas_fill` 的缩放对象、不进 `arrangeCascade` 的叠图秩序、不进 `measureLayout` 的并集/
+层级/留白/重心、不做保留区检查。前五个理由相同：**背景铺满整张画布，把它算进"商品占比"会把
+每个数字都定义成"满"**（并集 100%、层级 1.0、留白 0、叠图无解）。第六个是"底布不需要避开底栏"。
+
+### 22.2 `min_pictures` 只数商品图
+
+海报模板写 `min_pictures: 1`：主图一张就够，背景可以复用主体自己的源图。拼贴模板写 `2`，
+这时装饰背景**不能**帮忙凑数——否则"只有一张图"会被一张背景伪装成两图拼贴。
+实现上就是把下限比较换成 `pictures.filter((picture) => !isDecorative(picture.slotId)).length`，
+文案跟着改成「至少要 N 张商品图」。
+
+### 22.3 `fit: cover` 是几何裁切，不是 alpha 裁切
+
+`contain`（缺省）沿用老的 `heroPlacement()`：按取景框宽或高之一缩到"装下"。`cover` 用
+`Math.max(宽比, 高比)` 铺满，多出来的由画布裁掉，并且**纵向居中**而不是锚顶边——
+锚顶边会让主体从下缘漏出去。它按**源图矩形**算，不看 alpha：透明边距大的素材会"看着没铺满"。
+这是有意的取舍：算 alpha 边界要为每一张背景多一次 `probeAlphaProfile`，而背景本来就是被
+压暗 + 去色 + 半透明的装饰层，误差看不见（已写进 README 已知限制）。
+
+### 22.4 `allow_source_reuse` 只该给背景开
+
+去重的原意是"拼贴里同一张图出现两次像 bug"。但装饰背景的语义恰恰是"没有第二张图，就用主体这张"，
+所以它是**槽位自己的**开关（`if (usedMaterialIds.has(id) && !slot.allowSourceReuse)`），
+不是全局设置。默认 false，只有海报模板的 `backdrop` 开了它。
+
+### 22.5 `effects` 在解析期就报错，而且必须归一化
+
+模板里的效果是"烘进图层的初值"，不是渲染指令：它经 `PlanImage.effects` → `ImageLayer.effects`
+落成**普通图层属性**，应用之后用户在「图片效果」面板里改的值归用户，模板不拥有这些图层。
+
+解析期做两件事，缺一不可：
+
+1. 键名兼容 `snake_case`（模板里习惯 `outline_width`，代码里是 `outlineWidth`），未知键
+   **直接 `sink.error`**：拼错成 `outline_widht` 的字段被静默忽略，就是"配置写对了但没效果"
+   这类最难查的问题（测试直接断言报错路径是 `slots[2].effects.outline_widht`）。
+2. 值走 `normalizeImageEffects()` 夹紧，再用 `hasVisibleEffects()` 判空：全部为默认值的效果块
+   不落进 plan，免得缓存键平白多出一个"看起来有设置"的分量。
+
+顺带一个教训：`normalizeImageEffects()` 会把颜色转小写（`#FF2638` → `#ff2638`），断言和导出对比
+都得按小写写——第一次写 `'#FF2638'` 的单测就是这么红的。
+
+### 22.6 `canvas.background` 缺省是白，不是必填
+
+M1 把底色写进模板解析时先是当必填处理的（三份模板都补了 `#FFFFFF` 才过）。这看着"自洽"，
+其实是给以后手写模板的人埋坑：老模板没有这个键，加载就整份失败，而失败信息只说
+`canvas.background: 需要一个字符串，实际是缺失`，跟"底色"这件事根本联系不起来。
+
+现在缺省填 `DEFAULT_DOCUMENT_BACKGROUND`（`#ffffff`），语义正是"不写就是老行为"。
+有一条单测拿掉海报模板的 `canvas.background` 后断言零 issue、解析出来是白底。

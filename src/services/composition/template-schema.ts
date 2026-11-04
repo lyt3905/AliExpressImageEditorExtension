@@ -33,9 +33,11 @@ import type {
   Point,
   Rect,
   ReservedZone,
+  MaterialFit,
   ShadowRule,
   Size,
   SlotFallback,
+  SlotPurpose,
   SlotRole,
   SlotSourceSelection,
   TemplateRules,
@@ -43,6 +45,9 @@ import type {
   TemplateStatus,
   TextZone,
 } from './types';
+import { DEFAULT_DOCUMENT_BACKGROUND, DEFAULT_IMAGE_EFFECTS } from '../../shared/constants';
+import { hasVisibleEffects, normalizeImageEffects } from '../image-effects';
+import type { ImageEffects } from '../../shared/types';
 
 /**
  * Fallback threshold for `rules.package_readability.min_visible_ratio`.
@@ -256,7 +261,11 @@ function parseCanvasScalars(raw: unknown, sink: Sink): CanvasScalars | null {
 
   const width = readNumber(canvas.width, 'canvas.width', sink);
   const height = readNumber(canvas.height, 'canvas.height', sink);
-  const background = readString(canvas.background, 'canvas.background', sink);
+  // 底色缺省是白：M1 之前的模板都没写这个键，不能因为补了字段就让老模板加载失败。
+  const background =
+    canvas.background === undefined
+      ? DEFAULT_DOCUMENT_BACKGROUND
+      : readString(canvas.background, 'canvas.background', sink);
   const safeMargin = readNumber(canvas.safe_margin, 'canvas.safe_margin', sink);
 
   if (width !== null && width <= 0) {
@@ -547,6 +556,64 @@ function parseSourceSelection(
   };
 }
 
+const SLOT_PURPOSES: SlotPurpose[] = ['product', 'decorative_background'];
+const MATERIAL_FITS: MaterialFit[] = ['contain', 'cover'];
+
+/**
+ * `purpose` —— 装饰背景不是第五种 `role`，而是"这张图算不算商品"的开关。
+ *
+ * 允许写 `product`（等于不写）：导出给设计者看的字段表里总有它，而"写了但和默认一样"
+ * 不该报错。
+ */
+function parsePurpose(raw: unknown, path: string, sink: Sink): SlotPurpose | undefined {
+  if (raw === undefined) return undefined;
+  const value = readString(raw, path, sink);
+  if (!value) return undefined;
+  if (!SLOT_PURPOSES.includes(value as SlotPurpose)) {
+    sink.error(path, `未知用途 ${value}，可用：${SLOT_PURPOSES.join(' / ')}`);
+    return undefined;
+  }
+  return value as SlotPurpose;
+}
+
+function parseMaterialFit(raw: unknown, path: string, sink: Sink): MaterialFit | undefined {
+  if (raw === undefined) return undefined;
+  const value = readString(raw, path, sink);
+  if (!value) return undefined;
+  if (!MATERIAL_FITS.includes(value as MaterialFit)) {
+    sink.error(path, `未知的填充方式 ${value}，可用：${MATERIAL_FITS.join(' / ')}`);
+    return undefined;
+  }
+  return value as MaterialFit;
+}
+
+const EFFECT_KEYS = new Set(Object.keys(DEFAULT_IMAGE_EFFECTS));
+
+/**
+ * 槽位自带的图片效果。
+ *
+ * 两个坑在这里被刻意堵住：① 键名拼错（`outline_widht`）必须报错 —— 静默忽略会让人
+ * 以为模板写了描边而画布上没有；② 归一化后"什么都没开"的效果块直接丢掉，免得每层都
+ * 背着一个空 `effects` 影响缓存身份。键允许 snake_case 与 camelCase 两种写法，模板
+ * 作者不用记 TS 的命名习惯。
+ */
+function parseSlotEffects(raw: unknown, path: string, sink: Sink): ImageEffects | undefined {
+  if (raw === undefined) return undefined;
+  const record = readRecord(raw, path, sink);
+  if (!record) return undefined;
+  const camel: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const name = key.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+    if (!EFFECT_KEYS.has(name)) {
+      sink.error(`${path}.${key}`, `未知的图片效果字段 ${key}（拼错会被静默忽略，所以这里直接报错）`);
+      continue;
+    }
+    camel[name] = value;
+  }
+  const effects = normalizeImageEffects(camel);
+  return hasVisibleEffects(effects) ? effects : undefined;
+}
+
 function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSlot[] {
   const list = readArray(raw, 'slots', sink);
   if (!list) return [];
@@ -598,6 +665,10 @@ function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSl
     const variants = variantsRaw === undefined ? undefined : parseVariants(variantsRaw, `${path}.variants`, sink, canvas);
     const fallbacks = parseFallbacks(slot.fallbacks, `${path}.fallbacks`, sink);
     const sourceSelection = parseSourceSelection(slot.source_selection, `${path}.source_selection`, sink);
+    const purpose = parsePurpose(slot.purpose, `${path}.purpose`, sink);
+    const materialFit = parseMaterialFit(slot.fit, `${path}.fit`, sink);
+    const allowSourceReuse = readBoolean(slot.allow_source_reuse, `${path}.allow_source_reuse`, sink, false);
+    const effects = parseSlotEffects(slot.effects, `${path}.effects`, sink);
 
     const hasCloseup = closeup !== undefined;
     const hasVariants = (variants?.length ?? 0) > 0;
@@ -621,6 +692,10 @@ function parseSlots(raw: unknown, sink: Sink, canvas: CanvasScalars): TemplateSl
       variants,
       fallbacks,
       ...(sourceSelection ? { sourceSelection } : {}),
+      ...(purpose ? { purpose } : {}),
+      ...(materialFit ? { materialFit } : {}),
+      ...(allowSourceReuse ? { allowSourceReuse } : {}),
+      ...(effects ? { effects } : {}),
     });
   });
 
@@ -924,6 +999,8 @@ function crossCheck(template: LayoutTemplate, sink: Sink): void {
   // bad idea, but it is a design choice the template author may want to test.
   for (const slot of template.slots) {
     if (slot.role === 'hero') continue;
+    // 装饰背景铺满整张画布：按"会不会盖住编号"报警对它毫无意义，文字本来就画在它上面。
+    if (slot.purpose === 'decorative_background') continue;
     for (const rect of slotFootprints(slot)) {
       for (const zone of template.textZones) {
         if (rectsIntersect(rect, zone.box)) {

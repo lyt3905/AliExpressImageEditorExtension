@@ -598,12 +598,13 @@ Logo 可能已经被你解锁挪过位置），所以排版只替换商品图、
 
 ### 版式模板
 
-**两份模板，下拉里自己选：**
+**三份模板，下拉里自己选：**
 
 | 模板 | 长相 | 素材 |
 | --- | --- | --- |
 | `hero_closeup_package_backdrop@1.4` | 左侧超大特写 + 右上包装盒 + 左上型号 + 底部留白 | 主体图 + 包装图（无包装图时走兜底链） |
 | `three_pose_figure_collage_white@1.0` | 白底三姿态拼贴：背面（底板）+ 正面（右侧）+ 动作姿态（左侧主位） | **三张不同视角**的图，由 AI 从素材里挑 |
+| `dramatic_glow_character_poster@1.0` | 深色海报：满屏背景大图 + 放大主体 + 红色描边光晕 + 左下细节图 + 左上型号 | 主体图要一张；背景用另一张（没有就复用主体源图）；细节图可选 |
 
 `three_pose_figure_collage_white@1.0`（`src/services/composition/templates/three_pose_figure_collage_white.v1.0.json`）：
 
@@ -646,6 +647,34 @@ Logo 可能已经被你解锁挪过位置），所以排版只替换商品图、
   会被当成成品上架
 - 这个模板**不写** `shadow` / `package_readability` / `text`：这三条属于"主图 + 包装盒"布局，缺省时
   按不投影 / 不要求包装可见 / 文字不压主体处理（并各留一条警告）
+
+`dramatic_glow_character_poster@1.0`（`src/services/composition/templates/dramatic_glow_character_poster.v1.0.json`，10.24.0）：
+
+深色海报：满屏颜色/纹理背景 + 放大主体 + 红色描边光晕 + 左下细节图 + 左上型号。三个槽位 ——
+`backdrop`（`support`，z10，取景框就是整张画布）、`detail_inset`（`support`，z20，左下 `24,460,310,700`）、
+`hero_front`（`hero`，z30，`center_x: 510`，zoom 1.12）。底色 `#171719` 写在 `canvas.background` 里，
+跟着 `APPLY_PLAN` 一起进文档：撤销一次，图层和底色一起回退。
+
+它用到四个新字段（10.24.0 的 M2），**不写就还是老行为**：
+
+| 字段 | 取值 | 作用 |
+| --- | --- | --- |
+| `purpose` | `product`（缺省）/ `decorative_background` | 装饰背景**不算商品**：不参与"同一张图不许占两个图位"的去重、不凑 `min_pictures`、不进并集 / 层级 / 留白 / 叠图秩序，也不做保留区检查 |
+| `fit` | `contain`（缺省）/ `cover` | `cover` 按较大的那个比例铺满取景框（多出来的由画布裁掉）；`contain` 是老行为 |
+| `allow_source_reuse` | `false`（缺省）/ `true` | 只有装饰背景该开：没有第二张图时允许拿主体自己的源图当底 |
+| `effects` | `ImageEffects` 的任意子集 | 模板烘焙的透明度 / 亮度 / 灰度 / 描边 / 光晕。键名 camelCase 与 snake_case 都认，**拼错直接报错** |
+
+- 描边落在画布上，而不是 JSON 里的一句话：`effects` 经 `CompositionPlan.images[].effects` 写进
+  `ImageLayer.effects`，由 `alpha-outline.ts` 画在剪影**外面**（§21.2）。应用之后这几项在「图片效果」
+  面板里照样能调、能撤销 —— 模板不拥有这些图层
+- `min_pictures` 只数商品图：海报模板写 `1`，所以"只有主体一张"也能出图（背景复用主体源图）；
+  拼贴模板写 `2` 时，装饰背景不会帮忙凑数
+- `canvas.background` 可以**不写**：老模板（M1 之前）没有这个键，缺省按白底处理，
+  只有真想要深色/彩色页面时才写 `#RRGGBB`
+- `rules.cascade` 在这里用 0 值关掉（`protect_head: 0`、`max_shift: 0`）：只有一张商品层，
+  让它去躲脸只会把整页推歪
+- **没做的**：AI 不选背景 / 细节（`selectSupportMaterials` 按面积和 AI 的 `preference` 分配），
+  四方案并排与批量导出仍不在范围里
 
 `src/services/composition/templates/hero_closeup_package_backdrop.v1.4.json`
 
@@ -1093,12 +1122,18 @@ AliExpressImageEditorExtension/
     边缘会比 1:1 计算略软一点；参数改一下就要重算一次距离场，所以连续拖动滑块时画布会有轻微延迟。
     它也不参与排版：描边不进碰撞盒、不算商品面积，`measure-layout` 的六个数字都是按剪影量的。
 
+39. 模板烘焙的效果就是**普通图层属性**：`effects` 落到 `ImageLayer` 之后归用户，之后在面板里改的参数不会被模板
+    重新覆盖（换模板才会重算）。`fit: cover` 是**几何裁切**——按源图矩形铺满取景框，不看 alpha，
+    所以透明边距大的素材可能"看着没铺满"。海报模板目前是 `status: draft`：AI 只决定放哪张、
+    占多大，**不选**哪张当背景、哪张当细节图（那两个位置由 `selectSupportMaterials` 按面积与 `preference` 分配），
+    四方案并排与批量导出也还没做。
+
 ## 验证状态
 
 | 项目 | 状态 |
 | --- | --- |
 | `npm run typecheck` | **PASS**（0 error） |
-| `npm run test` | **PASS**（64 文件 / 1009 测试，其中 1004 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
+| `npm run test` | **PASS**（63 文件 / 1025 测试，其中 1020 通过、5 skip；`tests/live` 默认 SKIPPED，不联网） |
 | `npm run check:catalog` | **PASS**（14 个品牌：路径、文件存在、sha256 与实际字节一致、数量/尺寸上限） |
 | `npm run test:live` | **PASS**（服务端契约链路 + 视觉网关：`glm-5.3` 实测 3.5s / 4.2s 判对角色） |
 | `npm run build` | **PASS**（dist 产出 editor / options / service-worker / content-script / manifest / icons / vendor 7 个回填脚本） |
@@ -1140,5 +1175,6 @@ AliExpressImageEditorExtension/
 | 三次复核第四轮（10.22.4） | **仅自动化验证**（`composition-occlusion` 11 例 + `cutout-migration` 6 例 + `paint-fingerprint` 8 例 + `composition-planner` 23 例）：前景 128 列细条纹压粗掩码（2×2）后景的真实遮挡率 50.8% 被算对（旧实现 0%）、单格掩码盖住左边 49/51px 分别算出 49%/51%（旧实现 0%/100%）、`cutoutDigest` 缺失或与当前原图不符一律退回重抠（含 10.22.2 补过摘要的会话）、同品牌 Logo 内容更新（`remoteRev` v1→v2、blobId 不变）会换成品键、重复同步同一版本不换键。**浏览器端到端与"衬板/水印压包装盒"仍未自动化**，步骤见 manual-test 5.135–5.137 |
 | 四次复核第五轮（10.22.5） | **仅自动化验证**（`composition-occlusion` 12 例）：两张 128×128、`maskSize` 都是 128 的梳状掩码（前景「第 0 列 + 奇数列」、后景「偶数列 + 最后一列」、水平错开 0.49px）遮挡率算到 **0.4906**（精确值），旧版把合并边界从 256 条削到 200 条后报 0.2645（误差 22.6 个百分点，55%/65% 两档门槛都被错误放行）；同时用 49/51px 与"细前景压粗后景"两个既有反例守住面积积分。细化预算已被删除（`maskSize ≤ 128` ⇒ 每轴 ≤ 257 条边，本来有界），整套单测耗时不变（约 24 秒）。**浏览器端到端仍未自动化**，步骤见 manual-test 5.138 |
 | 复核报告第二轮（10.22.2） | **仅自动化验证**（`composition-occlusion.test.ts` 7 例 + `paint-fingerprint.test.ts` 6 例）：不相交的 2×2 掩码遮挡率 < 2%、全不透明 > 98%、只算重叠的不透明格、错位的图算 0；细长主体（20×2000）压进底栏 88px 时**面积只占 1.45% 却仍报警**（深度判据），擦边 1px 不报；成品指纹对不透明度/发光/位移/缩放/旋转/翻转/换序/身份/水印/文字全部敏感，只有文字与衬板时返回 `null`。**浏览器里的拖动同步与像素观感仍未自动化**，步骤见 manual-test 5.127–5.130 |
+| 深色海报模板 + 槽位四字段（10.24.0 / M2） | **仅自动化验证**（`composition-slot-fields.test.ts` 16 例）：海报模板本身 lint 0 issue；`purpose` / `fit` / `allow_source_reuse` / `effects` 的解析（snake_case 效果键归一、默认值补齐、老拼贴模板四字段全 `undefined`、未知 `purpose` / `fit` 与拼错的效果键分别报到 `slots[0].purpose` / `slots[0].fit` / `slots[2].effects.outline_widht`、"什么都没开"的 effects 被丢弃、`canvas.background` 缺省按白底）；planner 里装饰背景不凑 `min_pictures`、不进并集/层级/叠图/保留区，`cover` 铺满整张画布而 `contain` 仍收在 286×240 内；`planToLayers()` 不丢 `effects`（hero 图层带 `outlineWidth 4` 与 `#ff2638`）。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.140 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

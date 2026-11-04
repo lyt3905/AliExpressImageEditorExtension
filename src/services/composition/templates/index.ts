@@ -12,6 +12,7 @@
 
 import heroCloseupV14 from './hero_closeup_package_backdrop.v1.4.json';
 import threePoseV10 from './three_pose_figure_collage_white.v1.0.json';
+import dramaticGlowV10 from './dramatic_glow_character_poster.v1.0.json';
 import {
   parseLayoutTemplate,
   type TemplateParseResult,
@@ -21,6 +22,7 @@ import type { LayoutTemplate } from '../types';
 export const TEMPLATE_SOURCES: Readonly<Record<string, unknown>> = {
   'hero_closeup_package_backdrop@1.4': heroCloseupV14,
   'three_pose_figure_collage_white@1.0': threePoseV10,
+  'dramatic_glow_character_poster@1.0': dramaticGlowV10,
 };
 
 export const DEFAULT_TEMPLATE_KEY = 'hero_closeup_package_backdrop@1.4';

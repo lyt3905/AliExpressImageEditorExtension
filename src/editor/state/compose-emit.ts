@@ -32,6 +32,9 @@ function toImageLayer(image: CompositionPlan['images'][number]): ImageLayer {
     rotation: 0,
     flipX: false,
     flipY: false,
+    // 模板烘焙的效果（描边 / 灰度 / 透明度）在这里落成普通图层属性：应用之后就属于
+    // 用户，可以再调、再撤销，模板不再拥有它。不带就是把默认效果，与旧模板一致。
+    ...(image.effects ? { effects: image.effects } : {}),
   };
 }
 

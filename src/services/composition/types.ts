@@ -12,6 +12,8 @@
  */
 
 /** `[left, top, right, bottom]` in the 800x800 logical space. */
+import type { ImageEffects } from '../../shared/types';
+
 export type Rect = [number, number, number, number];
 
 /** `[width, height]` — a target box, not a region. */
@@ -111,6 +113,18 @@ export interface SlotSourceSelection {
   exclude: string[];
 }
 
+/** What a slot is for: a product shot, or the decorative bed behind everything. */
+export type SlotPurpose = 'product' | 'decorative_background';
+
+/**
+ * How the material fills its viewport.
+ *
+ * `contain` keeps the whole subject (details, insets); `cover` fills the box and
+ * lets the canvas crop it (a backdrop blurb). Absent means "the closeup's own
+ * fit", i.e. exactly the old behaviour.
+ */
+export type MaterialFit = 'contain' | 'cover';
+
 export interface TemplateSlot {
   id: string;
   role: SlotRole;
@@ -122,6 +136,31 @@ export interface TemplateSlot {
   variants?: BoxVariant[];
   fallbacks?: SlotFallback[];
   sourceSelection?: SlotSourceSelection;
+  /**
+   * What this layer is for. `decorative_background` is NOT a fifth `SlotRole` on
+   * purpose: it still has a role (usually `support`) for the geometry layer, but
+   * the *purpose* decides whether it counts as merchandise. A backdrop must not
+   * join the dedupe, must not take part in the hierarchy/harmony numbers and must
+   * not make「整页被一张图占满」的碰撞检查误报。
+   */
+  purpose?: SlotPurpose;
+  /** See `MaterialFit`. Absent = the closeup's `fit`. */
+  materialFit?: MaterialFit;
+  /**
+   * Allow sharing the exact same source photo with another slot. Off by default:
+   * two poses cut from one photo look like a bug, which is why the collage rules
+   * forbid it. A backdrop is the one place where reusing the hero's own photo is
+   * the intended fallback.
+   */
+  allowSourceReuse?: boolean;
+  /**
+   * Picture effects baked by the template (描边 / 发光 / 透明度 / 灰度 …).
+   *
+   * Parsed into the same `ImageEffects` the editor uses, so the result stays an
+   * ordinary editable layer — the seller can still change or reset it by hand.
+   * Absent means「默认效果」, i.e. the picture looks exactly as before.
+   */
+  effects?: ImageEffects;
 }
 
 export interface HeroDominanceRule {

@@ -1,0 +1,169 @@
+{
+  "id": "dramatic_glow_character_poster",
+  "version": "1.0",
+  "status": "draft",
+  "canvas": {
+    "width": 800,
+    "height": 800,
+    "background": "#171719",
+    "safe_margin": 0,
+    "reserved_zones": []
+  },
+  "text_zones": [
+    {
+      "id": "model_top_left",
+      "role": "model_code",
+      "box": [40, 40, 420, 140],
+      "font_style": "white_bold_sans",
+      "align": "left",
+      "max_lines": 1
+    }
+  ],
+  "slots": [
+    {
+      "id": "backdrop",
+      "role": "support",
+      "required": true,
+      "max_items": 1,
+      "z_index": 10,
+      "purpose": "decorative_background",
+      "fit": "cover",
+      "allow_source_reuse": true,
+      "source_selection": {
+        "product_match": "same_product",
+        "view_type": ["three_quarter", "rear", "dynamic", "front"],
+        "framing": ["full", "three_quarter"],
+        "prefer": ["适合放大做背景的整体图", "暗部细节丰富的图片", "与主体不同角度的一张图"],
+        "exclude": ["纯白背景的产品图", "带店铺边框或水印的图片", "包装盒正面图"]
+      },
+      "closeup": {
+        "viewport": [0, 0, 800, 800],
+        "zoom": 1.0,
+        "anchor": "top_center",
+        "fit": "width",
+        "center_x": 400,
+        "clip_to_viewport": false
+      },
+      "effects": {
+        "opacity": 0.62,
+        "brightness": -0.34,
+        "grayscale": true
+      }
+    },
+    {
+      "id": "detail_inset",
+      "role": "support",
+      "required": false,
+      "max_items": 1,
+      "z_index": 20,
+      "fit": "contain",
+      "source_selection": {
+        "product_match": "same_product",
+        "view_type": ["detail", "front_three_quarter", "rear", "dynamic"],
+        "framing": ["closeup", "full", "three_quarter"],
+        "prefer": ["配件或局部特写", "另一角度的一整张图", "细节最清晰的一张"],
+        "exclude": ["与主体同一张源图", "包装盒正面图", "只有背景没有商品的图片"]
+      },
+      "closeup": {
+        "viewport": [24, 460, 310, 700],
+        "zoom": 1.0,
+        "anchor": "top_center",
+        "fit": "width",
+        "center_x": 167,
+        "clip_to_viewport": false
+      }
+    },
+    {
+      "id": "hero_front",
+      "role": "hero",
+      "required": true,
+      "max_items": 1,
+      "z_index": 30,
+      "closeup": {
+        "viewport": [60, 150, 800, 770],
+        "zoom": 1.12,
+        "anchor": "top_center",
+        "fit": "height",
+        "center_x": 510,
+        "clip_to_viewport": false
+      },
+      "effects": {
+        "outline_color": "#FF2638",
+        "outline_width": 4,
+        "outline_glow": 14,
+        "outline_opacity": 0.75
+      }
+    }
+  ],
+  "rules": {
+    "source_selection": {
+      "same_product_required": true,
+      "distinct_source_images_required": false,
+      "allow_same_product_multiple_views": true,
+      "deduplicate_near_identical_images": true,
+      "prefer_pose_diversity": true
+    },
+    "background_removal": {
+      "enabled": true,
+      "method": "product_instance_segmentation",
+      "preserve_original_product_pixels": true,
+      "do_not_regenerate_product": true,
+      "remove": [
+        "scene_background",
+        "floor",
+        "clouds",
+        "speech_bubble",
+        "speech_bubble_text",
+        "display_base",
+        "display_stand",
+        "legal_disclaimer",
+        "source_image_watermarks"
+      ],
+      "preserve": ["toy_figure", "physically_attached_accessories", "product_effect_parts"],
+      "preserve_translucent_accessories": true,
+      "use_tight_alpha_bounds": true
+    },
+    "hero_dominance": {
+      "min_canvas_occupancy": 0.3,
+      "target_canvas_occupancy": [0.34, 0.46],
+      "measure": "visible_alpha_pixels_after_canvas_clip"
+    },
+    "collage": {
+      "allow_alpha_overlap": true,
+      "prevent_alpha_overlap": false,
+      "min_gap_px": 0,
+      "allow_canvas_overflow": true,
+      "clip_to_canvas": true,
+      "render_order": ["backdrop", "detail_inset", "hero_front"],
+      "min_pictures": 1,
+      "canvas_fill": {
+        "min_union": 0.34,
+        "max_union": 0.72,
+        "min_hierarchy": 1.15
+      }
+    },
+    "cascade": {
+      "protect_head": 0,
+      "center_largest": false,
+      "balance_margins": false,
+      "max_shift": 0
+    },
+    "figure_integrity": {
+      "preserve_original_geometry": true,
+      "preserve_original_colors": true,
+      "no_ai_redrawing": true,
+      "no_nonuniform_scaling": true,
+      "allow_partial_canvas_crop": true
+    },
+    "text": {
+      "keep_clear_of_hero": true,
+      "prefer_black_on_white": false
+    },
+    "shadow": {
+      "enabled": false,
+      "opacity": 40,
+      "blur": 5,
+      "offset": [4, 6]
+    }
+  }
+}

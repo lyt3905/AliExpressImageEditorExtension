@@ -19,6 +19,7 @@
  */
 
 import type { AlphaProfile } from './alpha';
+import type { CloseupSpec } from './types';
 import {
   canvasOccupancy,
   coveredFraction,
@@ -37,6 +38,7 @@ import { measureLayout } from './measure-layout';
 import { fitTextToBox, parseFontStyleSpec, textLayerGeometry, type MeasureText } from './text-fit';
 import { round, warning, type CompositionWarning } from './warnings';
 import type { HeroDominanceRule, LayoutTemplate, Rect, SlotRole, TemplateSlot, TextZone } from './types';
+import type { ImageEffects } from '../../shared/types';
 
 export type MaterialKind = 'cutout' | 'original' | 'brand';
 
@@ -63,6 +65,15 @@ export interface PlacedImage {
   scale: number;
   /** How much of this material stays visible under the layers above it. */
   visibleRatio: number;
+  /**
+   * Picture effects the template asked for (描边 / 灰度 / 透明度 …).
+   *
+   * Absent means「默认效果」. The emit step copies this into the layer, so the
+   * result is an ordinary editable layer — the template does not own it afterwards.
+   */
+  effects?: ImageEffects;
+  /** `true` = 装饰背景层：画上去，但不当商品算（见 `SlotPurpose`）。 */
+  decorative?: boolean;
 }
 
 export interface PlacedText {
@@ -360,6 +371,31 @@ function placedFromMaterial(
     y: layer.y,
     scale: layer.scale,
     visibleRatio: 1,
+    ...(slot.effects ? { effects: slot.effects } : {}),
+    ...(slot.purpose === 'decorative_background' ? { decorative: true } : {}),
+  };
+}
+
+/**
+ * `fit: cover` —— 把素材铺满视口，多出来的部分由画布裁掉。
+ *
+ * 与 `heroPlacement` 的差别只有一行：那里按视口的一个维度**装下**整张图
+ * （`contain` 语义，特写靠 `zoom` 越界），这里按较大的那个比例**填满**方框 ——
+ * 装饰背景要的是一整块颜色/纹理，不是"一张图缩在框里"。
+ */
+function coverPlacement(profile: AlphaProfile, closeup: CloseupSpec, zoom: number): ContentPlacement {
+  const viewportWidth = closeup.viewport[2] - closeup.viewport[0];
+  const viewportHeight = closeup.viewport[3] - closeup.viewport[1];
+  const fillScale = Math.max(
+    viewportWidth / Math.max(1, profile.trim.width),
+    viewportHeight / Math.max(1, profile.trim.height),
+  );
+  const scale = fillScale * zoom;
+  return {
+    centerX: closeup.centerX,
+    // 铺满时纵向居中，裁掉的部分上下均摊；锚在顶部会把内容整个顶到画布外。
+    centerY: closeup.viewport[1] + viewportHeight / 2,
+    scale,
   };
 }
 
@@ -624,6 +660,11 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     }
     return template.slots.find((slot) => slot.id === slotId)?.zIndex ?? 0;
   };
+  const slotById = new Map(template.slots.map((slot) => [slot.id, slot]));
+  /** 装饰背景：画上去，但不算商品（不去重、不参与观感与保留区判定）。 */
+  const isDecorative = (slotId: string): boolean =>
+    slotById.get(slotId)?.purpose === 'decorative_background';
+
   const supportSlots = [...template.slots]
     .filter((slot) => slot.role !== 'hero' && slot.role !== 'box' && slot.closeup !== undefined)
     .sort((left, right) => pictureRank(left.id) - pictureRank(right.id));
@@ -683,8 +724,12 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       }
       continue;
     }
-    if (usedMaterialIds.has(assignment.material.materialId)) {
-      // The same photo twice in one collage reads as a bug, not as a layout.
+    if (usedMaterialIds.has(assignment.material.materialId) && !slot.allowSourceReuse) {
+      /*
+        The same photo twice in one collage reads as a bug, not as a layout —
+        unless the slot itself is allowed to reuse it (装饰背景 explicitly asks
+        for「实在没有第二张图就用主体自己的」).
+      */
       warnings.push(
         warning('support_slot_empty', `槽位 ${slot.id} 分到的素材与其它槽位重复，本次留空`, {
           slotId: slot.id,
@@ -703,7 +748,9 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     const fill = fills?.[slot.id];
     const supportPlacement =
       fill === undefined
-        ? heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom)
+        ? slot.materialFit === 'cover'
+          ? coverPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom)
+          : heroPlacement(assignment.material.profile, slot.closeup!, slot.closeup!.zoom)
         : null;
     if (supportPlacement) {
       pictures.push({
@@ -751,7 +798,9 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   const canvasFillRule = template.rules.canvasFill;
   let canvasFillReport: { union: number; scaledBy: number } | null = null;
   if (canvasFillRule) {
-    const scalable = pictures.filter((picture) => picture.zoom !== undefined);
+    const scalable = pictures.filter(
+      (picture) => picture.zoom !== undefined && !isDecorative(picture.slotId),
+    );
     if (scalable.length > 0) {
       const filled = fitCanvasFill({
         items: scalable.map((picture) => {
@@ -794,7 +843,8 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   const cascade = template.rules.cascade;
   if (cascade) {
     const arranged = arrangeCascade({
-      items: pictures.map((picture) => ({
+      // 装饰背景铺满画布，让它参与"躲脸/居中"只会把整页推歪。
+      items: pictures.filter((picture) => !isDecorative(picture.slotId)).map((picture) => ({
         slotId: picture.slotId,
         profile: picture.material.profile,
         placement: picture.placement,
@@ -822,8 +872,10 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
   */
   for (const zone of template.canvas.reservedZones ?? []) {
     for (const picture of pictures) {
-      const slot = template.slots.find((candidate) => candidate.id === picture.slotId);
+      const slot = slotById.get(picture.slotId);
       if (!slot || !zone.avoidFor.includes(slot.role)) continue;
+      // 装饰背景是"底布"：底栏与水印本来就叠在它上面，不需要它避开。
+      if (isDecorative(slot.id)) continue;
       const { depth, covered } = zoneIntrusion(
         picture.material.profile,
         picture.placement,
@@ -883,12 +935,13 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
     是否回退到别的模板。
   */
   const minPictures = template.rules.minPictures ?? 1;
-  if (pictures.length < minPictures) {
+  const productPictures = pictures.filter((picture) => !isDecorative(picture.slotId)).length;
+  if (productPictures < minPictures) {
     warnings.push(
       warning(
         'not_enough_pictures',
-        `这个版面至少要 ${minPictures} 张图，当前只凑到 ${pictures.length} 张，本次不出图`,
-        { required: minPictures, available: pictures.length },
+        `这个版面至少要 ${minPictures} 张商品图，当前只凑到 ${productPictures} 张，本次不出图`,
+        { required: minPictures, available: productPictures },
       ),
     );
     pictures.length = 0;
@@ -930,11 +983,14 @@ export function buildCompositionPlan(request: PlanRequest): CompositionPlan {
       ? null
       : measureLayout({
           canvas,
-          pictures: pictures.map((picture) => ({
-            slotId: picture.slotId,
-            profile: picture.material.profile,
-            placement: picture.placement,
-          })),
+          // 背景铺满画布：并集、层级、留白、重心都会被它定义成"满"，测了没有意义。
+          pictures: pictures
+            .filter((picture) => !isDecorative(picture.slotId))
+            .map((picture) => ({
+              slotId: picture.slotId,
+              profile: picture.material.profile,
+              placement: picture.placement,
+            })),
         });
   // Skipped when the code already sits on a plate: printing it twice on one 主图
   // looks like a mistake, and the plate caption is the more intentional of the two.
