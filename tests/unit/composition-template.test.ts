@@ -98,7 +98,10 @@ describe('parseLayoutTemplate — the shipped v1.4 template', () => {
   });
 
   it('flags the draft status instead of pretending it is stable', () => {
-    expect(result.warnings.map((warning) => warning.path)).toContain('status');
+    // 出货的三份模板现在都是 `active`（10.25.3），这里把 status 改回 draft 验 lint 仍然会提醒。
+    const draft = parseLayoutTemplate({ ...raw(), status: 'draft' });
+    expect(draft.warnings.map((warning) => warning.path)).toContain('status');
+    expect(result.warnings.map((warning) => warning.path)).not.toContain('status');
   });
 
   it('warns that the widest variant creeps into the model-code column', () => {

@@ -1161,7 +1161,8 @@ AliExpressImageEditorExtension/
 
 39. 模板烘焙的效果就是**普通图层属性**：`effects` 落到 `ImageLayer` 之后归用户，之后在面板里改的参数不会被模板
     重新覆盖（换模板才会重算）。`fit: cover` 是**几何裁切**——按源图矩形铺满取景框，不看 alpha，
-    所以透明边距大的素材可能"看着没铺满"。海报模板目前是 `status: draft`：AI 只决定放哪张、
+    所以透明边距大的素材可能"看着没铺满"。三份模板从 10.25.3 起都是 `status: active`（不再显示「（草稿）」），
+    但版式仍可能微调：AI 只决定放哪张、
     占多大，**不选**哪张当背景、哪张当细节图（那两个位置由 `selectSupportMaterials` 按面积与 `preference` 分配），
     四方案并排与批量导出也还没做。
 
@@ -1226,5 +1227,6 @@ AliExpressImageEditorExtension/
 | 手工指定图位素材（10.25.0 / M3） | **仅自动化验证**（`composition-slot-picks.test.ts` 14 例）：`pickableSlots` 按 `render_order` 排序且覆盖解析器接受的全部槽位、`allow_source_reuse` 透传；`resolveSlotPicks` 把 hero / box / 支持槽分到三条通道、空串与空白与 `null` 一律当"自动"、不存在的 id 与文字区 id 进 `ignored` 而不抛错、同一张素材可以被点名两次、支持槽按绘制顺序排队、素材 id 前后空格被 trim；`prunePicks` 跨模板双向剔除并丢掉空值；`isPicked` 不把空白算成"已指定"。**面板交互（下拉框、立刻重排、一次撤销）没有断言** —— `src/editor/components/` 无单测，步骤见 manual-test 5.141 |
 | 「Only Kits」标签字号（10.25.1） | **仅自动化验证**（`text-layer.test.ts` 43 例中的 4 例 + `compose-emit` 1 例改判）：100px 编号 / 380 宽下标签落到 62px 且 `estimateTextHeight` 恰等于字号（= 单行）、窄宽度（120）继续收到 22 仍单行、极窄宽度（40）停在下限 12 不再收、`carriedLayers` 重排时按新规则重算而不是照搬编号字号，其余样式字段仍逐项继承。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.142 |
 | 模板下拉显示中文名（10.25.2） | **仅自动化验证**（`composition-template.test.ts` +2 例）：每个注册过的模板都在 `TEMPLATE_TITLES` 里且 `templateTitle()` 不会回落到 id、未登记的 id 才回落成 id 本身。**真机一眼即可**：下拉三项都是中文名、`title` 提示是 id、生成后的状态提示写模板中文名，步骤见 manual-test 5.143 |
+| 三份模板改 `active`（10.25.3） | **仅自动化验证**（`composition-template.test.ts` 的 draft 提醒用例改为就地造一份 `status: 'draft'` 的模板验 lint 仍会警告，并断言真模板不再有 `status` 警告）：三份 JSON 的 `status` 由 `draft` 改 `active`，下拉里的「（草稿）」后缀自然消失；`ComposePanel` 的 draft 分支保留，将来新模板标 `draft` 仍会显示后缀并触发 lint |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。
