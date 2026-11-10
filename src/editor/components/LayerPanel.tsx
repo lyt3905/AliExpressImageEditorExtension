@@ -97,26 +97,38 @@ export function LayerPanel({
   /**
    * Scroll the selected row into view when the selection comes from the canvas.
    *
-   * The panel is short and the list is long — six photos plus a plate plus the
-   * product code is already taller than the box. Selecting a layer on the canvas
-   * therefore highlighted a row that was usually out of sight, which looks exactly
-   * like "画布选中了、列表没同步". `block: 'nearest'` only scrolls when the row is
-   * genuinely clipped, so clicking a visible row does not yank the list around.
+   * The list is short and long — six photos plus a plate plus the product code is
+   * already taller than the box. Selecting a layer on the canvas therefore
+   * highlighted a row that was usually out of sight, which looks exactly like
+   * "画布选中了、列表没同步".
+   *
+   * This adjusts `listRef.scrollTop` by hand instead of calling
+   * `scrollIntoView()`: the panel is now two boxes (properties above, this list
+   * below), and `scrollIntoView()` scrolls EVERY scrollable ancestor — clicking a
+   * layer on the canvas would also scroll the properties box off its own scroll
+   * position. Nearest-edge math keeps the correction inside the list.
    */
+  const listRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   useEffect(() => {
     if (!selectedLayerId) return;
     const row = rowRefs.current.get(selectedLayerId);
-    if (typeof row?.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    if (!row || !list) return;
+    const box = list.getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
+    if (rect.top < box.top) list.scrollTop -= box.top - rect.top;
+    else if (rect.bottom > box.bottom) list.scrollTop += rect.bottom - box.bottom;
   }, [selectedLayerId]);
 
   return (
     <aside className="panel">
-      <div className="panel__title">
-        <span>图层</span>
-        <span className="toolbar__hint">{layers.length + (watermark ? 1 : 0)}</span>
-      </div>
-      <div className="panel__body">
+      {/*
+        属性区：吃满剩下高度、自己滚。它和下面的列表曾经共用一个滚动区，
+        选中文字层时属性很长（描边/阴影/偏移 + 一段说明），图层列表就会被顶到
+        面板看不见的底部。
+      */}
+      <div className="panel__body layer-panel__props">
         {/*
           Mirror / rotate always targets the CURRENT selection, so the controls
           only exist while something is selected. The idle line points at that
@@ -147,23 +159,34 @@ export function LayerPanel({
         {selectedImageLayer ? (
           <ImagePropertiesEditor layer={selectedImageLayer} onCommit={onCommitEffects} />
         ) : null}
+      </div>
 
-        {/*
-          The watermark is pinned here for visibility, but it is not a document
-          layer: no selection, no reorder, no delete.
-        */}
-        {watermark ? (
-          <div className="layer-row layer-row--locked" title="水印框固定在最上层，不可编辑">
-            <span className="layer-row__name">水印框 · {watermark.name}</span>
-            <span className="layer-row__lock">锁定</span>
-          </div>
-        ) : null}
+      {/*
+        列表区是第二个盒子：高度由内容定、最多 45%，自己滚。属性区再长也顶不掉
+        它，列表再长也只在框里滚。「图层 N」标题跟着走 —— 它数的是列表里的行。
+      */}
+      <div className="layer-panel__list">
+        <div className="panel__title layer-panel__list-title">
+          <span>图层</span>
+          <span className="toolbar__hint">{layers.length + (watermark ? 1 : 0)}</span>
+        </div>
+        <div className="layer-panel__rows" ref={listRef}>
+          {/*
+            The watermark is pinned here for visibility, but it is not a document
+            layer: no selection, no reorder, no delete.
+          */}
+          {watermark ? (
+            <div className="layer-row layer-row--locked" title="水印框固定在最上层，不可编辑">
+              <span className="layer-row__name">水印框 · {watermark.name}</span>
+              <span className="layer-row__lock">锁定</span>
+            </div>
+          ) : null}
 
-        {ordered.length === 0 ? (
-          watermark ? null : (
-            <div className="empty">画布为空，点击左侧素材加入</div>
-          )
-        ) : (
+          {ordered.length === 0 ? (
+            watermark ? null : (
+              <div className="empty">画布为空，点击左侧素材加入</div>
+            )
+          ) : (
           ordered.map((layer) => {
             /*
               Brand logos are always painted on top (see `EditorStage`), so the
@@ -249,6 +272,7 @@ export function LayerPanel({
             );
           })
         )}
+        </div>
       </div>
     </aside>
   );

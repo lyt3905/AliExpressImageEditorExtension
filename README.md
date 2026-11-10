@@ -269,6 +269,12 @@ npm run check:dist
 **内容、字号、颜色、描边与阴影的各输入框都在失焦时提交一次**，字体、加粗、对齐与预设按钮是
 点击即提交 —— 在输入框里打一行字只会留下 1 条 undo 记录。
 
+右栏是**两个盒子，不是一个滚动区**（10.25.4）：上面是属性区（吃剩余高度、自己滚），下面是
+图层列表（定高、最多占面板 45%、自己滚，「图层 N」标题跟着列表走）。以前两者共用一个滚动条，
+选中文字层时属性很长，列表会被顶到面板看不见的底部，说明文字还会被列表压住。两个副作用要知
+道：列表底部**至少露出三行**（约 84px），再长就在自己的框里滚；画布上选中图层时只调整列表的
+`scrollTop`，不再用 `scrollIntoView()`，否则属性区会被一起带走滚动位置。
+
 ### 描边 / 阴影
 
 | 项 | 控件 | 说明 |
@@ -1228,5 +1234,6 @@ AliExpressImageEditorExtension/
 | 「Only Kits」标签字号（10.25.1） | **仅自动化验证**（`text-layer.test.ts` 43 例中的 4 例 + `compose-emit` 1 例改判）：100px 编号 / 380 宽下标签落到 62px 且 `estimateTextHeight` 恰等于字号（= 单行）、窄宽度（120）继续收到 22 仍单行、极窄宽度（40）停在下限 12 不再收、`carriedLayers` 重排时按新规则重算而不是照搬编号字号，其余样式字段仍逐项继承。**画布上的实际观感未在真实 Chrome 里看过**：步骤见 manual-test 5.142 |
 | 模板下拉显示中文名（10.25.2） | **仅自动化验证**（`composition-template.test.ts` +2 例）：每个注册过的模板都在 `TEMPLATE_TITLES` 里且 `templateTitle()` 不会回落到 id、未登记的 id 才回落成 id 本身。**真机一眼即可**：下拉三项都是中文名、`title` 提示是 id、生成后的状态提示写模板中文名，步骤见 manual-test 5.143 |
 | 三份模板改 `active`（10.25.3） | **仅自动化验证**（`composition-template.test.ts` 的 draft 提醒用例改为就地造一份 `status: 'draft'` 的模板验 lint 仍会警告，并断言真模板不再有 `status` 警告）：三份 JSON 的 `status` 由 `draft` 改 `active`，下拉里的「（草稿）」后缀自然消失；`ComposePanel` 的 draft 分支保留，将来新模板标 `draft` 仍会显示后缀并触发 lint |
+| 右栏拆成「属性区 + 固定列表区」（10.25.4） | **纯布局改动，无单测**（`src/editor/components/` 与 `styles/` 都没有测试；`typecheck` 通过、1044 个测试数与上一版一致）：`LayerPanel` 的单一 `.panel__body` 拆成 `.layer-panel__props`（`flex: 1 1 auto`，自己滚）与 `.layer-panel__list`（`flex: 0 0 auto; max-height: 45%`，内含「图层 N」标题与 `.layer-panel__rows`，`min-height: 84px` 至少三行、自己滚）；选中图层时改成只调整列表的 `scrollTop`，不再用 `scrollIntoView()`。**真机必须走一遍**：属性区再长列表也在、滚属性列表不动、画布点选只滚列表、层数多时列表自己滚，步骤见 manual-test 5.144 |
 
 手工验证步骤见 [`docs/manual-test.md`](docs/manual-test.md)。

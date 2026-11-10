@@ -403,6 +403,40 @@ button.primary:hover:not(:disabled) {
   min-height: 0;
 }
 
+/*
+  「图层」面板是两个盒子，不是一个滚动区（10.25.4）：上面是选中图层的属性，
+  下面是图层列表。以前两者共用 `.panel__body` 的滚动条 —— 选中文字层时属性很长
+  （描边 / 阴影 / 偏移 + 一段说明），列表被顶到面板看不见的底部，说明文字还会被
+  列表压住。现在属性区吃剩余高度并自己滚，列表区定高、自己滚，互不影响。
+*/
+.layer-panel__props {
+  flex: 1 1 auto;
+}
+
+.layer-panel__list {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  /* 列表最多占面板 45%，再多就自己滚。 */
+  max-height: 45%;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+/* 「图层 N」跟着列表走：它数的是列表里的行，不是属性。 */
+.layer-panel__list-title {
+  flex: 0 0 auto;
+}
+
+.layer-panel__rows {
+  /* 至少露出三行 —— 选中一个看不见的图层最容易让人以为"选中没反应"。 */
+  min-height: 84px;
+  padding: 8px;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
 .panel__group + .panel__group {
   margin-top: 10px;
 }
